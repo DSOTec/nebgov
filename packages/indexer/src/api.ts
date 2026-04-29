@@ -575,5 +575,53 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
+  // GET /leaderboard/voters?limit=20&offset=0 — voters ranked by participation count
+  app.get(
+    "/leaderboard/voters",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Number(req.query.limit ?? 20), 100);
+      const offset = Number(req.query.offset ?? 0);
+      const key = `leaderboard:voters:${limit}:${offset}`;
+
+      try {
+        const data = await cached(key, TTL.delegates, async () => {
+          const result = await pool.query(
+            `SELECT
+              voter,
+              COUNT(*)::int AS proposals_voted,
+              SUM(weight)::bigint AS total_voting_weight,
+              SUM(CASE WHEN support = 1 THEN 1 ELSE 0 END)::int AS for_count,
+              SUM(CASE WHEN support = 0 THEN 1 ELSE 0 END)::int AS against_count,
+              SUM(CASE WHEN support = 2 THEN 1 ELSE 0 END)::int AS abstain_count
+            FROM votes
+            GROUP BY voter
+            ORDER BY proposals_voted DESC
+            LIMIT $1 OFFSET $2`,
+            [limit, offset],
+          );
+
+          // Get total count
+          const countResult = await pool.query(
+            `SELECT COUNT(DISTINCT voter)::int AS total FROM votes`,
+          );
+          const total = countResult.rows[0]?.total ?? 0;
+
+          return {
+            voters: result.rows,
+            total,
+            limit,
+            offset,
+            hasMore: offset + limit < total,
+          };
+        });
+
+        res.json(data);
+      } catch (error) {
+        console.error("Leaderboard voters error:", error);
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   return app;
 }

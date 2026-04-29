@@ -2038,6 +2038,15 @@ impl GovernorContract {
             .get(&DataKey::QueueTime(proposal_id))
             .unwrap_or(0)
     }
+
+    /// Get the timelock operation IDs for a queued proposal.
+    ///
+    /// Returns an empty vector for proposals that have not been queued yet.
+    /// Panics if the proposal does not exist.
+    pub fn get_queued_op_ids(env: Env, proposal_id: u64) -> Vec<Bytes> {
+        let proposal = Self::must_get_proposal(&env, proposal_id);
+        proposal.op_ids
+    }
 }
 
 #[cfg(test)]

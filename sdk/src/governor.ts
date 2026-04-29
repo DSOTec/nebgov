@@ -1971,6 +1971,37 @@ export class GovernorClient {
   }
 
   /**
+   * Fetch the timelock operation IDs for a queued proposal.
+   * Returns an empty array if the proposal has not been queued.
+   */
+  async getQueuedOpIds(proposalId: bigint): Promise<string[]> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase }
+        )
+          .addOperation(
+            this.contract.call("get_queued_op_ids", nativeToScVal(proposalId, { type: "u64" }))
+          )
+          .setTimeout(30)
+          .build()
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return [];
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return [];
+
+      const opIds = scValToNative(raw) as Buffer[] | string[];
+      return opIds.map((id) => 
+        Buffer.isBuffer(id) ? id.toString("hex") : id
+      );
+    });
+  }
+
+  /**
    * Fetch timelock-related timings for a queued proposal.
    */
   async getTimelockInfo(proposalId: bigint): Promise<TimelockInfo> {
