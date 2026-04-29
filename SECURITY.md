@@ -1,58 +1,55 @@
 # Security Policy
 
-## Reporting a Vulnerability
-
-If you discover a security vulnerability in NebGov, please report it responsibly. **Do not open a public GitHub issue.**
-
-### How to Report
-
-1. Go to [GitHub Security Advisories](https://github.com/nebgov/nebgov/security/advisories/new)
-2. Click "Report a vulnerability"
-3. Fill in the details of the vulnerability
-4. Submit the report
-
-### What to Include
-
-- Description of the vulnerability
-- Steps to reproduce
-- Affected component (contract, SDK, frontend)
-- Potential impact
-- Suggested fix (if any)
-
-### Response Timeline
-
-- **Acknowledgment**: Within 48 hours
-- **Initial assessment**: Within 1 week
-- **Fix and disclosure**: Coordinated with the reporter
-
-### Scope
-
-The following components are in scope:
-
-| Component | Repository Path |
-|-----------|----------------|
-| Governor Contract | `contracts/governor` |
-| Timelock Contract | `contracts/timelock` |
-| Token Votes Contract | `contracts/token-votes` |
-| Governor Factory | `contracts/governor-factory` |
-| Treasury Contract | `contracts/treasury` |
-| TypeScript SDK | `sdk/` |
-
-The frontend (`app/`) is lower priority but still in scope.
-
-### Out of Scope
-
-- Issues in third-party dependencies (report upstream)
-- Testnet-only issues with no mainnet impact
-- Social engineering or phishing
-
 ## Supported Versions
 
 | Version | Supported |
-|---------|-----------|
-| main branch | Yes |
-| Tagged releases | Yes |
-| Older commits | No |
+| ------- | --------- |
+| latest  | yes       |
+| < 0.1.0 | no        |
+
+## Reporting a Vulnerability
+
+**Please do not open a public GitHub issue for security vulnerabilities.**
+
+Report vulnerabilities privately via one of:
+
+- GitHub Security Advisories: https://github.com/nebgov/nebgov/security/advisories/new
+- Email: security@nebgov.xyz
+
+Include:
+
+- Description of the vulnerability
+- Steps to reproduce
+- Affected contracts/components
+- Potential impact
+
+You will receive an acknowledgement within 48 hours.
+
+## Disclosure Policy
+
+- We aim to release a fix within 14 days of confirmation
+- We will coordinate disclosure timing with the reporter
+- Credit given to reporters in release notes, if desired
+
+## Scope
+
+In scope:
+
+- governor
+- timelock
+- token-votes
+- token-votes-wrapper
+- treasury
+- governor-factory contracts
+
+Out of scope:
+
+- frontend UI bugs (open a regular issue)
+- third-party dependencies
+
+## Known Issues
+
+See [docs/security/threat-model.md](./docs/security/threat-model.md) for documented known risks.
 
 ## Security Scanning
 
@@ -61,7 +58,7 @@ The frontend (`app/`) is lower priority but still in scope.
 All JavaScript dependencies are automatically scanned for known vulnerabilities using `pnpm audit` in our CI pipeline. The scan runs on every pull request and push to main, covering all workspaces:
 
 - `sdk/` - TypeScript SDK
-- `app/` - Next.js frontend  
+- `app/` - Next.js frontend
 - `packages/indexer/` - Event indexer API
 - `backend/` - Backend services (if present)
 
@@ -79,13 +76,17 @@ All Rust dependencies are automatically scanned for known security vulnerabiliti
 If a vulnerability is flagged that doesn't apply to our usage or is a false positive, you can suppress it using one of these methods:
 
 #### Method 1: Using .npmrc (Recommended)
+
 Create or update `.npmrc` in the workspace root:
+
 ```
 audit-level=high
 ```
 
 #### Method 2: Package.json Overrides
+
 Add to the root `package.json`:
+
 ```json
 {
   "pnpm": {
@@ -97,7 +98,9 @@ Add to the root `package.json`:
 ```
 
 #### Method 3: Temporary Bypass
+
 For temporary issues during development:
+
 ```bash
 pnpm audit --audit-level=high --ignore-registry-errors
 ```

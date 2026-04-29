@@ -90,25 +90,25 @@ detector = "detector_name"
 reason = "Suppressed: [reason] — [date] — [author]"
 ```
 
-
 ## Project Structure
 
-| Directory | Description |
-|-----------|-------------|
-| `contracts/governor` | Core governance contract (Rust/Soroban) |
-| `contracts/timelock` | Delayed execution controller |
-| `contracts/token-votes` | Voting power with checkpointing |
-| `contracts/governor-factory` | Permissionless governor deployer |
-| `contracts/treasury` | Multi-sig treasury |
-| `sdk/` | TypeScript SDK (`@nebgov/sdk`) |
-| `app/` | Next.js governance dashboard |
-| `docs/` | Architecture docs and ADRs |
+| Directory                    | Description                             |
+| ---------------------------- | --------------------------------------- |
+| `contracts/governor`         | Core governance contract (Rust/Soroban) |
+| `contracts/timelock`         | Delayed execution controller            |
+| `contracts/token-votes`      | Voting power with checkpointing         |
+| `contracts/governor-factory` | Permissionless governor deployer        |
+| `contracts/treasury`         | Multi-sig treasury                      |
+| `sdk/`                       | TypeScript SDK (`@nebgov/sdk`)          |
+| `app/`                       | Next.js governance dashboard            |
+| `docs/`                      | Architecture docs and ADRs              |
 
 ## How to Contribute
 
 ### 1. Find an issue
 
 Browse [open issues](https://github.com/nebgov/nebgov/issues). Each issue is tagged with:
+
 - `complexity: trivial` - small, well-scoped change
 - `complexity: medium` - moderate implementation work
 - `complexity: high` - significant feature or architectural change
@@ -126,6 +126,7 @@ Issues tagged `good first issue` are recommended for first-time contributors.
 ## Commit Messages
 
 Use imperative mood with conventional prefixes:
+
 - `feat: add vote delegation`
 - `fix: correct quorum calculation`
 - `docs: update architecture diagram`
@@ -141,15 +142,21 @@ Use imperative mood with conventional prefixes:
 5. Open a PR referencing the issue: `Closes #<number>`
 6. Wait for maintainer review. Note that reviewers are automatically assigned based on our [CODEOWNERS](.github/CODEOWNERS) configuration. For more details on our branch protection rules, see [Branch Protection](docs/contributing/branch-protection.md).
 
+## Security Issues
+
+If you find a security vulnerability, do not open a public issue. Follow the private reporting process in [SECURITY.md](./SECURITY.md) instead.
+
 ## Code Standards
 
 ### Rust (contracts)
+
 - Format with `cargo fmt`
 - No `unsafe` code
 - All public functions must have doc comments
 - Tests live in `#[cfg(test)]` modules
 
 ### TypeScript (SDK + frontend)
+
 - Strict TypeScript, no `any` types
 - Run `pnpm lint` before pushing
 - Use named exports
