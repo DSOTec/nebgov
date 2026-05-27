@@ -126,7 +126,7 @@ fuzz_target!(|input: FuzzInput| {
             client.cast_vote(&proposer, &proposal_id, &VoteSupport::For);
             
             env.ledger().with_mut(|l| {
-                l.sequence = l.sequence.saturating_add(101); // End voting period
+                l.sequence_number = l.sequence_number.saturating_add(101); // End voting period
             });
 
             assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
