@@ -19,14 +19,11 @@ import {
 import { useTheme } from "../../hooks/useTheme";
 import { useEffect, useMemo, useState } from "react";
 import { Network, VotesClient } from "@nebgov/sdk";
+import { Skeleton } from "../../components/ui/Skeleton";
 
 const COLORS = ["#60a5fa", "#34d399", "#f97316", "#f87171", "#a78bfa"];
 
 type TimeRange = "7d" | "30d" | "all";
-
-function Skeleton({ className }: { className?: string }) {
-  return <div className={`bg-gray-200 dark:bg-gray-700 animate-pulse rounded ${className ?? ""}`} />;
-}
 
 export default function AnalyticsPage() {
   const { theme } = useTheme();
@@ -35,7 +32,9 @@ export default function AnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [proposals, setProposals] = useState<any[]>([]);
-  const [topDelegates, setTopDelegates] = useState<Array<{ name: string; votes: number }>>([]);
+  const [topDelegates, setTopDelegates] = useState<
+    Array<{ name: string; votes: number }>
+  >([]);
   const [summary, setSummary] = useState<{
     totalProposals: number;
     totalUniqueVoters: number;
@@ -72,14 +71,19 @@ export default function AnalyticsPage() {
         const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
         const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
         const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-        const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
+        const network = (process.env.NEXT_PUBLIC_NETWORK ||
+          "testnet") as Network;
         const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
         if (!indexerUrl) {
-          throw new Error("Missing NEXT_PUBLIC_INDEXER_URL. Analytics requires the indexer API.");
+          throw new Error(
+            "Missing NEXT_PUBLIC_INDEXER_URL. Analytics requires the indexer API.",
+          );
         }
         if (!governorAddress || !timelockAddress || !votesAddress) {
-          throw new Error("Missing required environment variables. Please check .env.local configuration.");
+          throw new Error(
+            "Missing required environment variables. Please check .env.local configuration.",
+          );
         }
 
         const votesClient = new VotesClient({
@@ -90,16 +94,20 @@ export default function AnalyticsPage() {
           ...(rpcUrl && { rpcUrl }),
         });
 
-        const [summaryResp, delegatesResp, statsResp, supply] = await Promise.all([
-          fetch(`${indexerUrl}/analytics/summary`, { cache: "no-store" }),
-          fetch(`${indexerUrl}/delegates?top=10`, { cache: "no-store" }),
-          fetch(`${indexerUrl}/stats`, { cache: "no-store" }),
-          votesClient.getTotalSupply(),
-        ]);
+        const [summaryResp, delegatesResp, statsResp, supply] =
+          await Promise.all([
+            fetch(`${indexerUrl}/analytics/summary`, { cache: "no-store" }),
+            fetch(`${indexerUrl}/delegates?top=10`, { cache: "no-store" }),
+            fetch(`${indexerUrl}/stats`, { cache: "no-store" }),
+            votesClient.getTotalSupply(),
+          ]);
 
-        if (!summaryResp.ok) throw new Error(`Indexer error: ${summaryResp.status}`);
-        if (!delegatesResp.ok) throw new Error(`Indexer error: ${delegatesResp.status}`);
-        if (!statsResp.ok) throw new Error(`Indexer error: ${statsResp.status}`);
+        if (!summaryResp.ok)
+          throw new Error(`Indexer error: ${summaryResp.status}`);
+        if (!delegatesResp.ok)
+          throw new Error(`Indexer error: ${delegatesResp.status}`);
+        if (!statsResp.ok)
+          throw new Error(`Indexer error: ${statsResp.status}`);
 
         const [summaryJson, delegatesJson, statsJson] = await Promise.all([
           summaryResp.json(),
@@ -183,7 +191,9 @@ export default function AnalyticsPage() {
           Number(p.votes_against ?? 0) +
           Number(p.votes_abstain ?? 0);
         const participation = supply > 0 ? (totalVotes / supply) * 100 : 0;
-        const date = p.created_at ? new Date(p.created_at).toLocaleDateString() : `#${p.id}`;
+        const date = p.created_at
+          ? new Date(p.created_at).toLocaleDateString()
+          : `#${p.id}`;
         return { date, participation: Number(participation.toFixed(2)) };
       });
   }, [proposals, totalSupply]);
@@ -192,7 +202,10 @@ export default function AnalyticsPage() {
     const executed = summary?.outcomes.executed ?? 0;
     const cancelled = summary?.outcomes.cancelled ?? 0;
     const queued = summary?.outcomes.queued ?? 0;
-    const other = Math.max(0, (summary?.totalProposals ?? 0) - executed - cancelled - queued);
+    const other = Math.max(
+      0,
+      (summary?.totalProposals ?? 0) - executed - cancelled - queued,
+    );
     return [
       { name: "Executed", value: executed },
       { name: "Cancelled", value: cancelled },
@@ -204,15 +217,24 @@ export default function AnalyticsPage() {
   const avgParticipationPct = useMemo(() => {
     if (!summary) return 0;
     if (totalSupply <= 0n) return 0;
-    return Number(((Number(summary.averageVotesPerProposal) / Number(totalSupply)) * 100).toFixed(2));
+    return Number(
+      (
+        (Number(summary.averageVotesPerProposal) / Number(totalSupply)) *
+        100
+      ).toFixed(2),
+    );
   }, [summary, totalSupply]);
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Analytics</h1>
-          <p className="text-gray-500 dark:text-gray-400 mt-1">Participation and voting trends.</p>
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">
+            Analytics
+          </h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
+            Participation and voting trends.
+          </p>
         </div>
         <div className="flex gap-3">
           <a
@@ -270,70 +292,105 @@ export default function AnalyticsPage() {
 
       {error && (
         <div className="mb-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
-          <p className="text-red-800 dark:text-red-200 font-medium">Failed to load analytics</p>
+          <p className="text-red-800 dark:text-red-200 font-medium">
+            Failed to load analytics
+          </p>
           <p className="text-red-700 dark:text-red-300 text-sm mt-1">{error}</p>
         </div>
       )}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Total proposals</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Total proposals
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-16 mt-2" />
           ) : (
-            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats?.total_proposals ?? summary?.totalProposals ?? 0}</p>
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+              {stats?.total_proposals ?? summary?.totalProposals ?? 0}
+            </p>
           )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Active proposals</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Active proposals
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-16 mt-2" />
           ) : (
-            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats?.active_proposals ?? 0}</p>
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+              {stats?.active_proposals ?? 0}
+            </p>
           )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Unique voters</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Unique voters
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-20 mt-2" />
           ) : (
-            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats?.unique_voters ?? summary?.totalUniqueVoters ?? 0}</p>
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+              {stats?.unique_voters ?? summary?.totalUniqueVoters ?? 0}
+            </p>
           )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Participation rate</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Participation rate
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-16 mt-2" />
           ) : (
-            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{((stats?.participation_rate ?? avgParticipationPct) * 100).toFixed(1)}%</p>
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+              {(
+                (stats?.participation_rate ?? avgParticipationPct) * 100
+              ).toFixed(1)}
+              %
+            </p>
           )}
         </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Total votes cast</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Total votes cast
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-16 mt-2" />
           ) : (
-            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats?.total_votes_cast ?? 0}</p>
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+              {stats?.total_votes_cast ?? 0}
+            </p>
           )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Total delegates</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Total delegates
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-16 mt-2" />
           ) : (
-            <p className="text-2xl font-semibold text-gray-900 dark:text-white">{stats?.total_delegates ?? 0}</p>
+            <p className="text-2xl font-semibold text-gray-900 dark:text-white">
+              {stats?.total_delegates ?? 0}
+            </p>
           )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Most active proposer</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Most active proposer
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-32 mt-2" />
           ) : (
             <p className="text-sm font-semibold text-gray-900 dark:text-white mt-2">
-              {(summary?.mostActiveProposers?.[0]?.proposer ?? "—").slice(0, 10)}…
+              {(summary?.mostActiveProposers?.[0]?.proposer ?? "—").slice(
+                0,
+                10,
+              )}
+              …
               <span className="text-gray-500 dark:text-gray-400 font-normal">
                 {" "}
                 ({summary?.mostActiveProposers?.[0]?.count ?? 0})
@@ -342,12 +399,16 @@ export default function AnalyticsPage() {
           )}
         </div>
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <p className="text-sm text-gray-500 dark:text-gray-400">Last updated</p>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Last updated
+          </p>
           {loading ? (
             <Skeleton className="h-7 w-28 mt-2" />
           ) : (
             <p className="text-sm font-semibold text-gray-900 dark:text-white mt-2">
-              {stats?.last_updated ? new Date(stats.last_updated).toLocaleDateString() : "—"}
+              {stats?.last_updated
+                ? new Date(stats.last_updated).toLocaleDateString()
+                : "—"}
             </p>
           )}
         </div>
@@ -355,35 +416,75 @@ export default function AnalyticsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <div className="lg:col-span-2 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">Participation Over Time</h3>
+          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">
+            Participation Over Time
+          </h3>
           <div style={{ width: "100%", height: 240 }}>
             <ResponsiveContainer width="100%" height={240}>
-              <LineChart data={participationData} margin={{ top: 5, right: 20, left: 0, bottom: 5 }}>
-                <XAxis dataKey="date" tick={{ fill: chartTheme.textColor }} axisLine={{ stroke: chartTheme.gridColor }} tickLine={{ stroke: chartTheme.gridColor }} />
-                <YAxis tick={{ fill: chartTheme.textColor }} axisLine={{ stroke: chartTheme.gridColor }} tickLine={{ stroke: chartTheme.gridColor }} unit="%" />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: chartTheme.tooltipBg, borderColor: chartTheme.tooltipBorder, color: isDark ? '#fff' : '#000' }}
-                  itemStyle={{ color: isDark ? '#fff' : '#000' }}
+              <LineChart
+                data={participationData}
+                margin={{ top: 5, right: 20, left: 0, bottom: 5 }}
+              >
+                <XAxis
+                  dataKey="date"
+                  tick={{ fill: chartTheme.textColor }}
+                  axisLine={{ stroke: chartTheme.gridColor }}
+                  tickLine={{ stroke: chartTheme.gridColor }}
                 />
-                <Line type="monotone" dataKey="participation" stroke="#6366f1" strokeWidth={2} />
+                <YAxis
+                  tick={{ fill: chartTheme.textColor }}
+                  axisLine={{ stroke: chartTheme.gridColor }}
+                  tickLine={{ stroke: chartTheme.gridColor }}
+                  unit="%"
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: chartTheme.tooltipBg,
+                    borderColor: chartTheme.tooltipBorder,
+                    color: isDark ? "#fff" : "#000",
+                  }}
+                  itemStyle={{ color: isDark ? "#fff" : "#000" }}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="participation"
+                  stroke="#6366f1"
+                  strokeWidth={2}
+                />
               </LineChart>
             </ResponsiveContainer>
           </div>
         </div>
 
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">Proposal Outcomes</h3>
+          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">
+            Proposal Outcomes
+          </h3>
           <div style={{ width: "100%", height: 220 }}>
             <ResponsiveContainer width="100%" height={220}>
               <PieChart>
-                <Pie data={outcomeData} dataKey="value" nameKey="name" innerRadius={40} outerRadius={80} paddingAngle={4}>
+                <Pie
+                  data={outcomeData}
+                  dataKey="value"
+                  nameKey="name"
+                  innerRadius={40}
+                  outerRadius={80}
+                  paddingAngle={4}
+                >
                   {outcomeData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    <Cell
+                      key={`cell-${index}`}
+                      fill={COLORS[index % COLORS.length]}
+                    />
                   ))}
                 </Pie>
-                <Tooltip 
-                  contentStyle={{ backgroundColor: chartTheme.tooltipBg, borderColor: chartTheme.tooltipBorder, color: isDark ? '#fff' : '#000' }}
-                  itemStyle={{ color: isDark ? '#fff' : '#000' }}
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: chartTheme.tooltipBg,
+                    borderColor: chartTheme.tooltipBorder,
+                    color: isDark ? "#fff" : "#000",
+                  }}
+                  itemStyle={{ color: isDark ? "#fff" : "#000" }}
                 />
                 <Legend />
               </PieChart>
@@ -392,20 +493,48 @@ export default function AnalyticsPage() {
         </div>
 
         <div className="lg:col-span-3 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">Top Delegates (by delegators)</h3>
+          <h3 className="text-sm font-semibold text-gray-600 dark:text-gray-400 mb-4">
+            Top Delegates (by delegators)
+          </h3>
           <div style={{ width: "100%", height: 220 }}>
             <ResponsiveContainer width="100%" height={220}>
-              <BarChart data={topDelegates} layout="vertical" margin={{ top: 5, right: 30, left: 50, bottom: 5 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={chartTheme.gridColor} />
-                <XAxis type="number" tick={{ fill: chartTheme.textColor }} axisLine={{ stroke: chartTheme.gridColor }} tickLine={{ stroke: chartTheme.gridColor }} />
-                <YAxis type="category" dataKey="name" width={120} tick={{ fill: chartTheme.textColor }} axisLine={{ stroke: chartTheme.gridColor }} tickLine={{ stroke: chartTheme.gridColor }} />
-                <Tooltip 
-                  contentStyle={{ backgroundColor: chartTheme.tooltipBg, borderColor: chartTheme.tooltipBorder, color: isDark ? '#fff' : '#000' }}
-                  itemStyle={{ color: isDark ? '#fff' : '#000' }}
+              <BarChart
+                data={topDelegates}
+                layout="vertical"
+                margin={{ top: 5, right: 30, left: 50, bottom: 5 }}
+              >
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  stroke={chartTheme.gridColor}
+                />
+                <XAxis
+                  type="number"
+                  tick={{ fill: chartTheme.textColor }}
+                  axisLine={{ stroke: chartTheme.gridColor }}
+                  tickLine={{ stroke: chartTheme.gridColor }}
+                />
+                <YAxis
+                  type="category"
+                  dataKey="name"
+                  width={120}
+                  tick={{ fill: chartTheme.textColor }}
+                  axisLine={{ stroke: chartTheme.gridColor }}
+                  tickLine={{ stroke: chartTheme.gridColor }}
+                />
+                <Tooltip
+                  contentStyle={{
+                    backgroundColor: chartTheme.tooltipBg,
+                    borderColor: chartTheme.tooltipBorder,
+                    color: isDark ? "#fff" : "#000",
+                  }}
+                  itemStyle={{ color: isDark ? "#fff" : "#000" }}
                 />
                 <Bar dataKey="votes" fill="#60a5fa">
                   {topDelegates.map((_, idx) => (
-                    <Cell key={`bar-${idx}`} fill={COLORS[idx % COLORS.length]} />
+                    <Cell
+                      key={`bar-${idx}`}
+                      fill={COLORS[idx % COLORS.length]}
+                    />
                   ))}
                 </Bar>
               </BarChart>

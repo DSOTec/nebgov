@@ -1,21 +1,46 @@
-import { readFileSync } from "fs";
-import { join } from "path";
-import pool from "./pool";
-import { logger } from "./logger";
+import dotenv from "dotenv";
+import path from "path";
+import { BACKEND_MIGRATIONS_TABLE } from "./migrationRunner";
 
-async function migrate() {
-  try {
-    logger.info("Running database migrations...");
+dotenv.config();
 
-    const schema = readFileSync(join(__dirname, "schema.sql"), "utf-8");
-    await pool.query(schema);
-
-    logger.info("Migrations completed successfully");
-    process.exit(0);
-  } catch (error) {
-    logger.error({ err: error }, "Migration failed");
+async function main(): Promise<void> {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
+    console.error("DATABASE_URL is required");
     process.exit(1);
+  }
+
+  const command = process.argv[2];
+  const { runner } = await import("node-pg-migrate");
+
+  if (command === "down") {
+    const countRaw = process.argv[3];
+    const count = countRaw ? Number(countRaw) : 1;
+    if (!Number.isFinite(count) || count < 1) {
+      console.error(
+        "Usage: npm run migrate down [count]\nExample: npm run migrate down 1",
+      );
+      process.exit(1);
+    }
+    await runner({
+      databaseUrl,
+      dir: path.join(process.cwd(), "migrations"),
+      direction: "down",
+      count,
+      migrationsTable: BACKEND_MIGRATIONS_TABLE,
+    });
+  } else {
+    await runner({
+      databaseUrl,
+      dir: path.join(process.cwd(), "migrations"),
+      direction: "up",
+      migrationsTable: BACKEND_MIGRATIONS_TABLE,
+    });
   }
 }
 
-migrate();
+main().catch((err: unknown) => {
+  console.error(err);
+  process.exit(1);
+});

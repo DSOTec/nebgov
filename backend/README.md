@@ -198,6 +198,38 @@ npm test
 npm run build
 ```
 
+## Database migrations
+
+Schema changes are tracked as numbered SQL files under `backend/migrations/` using [node-pg-migrate](https://github.com/salsita/node-pg-migrate). Applied migrations are recorded in PostgreSQL (`pgmigrations_nebgov_backend`). On production and local non-test startup, migrations run automatically before the HTTP server listens.
+
+**Apply pending migrations (CI and local)**
+
+```bash
+npm run migrate
+```
+
+Requires `DATABASE_URL`.
+
+**Rollback**
+
+`node-pg-migrate` applies **down** migrations one or more files at a time from the newest applied migration.
+
+```bash
+# Roll back the latest migration only
+npm run migrate:down
+
+# Roll back the latest N migrations (replace N with a positive integer)
+npx tsx src/db/migrate.ts down N
+```
+
+Example: after three migrations have been applied, running `npm run migrate:down` executes the `-- Down Migration` section of `003_add_refresh_tokens.sql`. Running it again rolls back `002_add_notification_prefs.sql`, and so on.
+
+To roll forward again after a down migration:
+
+```bash
+npm run migrate
+```
+
 ## Environment Variables
 
 | Variable | Description |

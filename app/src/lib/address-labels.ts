@@ -105,14 +105,23 @@ export function exportCustomLabels(): string {
 export function importCustomLabels(jsonString: string): boolean {
   if (typeof window === "undefined") return false;
   try {
-    const imported = JSON.parse(jsonString);
+    const imported = JSON.parse(jsonString) as Record<string, unknown>;
     const existing = getCustomLabels();
-    const merged = { ...existing, ...imported };
-    const labels: AddressLabel[] = Object.entries(merged).map(([address, label]) => ({
-      address,
-      label,
-      createdAt: Date.now(),
-    }));
+    const merged: Record<string, string> = { ...existing };
+
+    for (const [address, label] of Object.entries(imported)) {
+      if (typeof label === "string") {
+        merged[address] = label;
+      }
+    }
+
+    const labels: AddressLabel[] = Object.entries(merged).map(
+      ([address, label]) => ({
+        address,
+        label,
+        createdAt: Date.now(),
+      }),
+    );
     localStorage.setItem(LS_ADDRESS_LABELS, JSON.stringify(labels));
     return true;
   } catch {

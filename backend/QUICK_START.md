@@ -261,7 +261,7 @@ FROM refresh_tokens;
 **Solution:**
 
 - Run migration: `npm run migrate`
-- Or manually create table from `src/db/schema.sql`
+- Or manually apply SQL from `migrations/` (see `backend/README.md`)
 
 ### Issue: "Refresh token required"
 

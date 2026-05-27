@@ -7,33 +7,34 @@ NebGov is the canonical governance framework for the Stellar ecosystem — a mod
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![CI](https://github.com/nebgov/nebgov/actions/workflows/rust.yml/badge.svg)](https://github.com/nebgov/nebgov/actions)
 [![codecov](https://codecov.io/gh/nebgov/nebgov/graph/badge.svg)](https://codecov.io/gh/nebgov/nebgov)
+[![Security Policy](https://img.shields.io/badge/Security-Policy-2f855a)](./SECURITY.md)
 
 ---
 
 ## What It Does
 
-| Feature | Description |
-|---|---|
-| Proposal lifecycle | Create, vote, queue, and execute on-chain proposals |
-| Timelock execution | Mandatory delay between passing and execution |
-| Token-weighted voting | Snapshot voting power from any SEP-41 token |
-| Delegation | Delegate voting power to any address |
-| Multi-sig treasury | DAO-controlled treasury with configurable threshold |
-| Permissionless factory | Deploy your own governance instance in one call |
+| Feature                | Description                                         |
+| ---------------------- | --------------------------------------------------- |
+| Proposal lifecycle     | Create, vote, queue, and execute on-chain proposals |
+| Timelock execution     | Mandatory delay between passing and execution       |
+| Token-weighted voting  | Snapshot voting power from any SEP-41 token         |
+| Delegation             | Delegate voting power to any address                |
+| Multi-sig treasury     | DAO-controlled treasury with configurable threshold |
+| Permissionless factory | Deploy your own governance instance in one call     |
 
 ---
 
 ## Packages
 
-| Package | Description |
-|---|---|
-| `contracts/governor` | Core governance contract (Rust/Soroban) |
-| `contracts/timelock` | Delayed execution controller (Rust/Soroban) |
-| `contracts/token-votes` | Voting power with checkpointing (Rust/Soroban) |
+| Package                      | Description                                     |
+| ---------------------------- | ----------------------------------------------- |
+| `contracts/governor`         | Core governance contract (Rust/Soroban)         |
+| `contracts/timelock`         | Delayed execution controller (Rust/Soroban)     |
+| `contracts/token-votes`      | Voting power with checkpointing (Rust/Soroban)  |
 | `contracts/governor-factory` | Permissionless governor deployer (Rust/Soroban) |
-| `contracts/treasury` | Multi-sig treasury (Rust/Soroban) |
-| `sdk/` | TypeScript SDK (`@nebgov/sdk`) |
-| `app/` | Next.js governance dashboard |
+| `contracts/treasury`         | Multi-sig treasury (Rust/Soroban)               |
+| `sdk/`                       | TypeScript SDK (`@nebgov/sdk`)                  |
+| `app/`                       | Next.js governance dashboard                    |
 
 ---
 
@@ -88,6 +89,7 @@ propose() → Governor → [voting period] → queue() → Timelock → execute(
 See [CONTRIBUTING.md](./CONTRIBUTING.md) to get started.
 
 Issues are labeled by complexity:
+
 - `complexity: trivial`
 - `complexity: medium`
 - `complexity: high`
@@ -105,3 +107,7 @@ Issues are labeled by complexity:
 ## License
 
 MIT
+
+## Security
+
+If you discover a vulnerability, please review [SECURITY.md](./SECURITY.md) and report it privately instead of opening a public issue.

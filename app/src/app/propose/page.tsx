@@ -18,7 +18,14 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import ReactMarkdown from "react-markdown";
 import { ChevronDown, ChevronUp, Share2, Loader2, Link as LinkIcon, AlertCircle } from "lucide-react";
-import { GovernorClient, VotesClient, hashDescription, uploadProposalMetadata } from "@nebgov/sdk";
+import { Keypair } from "@stellar/stellar-sdk";
+import {
+  GovernorClient,
+  VotesClient,
+  hashDescription,
+  uploadProposalMetadata,
+  type CanProposeResult,
+} from "@nebgov/sdk";
 import {
   calldataArgRowToScVal,
   encodeGovernorCalldataBytes,
@@ -176,12 +183,18 @@ function ProposeWizardInner() {
   // Simulation / review data
   const [votes, setVotes] = useState<bigint | null>(null);
   const [threshold, setThreshold] = useState<bigint | null>(null);
-  const [canProposeResult, setCanProposeResult] = useState<{ canPropose: boolean; reason?: string; availableAtLedger?: number } | null>(null);
+  const [canProposeResult, setCanProposeResult] = useState<CanProposeResult | null>(null);
   const [estimate, setEstimate] = useState<{ cpuInsns?: string; memBytes?: string } | null>(null);
   const [estimateErr, setEstimateErr] = useState<string | null>(null);
   const [simBusy, setSimBusy] = useState<string | null>(null);
 
-  const reviewDataReady = votes !== null && threshold !== null && canProposeResult !== null && estimate !== null;
+  // Extended review data for threshold/delegate check
+  const [baseVotes, setBaseVotes] = useState<bigint | null>(null);
+  const [delegatee, setDelegatee] = useState<string | null>(null);
+  const [delegateBusy, setDelegateBusy] = useState(false);
+  const [reviewLoading, setReviewLoading] = useState(false);
+
+  const reviewDataReady = votes !== null && threshold !== null && canProposeResult !== null && estimate !== null && baseVotes !== null && delegatee !== null;
 
   // Hydration / Persistence
   useEffect(() => {
@@ -334,17 +347,22 @@ function ProposeWizardInner() {
 
   async function runReviewLoads() {
     if (!clients || !publicKey) return;
+    setReviewLoading(true);
     setEstimate(null);
     setEstimateErr(null);
     try {
-      const [v, t, cp] = await Promise.all([
+      const [v, t, cp, bv, del] = await Promise.all([
         clients.votes.getVotes(publicKey),
         clients.governor.proposalThreshold(),
         clients.governor.canPropose(publicKey),
+        clients.votes.getBaseVotes(publicKey),
+        clients.votes.getDelegatee(publicKey),
       ]);
       setVotes(v);
       setThreshold(t);
       setCanProposeResult(cp);
+      setBaseVotes(bv);
+      setDelegatee(del);
 
       const description = buildDescription(
         draft.title,
@@ -371,6 +389,8 @@ function ProposeWizardInner() {
       setEstimate({ cpuInsns: est.cpuInsns, memBytes: est.memBytes });
     } catch (e) {
       console.error("Review loads failed:", e);
+    } finally {
+      setReviewLoading(false);
     }
   }
 
@@ -378,6 +398,32 @@ function ProposeWizardInner() {
     if (step !== 3 || !clients || !publicKey) return;
     void runReviewLoads();
   }, [step, publicKey, clients, draft]);
+
+  async function handleDelegateToSelf() {
+    if (!clients || !publicKey) return;
+    setDelegateBusy(true);
+    try {
+      const secret = process.env.NEXT_PUBLIC_DELEGATE_SECRET_KEY;
+      if (!secret) throw new Error("Missing NEXT_PUBLIC_DELEGATE_SECRET_KEY in .env.local");
+      const signer = Keypair.fromSecret(secret);
+      const txHash = await clients.votes.delegate(signer, publicKey);
+      toast.success(
+        <div>
+          Delegated to yourself!{" "}
+          <a href={explorerTxUrl(txHash)} target="_blank" rel="noreferrer" className="underline">
+            View on Explorer →
+          </a>
+        </div>,
+        { duration: 8000 },
+      );
+      void runReviewLoads();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Delegation failed: ${msg}`);
+    } finally {
+      setDelegateBusy(false);
+    }
+  }
 
   async function simulateAction(act: WizardAction) {
     if (!clients || !publicKey) return;
@@ -492,12 +538,13 @@ function ProposeWizardInner() {
         return;
       }
       if (votes < threshold) {
+        const shortfall = (Number(threshold - votes) / 10 ** 7).toLocaleString();
         setStepErrors([
-          `Voting power is below the proposal threshold (${(Number(threshold) / 10**7).toLocaleString()} required).`,
+          `Insufficient voting power — need ${(Number(threshold) / 10 ** 7).toLocaleString()} GOV, have ${(Number(votes) / 10 ** 7).toLocaleString()} GOV (shortfall: ${shortfall} GOV).`,
         ]);
         return;
       }
-      if (canProposeResult && !canProposeResult.canPropose) {
+      if (canProposeResult && !canProposeResult.allowed) {
         setStepErrors([canProposeResult.reason ?? "Rate limit active."]);
         return;
       }
@@ -954,38 +1001,82 @@ function ProposeWizardInner() {
             <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-6">
               Submission check
             </h2>
-            <div className="space-y-6">
-              {!isConnected ? (
-                <div className="flex items-center gap-2 text-amber-700 bg-amber-50 p-4 rounded-xl text-sm">
-                  <AlertCircle className="w-5 h-5 shrink-0" />
-                  Please connect your wallet to verify permissions.
-                </div>
-              ) : (
-                <div className="grid grid-cols-2 gap-6">
-                  <div>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Your Votes</p>
-                    <p className="text-xl font-bold text-gray-900 dark:text-white">
-                      {votes === null ? "..." : (Number(votes) / 10 ** 7).toLocaleString()}
-                    </p>
+              <div className="space-y-6">
+                {!isConnected ? (
+                  <div className="flex items-center gap-2 text-amber-700 bg-amber-50 p-4 rounded-xl text-sm">
+                    <AlertCircle className="w-5 h-5 shrink-0" />
+                    Please connect your wallet to verify permissions.
                   </div>
-                  <div>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Threshold</p>
-                    <p className="text-xl font-bold text-gray-900 dark:text-white">
-                      {threshold === null ? "..." : (Number(threshold) / 10 ** 7).toLocaleString()}
-                    </p>
+                ) : reviewLoading && (votes === null || threshold === null) ? (
+                  <div className="flex items-center gap-2 text-gray-500 text-sm">
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Checking voting power...
                   </div>
-                </div>
-              )}
+                ) : (
+                  <>
+                    <div className="grid grid-cols-2 gap-6">
+                      <div>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Your Votes</p>
+                        <p className="text-xl font-bold text-gray-900 dark:text-white">
+                          {votes === null ? "..." : (Number(votes) / 10 ** 7).toLocaleString()}
+                        </p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-gray-400 dark:text-gray-500 font-medium uppercase mb-1">Threshold</p>
+                        <p className="text-xl font-bold text-gray-900 dark:text-white">
+                          {threshold === null ? "..." : (Number(threshold) / 10 ** 7).toLocaleString()}
+                        </p>
+                      </div>
+                    </div>
 
-              {canProposeResult && !canProposeResult.canPropose && (
+                    {votes !== null && threshold !== null && votes < threshold && (
+                      <div className="flex items-start gap-3 text-amber-800 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300 p-4 rounded-xl text-sm border border-amber-200 dark:border-amber-800">
+                        <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
+                        <div>
+                          <p className="font-semibold">Insufficient voting power</p>
+                          <p className="mt-1">
+                            You need {(Number(threshold) / 10 ** 7).toLocaleString()} GOV to create a proposal.
+                            Your current voting power: {(Number(votes) / 10 ** 7).toLocaleString()} GOV.
+                          </p>
+                          <p className="mt-2 text-sm font-medium">
+                            Shortfall: {(Number(threshold - votes) / 10 ** 7).toLocaleString()} GOV
+                          </p>
+                          <ul className="mt-2 text-xs list-disc list-inside space-y-0.5">
+                            <li>Ask delegates to delegate to you</li>
+                            <li>Acquire more tokens and delegate to yourself</li>
+                          </ul>
+                        </div>
+                      </div>
+                    )}
+
+                    {baseVotes !== null && baseVotes > 0n && delegatee !== publicKey && (
+                      <div className="flex items-center gap-3 text-blue-800 bg-blue-50 dark:bg-blue-900/20 dark:text-blue-300 p-4 rounded-xl text-sm border border-blue-200 dark:border-blue-800">
+                        <AlertCircle className="w-5 h-5 shrink-0" />
+                        <p className="flex-1">
+                          You have tokens but haven&apos;t delegated &mdash; delegate to yourself first to activate your voting power.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleDelegateToSelf}
+                          disabled={delegateBusy}
+                          className="shrink-0 bg-indigo-600 text-white px-4 py-1.5 rounded-lg text-xs font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+                        >
+                          {delegateBusy ? "Delegating..." : "Delegate to yourself"}
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+
+              {canProposeResult && !canProposeResult.allowed && (
                 <div className="flex items-start gap-3 text-red-700 bg-red-50 dark:bg-red-900/20 dark:text-red-400 p-4 rounded-xl text-sm border border-red-100 dark:border-red-900/30">
                   <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                   <div>
                     <p className="font-semibold">Rate limit active</p>
                     <p className="mt-1">{canProposeResult.reason}</p>
-                    {canProposeResult.availableAtLedger && (
+                    {canProposeResult.cooldownEndsAt && (
                       <p className="mt-2 text-xs opacity-80">
-                        Estimated availability: Ledger {canProposeResult.availableAtLedger}
+                        Estimated availability: Ledger {canProposeResult.cooldownEndsAt}
                       </p>
                     )}
                   </div>
@@ -1063,7 +1154,7 @@ function ProposeWizardInner() {
             )}
             <button
               onClick={goNext}
-              disabled={submitting || (step === 3 && !reviewDataReady)}
+              disabled={submitting || (step === 3 && (!reviewDataReady || (votes !== null && threshold !== null && votes < threshold)))}
               className="bg-indigo-600 text-white px-8 py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors min-w-[120px]"
             >
               {submitting ? (

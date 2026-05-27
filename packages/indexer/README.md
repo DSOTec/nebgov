@@ -10,6 +10,34 @@ cp .env.example .env
 docker-compose up -d
 ```
 
+## Database migrations
+
+Indexer tables are managed with [node-pg-migrate](https://github.com/salsita/node-pg-migrate). Migration files live in `packages/indexer/migrations/` (numbered SQL with `-- Up Migration` / `-- Down Migration` sections). Applied migrations are stored in `pgmigrations_nebgov_indexer` so the indexer can share a PostgreSQL instance with the backend without conflicting migration history.
+
+Migrations run automatically when the indexer process starts (`initDb()`).
+
+**Apply pending migrations manually**
+
+```bash
+cd packages/indexer
+npm install
+npm run migrate
+```
+
+Uses `DATABASE_URL` from the environment (same variable as the backend).
+
+**Rollback**
+
+```bash
+# Roll back the latest indexer migration
+npm run migrate:down
+
+# Roll back the latest N migrations
+npx tsx src/migrate.ts down N
+```
+
+Then run `npm run migrate` to apply pending UP migrations again.
+
 ## API endpoints
 
 - `GET /health` — health check with indexing lag metrics

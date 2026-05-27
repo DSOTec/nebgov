@@ -9,6 +9,8 @@ import authRouter from "./routes/auth";
 import notificationsRouter from "./routes/notifications";
 import securityRouter from "./routes/security";
 import { securityMonitor } from "./services/security-monitor";
+import { runBackendMigrations } from "./db/migrationRunner";
+import pino from "pino";
 import pinoHttp from "pino-http";
 import swaggerUi from "swagger-ui-express";
 import { generateOpenApiDocument } from "./openapi";
@@ -102,7 +104,8 @@ app.use(
   },
 );
 
-if (process.env.NODE_ENV !== "test") {
+async function bootstrap(): Promise<void> {
+  await runBackendMigrations();
   app.listen(PORT, () => {
     logger.info({ port: PORT }, "Backend server running");
 
@@ -110,6 +113,13 @@ if (process.env.NODE_ENV !== "test") {
     securityMonitor.start().catch((err) => {
       logger.error({ err }, "Failed to start security monitor");
     });
+  });
+}
+
+if (process.env.NODE_ENV !== "test") {
+  bootstrap().catch((err: unknown) => {
+    console.error("Failed to start:", err);
+    process.exit(1);
   });
 }
 

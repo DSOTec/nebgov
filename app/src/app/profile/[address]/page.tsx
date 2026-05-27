@@ -50,7 +50,11 @@ interface ProfileData {
 }
 
 function Skeleton({ className }: { className?: string }) {
-  return <div className={`bg-gray-200 animate-pulse rounded ${className}`} />;
+  return (
+    <div
+      className={`bg-gray-200 dark:bg-gray-700 animate-pulse rounded ${className}`}
+    />
+  );
 }
 
 function VoterProfilePageContent() {
@@ -95,7 +99,7 @@ function VoterProfilePageContent() {
 
         if (!governorAddress || !timelockAddress || !votesAddress) {
           throw new Error(
-            "Missing required environment variables. Please check .env.local configuration."
+            "Missing required environment variables. Please check .env.local configuration.",
           );
         }
 
@@ -150,7 +154,10 @@ function VoterProfilePageContent() {
 
         const [votingHistory, createdProposalsHydrated] = await Promise.all([
           governorClient.getVotesCastByAddress(address, {
-            fromLedger: Math.max(1, (await governorClient.getLatestLedger()) - 17_280 * 30),
+            fromLedger: Math.max(
+              1,
+              (await governorClient.getLatestLedger()) - 17_280 * 30,
+            ),
             limit: 50,
           }),
           governorClient.getProposalsForAddress(address, {
@@ -191,7 +198,8 @@ function VoterProfilePageContent() {
         const snapshots = await Promise.all(
           points.map(async (ledger) => ({
             ledger,
-            votingPower: Number(await votesClient.getPastVotes(address, ledger)) / 1e7,
+            votingPower:
+              Number(await votesClient.getPastVotes(address, ledger)) / 1e7,
           })),
         );
 
@@ -243,9 +251,16 @@ function VoterProfilePageContent() {
     return (
       <div className="max-w-4xl mx-auto px-4 py-8">
         <div className="bg-red-50 border border-red-200 rounded-xl p-4">
-          <p className="text-red-800 text-lg font-medium">Error Loading Profile</p>
-          <p className="text-red-600 text-sm mt-1">{error || "Invalid Stellar address format"}</p>
-          <Link href="/" className="text-red-600 hover:text-red-700 text-sm mt-3 inline-block underline">
+          <p className="text-red-800 text-lg font-medium">
+            Error Loading Profile
+          </p>
+          <p className="text-red-600 text-sm mt-1">
+            {error || "Invalid Stellar address format"}
+          </p>
+          <Link
+            href="/"
+            className="text-red-600 hover:text-red-700 text-sm mt-3 inline-block underline"
+          >
             ← Back to proposals
           </Link>
         </div>
@@ -385,9 +400,7 @@ function VoterProfilePageContent() {
               Snapshot of voting power over recent ledgers
             </p>
           </div>
-          <p className="text-xs text-gray-500">
-            {history.length} points
-          </p>
+          <p className="text-xs text-gray-500">{history.length} points</p>
         </div>
 
         {historyLoading ? (
@@ -399,7 +412,10 @@ function VoterProfilePageContent() {
         ) : (
           <div className="h-72">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={history} margin={{ top: 10, right: 20, bottom: 0, left: -10 }}>
+              <LineChart
+                data={history}
+                margin={{ top: 10, right: 20, bottom: 0, left: -10 }}
+              >
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
                 <XAxis
                   dataKey="ledger"
@@ -416,7 +432,12 @@ function VoterProfilePageContent() {
                   width={50}
                   tickFormatter={(value) => String(value)}
                 />
-                <Tooltip formatter={(value) => [`${Number(value).toFixed(2)} XLM`, "Voting Power"]} />
+                <Tooltip
+                  formatter={(value) => [
+                    `${Number(value).toFixed(2)} XLM`,
+                    "Voting Power",
+                  ]}
+                />
                 <Line
                   type="monotone"
                   dataKey="votingPower"
@@ -451,7 +472,8 @@ function VoterProfilePageContent() {
                     Proposal #{record.proposalId.toString()}
                   </p>
                   <p className="text-xs text-gray-500 mt-1">
-                    {record.support} · {formatVotingPower(record.weight)} · ledger #{record.ledger}
+                    {record.support} · {formatVotingPower(record.weight)} ·
+                    ledger #{record.ledger}
                   </p>
                 </div>
                 <div className="text-right">
@@ -490,9 +512,7 @@ function VoterProfilePageContent() {
                   </p>
                   <p className="text-xs text-gray-500 mt-1">{p.state}</p>
                 </div>
-                <span className="text-xs text-gray-600">
-                  View →
-                </span>
+                <span className="text-xs text-gray-600">View →</span>
               </Link>
             ))}
           </div>

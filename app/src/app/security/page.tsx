@@ -12,7 +12,7 @@ import {
   ExternalLink,
   Info
 } from "lucide-react";
-import { backendBaseUrl } from "@/lib/backend";
+import { backendBaseUrl } from "../../lib/backend";
 
 interface SecurityAlert {
   id: number;

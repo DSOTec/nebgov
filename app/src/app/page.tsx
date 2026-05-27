@@ -8,6 +8,9 @@ import { useState, useEffect, useMemo, Suspense } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { GovernorClient, ProposalState, Network } from "@nebgov/sdk";
+import { ProposalCardSkeleton } from "../components/ui/ProposalCardSkeleton";
+import { useDebounce } from "../hooks/useDebounce";
+
 
 interface ProposalSummary {
   id: bigint;
@@ -29,35 +32,28 @@ const STATE_COLORS: Record<ProposalState, string> = {
   [ProposalState.Expired]: "bg-orange-100 text-orange-700",
 };
 
-const ALL_STATES = Object.values(ProposalState);
-type SortOption = "newest" | "most-votes" | "ending-soon";
+const FILTER_STATES = [
+  ProposalState.Active,
+  ProposalState.Pending,
+  ProposalState.Succeeded,
+  ProposalState.Defeated,
+  ProposalState.Queued,
+  ProposalState.Executed,
+];
+
+type SortOption = "newest" | "oldest" | "most-votes" | "least-votes";
+
 
 const PROPOSALS_PER_PAGE = 10;
-
-function ProposalSkeleton() {
-  return (
-    <div className="block bg-white border border-gray-200 rounded-xl p-6 animate-pulse">
-      <div className="flex items-start justify-between">
-        <div className="flex-1 min-w-0">
-          <div className="h-3 bg-gray-200 rounded w-24 mb-2"></div>
-          <div className="h-5 bg-gray-200 rounded w-3/4 mb-3"></div>
-          <div className="flex items-center gap-4">
-            <div className="h-4 bg-gray-200 rounded w-20"></div>
-            <div className="h-4 bg-gray-200 rounded w-20"></div>
-          </div>
-        </div>
-        <div className="ml-4 h-6 bg-gray-200 rounded-full w-20"></div>
-      </div>
-    </div>
-  );
-}
 
 function ProposalsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const search = searchParams.get("q") ?? "";
-  const stateFilter = (searchParams.get("state") ?? "all") as ProposalState | "all";
+  const stateFilter = (searchParams.get("state") ?? "all") as
+    | ProposalState
+    | "all";
   const sort = (searchParams.get("sort") ?? "newest") as SortOption;
 
   const [proposals, setProposals] = useState<ProposalSummary[]>([]);
@@ -67,6 +63,20 @@ function ProposalsPageInner() {
   const [nextCursor, setNextCursor] = useState<number | undefined>();
   const [hasMore, setHasMore] = useState(false);
 
+  const [searchValue, setSearchValue] = useState(search);
+  const debouncedSearch = useDebounce(searchValue, 300);
+
+  useEffect(() => {
+    setSearchValue(search);
+  }, [search]);
+
+  useEffect(() => {
+    if (debouncedSearch !== search) {
+      setParam("q", debouncedSearch);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch]);
+
   function setParam(key: string, value: string, defaultVal = "") {
     const q = new URLSearchParams(searchParams.toString());
     if (value && value !== defaultVal) {
@@ -74,8 +84,13 @@ function ProposalsPageInner() {
     } else {
       q.delete(key);
     }
-    router.replace(`?${q.toString()}`);
+    const queryString = q.toString();
+    const currentQueryString = searchParams.toString();
+    if (queryString !== currentQueryString) {
+      router.push(`?${queryString}`);
+    }
   }
+
 
   const filtered = useMemo(() => {
     let result = proposals;
@@ -89,13 +104,22 @@ function ProposalsPageInner() {
     const sorted = [...result];
     if (sort === "newest") {
       sorted.sort((a, b) => (b.id > a.id ? 1 : b.id < a.id ? -1 : 0));
+    } else if (sort === "oldest") {
+      sorted.sort((a, b) => (a.id > b.id ? 1 : a.id < b.id ? -1 : 0));
     } else if (sort === "most-votes") {
-      sorted.sort((a, b) =>
-        Number((b.votesFor + b.votesAgainst) - (a.votesFor + a.votesAgainst))
+      sorted.sort(
+        (a, b) =>
+          Number(b.votesFor + b.votesAgainst) -
+          Number(a.votesFor + a.votesAgainst),
       );
-    } else if (sort === "ending-soon") {
-      sorted.sort((a, b) => (a.endLedger || Infinity) - (b.endLedger || Infinity));
+    } else if (sort === "least-votes") {
+      sorted.sort(
+        (a, b) =>
+          Number(a.votesFor + a.votesAgainst) -
+          Number(b.votesFor + b.votesAgainst),
+      );
     }
+
     return sorted;
   }, [proposals, stateFilter, search, sort]);
 
@@ -140,7 +164,10 @@ function ProposalsPageInner() {
             return;
           }
         } catch (indexerError) {
-          console.warn("Indexer failed, falling back to on-chain queries:", indexerError);
+          console.warn(
+            "Indexer failed, falling back to on-chain queries:",
+            indexerError,
+          );
         }
       }
 
@@ -165,34 +192,23 @@ function ProposalsPageInner() {
       const startIdx = Number(count) - (currentPage - 1) * PROPOSALS_PER_PAGE;
       const endIdx = Math.max(startIdx - PROPOSALS_PER_PAGE, 0);
 
-      const proposalPromises: Promise<ProposalSummary | null>[] = [];
+      // Build ID list in reverse order (newest first) then batch-fetch
+      const ids: bigint[] = [];
       for (let i = startIdx; i > endIdx && i > 0; i--) {
-        proposalPromises.push(
-          (async () => {
-            try {
-              const proposalId = BigInt(i);
-              const [state, votes] = await Promise.all([
-                client.getProposalState(proposalId),
-                client.getProposalVotes(proposalId),
-              ]);
-              return {
-                id: proposalId,
-                description: `Proposal ${i}`,
-                state,
-                votesFor: votes.votesFor,
-                votesAgainst: votes.votesAgainst,
-                endLedger: 0,
-              };
-            } catch (err) {
-              console.error(`Error fetching proposal ${i}:`, err);
-              return null;
-            }
-          })(),
-        );
+        ids.push(BigInt(i));
       }
 
-      const results = await Promise.all(proposalPromises);
-      const validProposals = results.filter((p): p is ProposalSummary => p !== null);
+      const batchResults = await client.getProposalsSummaryBatch(ids);
+      const validProposals: ProposalSummary[] = batchResults
+        .filter((r) => r.state !== undefined && r.votes !== undefined)
+        .map((r) => ({
+          id: r.id,
+          description: `Proposal ${r.id}`,
+          state: r.state!,
+          votesFor: r.votes!.votesFor,
+          votesAgainst: r.votes!.votesAgainst,
+          endLedger: 0,
+        }));
 
       if (append) {
         setProposals((prev) => [...prev, ...validProposals]);
@@ -232,7 +248,9 @@ function ProposalsPageInner() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold text-gray-900">Proposals</h1>
-          <p className="text-gray-500 mt-1">Vote on governance decisions for this protocol.</p>
+          <p className="text-gray-500 mt-1">
+            Vote on governance decisions for this protocol.
+          </p>
         </div>
         <Link
           href="/propose"
@@ -247,8 +265,8 @@ function ProposalsPageInner() {
         <input
           type="search"
           placeholder="Search proposals…"
-          value={search}
-          onChange={(e) => setParam("q", e.target.value)}
+          value={searchValue}
+          onChange={(e) => setSearchValue(e.target.value)}
           className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
           aria-label="Search proposals"
         />
@@ -258,14 +276,20 @@ function ProposalsPageInner() {
           className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
           aria-label="Sort proposals"
         >
-          <option value="newest">Newest first</option>
-          <option value="most-votes">Most votes</option>
-          <option value="ending-soon">Ending soon</option>
+          <option value="newest">Newest</option>
+          <option value="oldest">Oldest</option>
+          <option value="most-votes">Most Votes</option>
+          <option value="least-votes">Least Votes</option>
         </select>
+
       </div>
 
       {/* Status filter tabs */}
-      <div className="flex flex-wrap gap-2 mb-6" role="group" aria-label="Filter by status">
+      <div
+        className="flex flex-wrap gap-2 mb-6"
+        role="group"
+        aria-label="Filter by status"
+      >
         <button
           onClick={() => setParam("state", "all", "all")}
           className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
@@ -276,7 +300,7 @@ function ProposalsPageInner() {
         >
           All
         </button>
-        {ALL_STATES.map((s) => (
+        {FILTER_STATES.map((s) => (
           <button
             key={s}
             onClick={() => setParam("state", s, "all")}
@@ -289,12 +313,15 @@ function ProposalsPageInner() {
             {s}
           </button>
         ))}
+
       </div>
 
       {/* Error */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-          <p className="text-red-800 text-sm font-medium">Error loading proposals</p>
+          <p className="text-red-800 text-sm font-medium">
+            Error loading proposals
+          </p>
           <p className="text-red-600 text-sm mt-1">{error}</p>
         </div>
       )}
@@ -302,8 +329,8 @@ function ProposalsPageInner() {
       {/* Loading skeleton */}
       {loading && (
         <div className="space-y-4">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <ProposalSkeleton key={i} />
+          {Array.from({ length: 10 }).map((_, i) => (
+            <ProposalCardSkeleton key={i} />
           ))}
         </div>
       )}
@@ -311,12 +338,25 @@ function ProposalsPageInner() {
       {/* Empty — no proposals at all */}
       {!loading && !error && proposals.length === 0 && (
         <div className="text-center py-16">
-          <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          <svg
+            className="mx-auto h-12 w-12 text-gray-400"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke="currentColor"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
+            />
           </svg>
-          <h3 className="mt-2 text-sm font-medium text-gray-900">No proposals</h3>
-          <p className="mt-1 text-sm text-gray-500">Get started by creating a new proposal.</p>
+          <h3 className="mt-2 text-sm font-medium text-gray-900">
+            No proposals
+          </h3>
+          <p className="mt-1 text-sm text-gray-500">
+            Get started by creating a new proposal.
+          </p>
           <div className="mt-6">
             <Link
               href="/propose"
@@ -331,15 +371,18 @@ function ProposalsPageInner() {
       {/* Empty — filters produced no results */}
       {!loading && !error && proposals.length > 0 && filtered.length === 0 && (
         <div className="text-center py-12">
-          <p className="text-gray-500 text-sm">No proposals match your current filters.</p>
+          <p className="text-gray-500 text-sm">
+            No proposals match your filters
+          </p>
           <button
-            onClick={() => router.replace("?")}
-            className="mt-3 text-indigo-600 text-sm hover:underline"
+            onClick={() => router.push("?")}
+            className="mt-3 text-indigo-600 text-sm hover:underline font-medium"
           >
-            Clear filters
+            Reset filters
           </button>
         </div>
       )}
+
 
       {/* Proposals list */}
       {!loading && !error && filtered.length > 0 && (
@@ -353,13 +396,20 @@ function ProposalsPageInner() {
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-400 mb-1">Proposal #{p.id.toString()}</p>
+                    <p className="text-xs text-gray-400 mb-1">
+                      Proposal #{p.id.toString()}
+                    </p>
                     <h2 className="text-lg font-semibold text-gray-900 truncate">
                       {p.description}
                     </h2>
                     <div className="mt-3 flex items-center gap-4 text-sm text-gray-500">
-                      <span>For: {(Number(p.votesFor) / 1e7).toLocaleString()}</span>
-                      <span>Against: {(Number(p.votesAgainst) / 1e7).toLocaleString()}</span>
+                      <span>
+                        For: {(Number(p.votesFor) / 1e7).toLocaleString()}
+                      </span>
+                      <span>
+                        Against:{" "}
+                        {(Number(p.votesAgainst) / 1e7).toLocaleString()}
+                      </span>
                     </div>
                   </div>
                   <span
@@ -397,11 +447,8 @@ export default function ProposalsPage() {
       fallback={
         <div className="max-w-4xl mx-auto px-4 py-8">
           <div className="space-y-4">
-            {Array.from({ length: 3 }).map((_, i) => (
-              <div key={i} className="block bg-white border border-gray-200 rounded-xl p-6 animate-pulse">
-                <div className="h-5 bg-gray-200 rounded w-3/4 mb-3"></div>
-                <div className="h-4 bg-gray-200 rounded w-1/2"></div>
-              </div>
+            {Array.from({ length: 10 }).map((_, i) => (
+              <ProposalCardSkeleton key={i} />
             ))}
           </div>
         </div>

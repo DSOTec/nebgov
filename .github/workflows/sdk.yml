@@ -4,7 +4,6 @@ on:
   push:
     paths:
       - 'sdk/**'
-      - 'pnpm-lock.yaml'
   pull_request:
     paths:
       - 'sdk/**'
@@ -74,7 +73,7 @@ jobs:
         uses: codecov/codecov-action@v4
         with:
           files: sdk/coverage/lcov.info
-          flags: sdk
+          flags: typescript
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 

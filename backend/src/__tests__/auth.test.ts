@@ -7,19 +7,6 @@ import crypto from "crypto";
 describe("Auth Routes", () => {
   const testWallet = "GTEST123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890";
 
-  beforeAll(async () => {
-    // Ensure refresh_tokens table exists
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS refresh_tokens (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        token_hash TEXT UNIQUE NOT NULL,
-        expires_at TIMESTAMPTZ NOT NULL,
-        created_at TIMESTAMPTZ DEFAULT NOW()
-      )
-    `);
-  });
-
   beforeEach(async () => {
     // Clean up test data
     await pool.query("DELETE FROM refresh_tokens");

@@ -5,13 +5,19 @@ import toast from "react-hot-toast";
 export function ShareButton({ url, title }: { url: string; title?: string }) {
   async function onShare() {
     try {
-      if (typeof navigator !== "undefined" && "share" in navigator) {
+      const nav = typeof navigator !== "undefined" ? navigator : null;
+
+      if (nav && "share" in nav) {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        await (navigator as any).share({ url, title });
+        await (nav as any).share({ url, title });
         return;
       }
 
-      await navigator.clipboard.writeText(url);
+      if (!nav) {
+        throw new Error("Navigator is unavailable in this environment.");
+      }
+
+      await nav.clipboard.writeText(url);
       toast.success("Link copied!", {
         style: { borderRadius: "10px", background: "#1e1b4b", color: "#fff" },
         iconTheme: { primary: "#818cf8", secondary: "#fff" },

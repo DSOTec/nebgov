@@ -140,7 +140,7 @@ export default function SettingsPage() {
       setError(null);
       const nextSettings = toGovernorSettings(form);
       const { target, fnName, calldata } = governor.buildUpdateConfigProposal(nextSettings);
-      const encodedArg = xdr.ScVal.fromXDR(calldata);
+      const encodedArg = xdr.ScVal.fromXDR(Buffer.from(calldata));
       const source = publicKey ?? config.governorAddress;
       const simulation = await governor.simulateTargetInvocation(source, target, fnName, [encodedArg]);
       if (!simulation.ok) {

@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 use crate::{Checkpoint, TokenVotesContract};
 use soroban_sdk::Env;
 

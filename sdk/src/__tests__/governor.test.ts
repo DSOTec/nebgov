@@ -652,4 +652,137 @@ describe("GovernorClient", () => {
       expect(count).toBe(0n);
     });
   });
+
+  describe("getProposalsBatch()", () => {
+    it("fetches all proposals in parallel", async () => {
+      mockIsSimulationError.mockReturnValue(false);
+      mockScValToNative.mockImplementation((v) => ({
+        id: 1n,
+        proposer: validGAddr,
+        description: "test",
+        startLedger: 100,
+        endLedger: 200,
+        votesFor: 0n,
+        votesAgainst: 0n,
+        votesAbstain: 0n,
+        executed: false,
+        cancelled: false,
+      }));
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+
+      const results = await client.getProposalsBatch([1n, 2n, 3n]);
+
+      expect(results).toHaveLength(3);
+      expect(results.every((r) => r.proposal !== undefined)).toBe(true);
+      expect(results.every((r) => r.error === undefined)).toBe(true);
+    });
+
+    it("captures errors per proposal without failing the whole batch", async () => {
+      mockIsSimulationError.mockReturnValueOnce(false).mockReturnValueOnce(true).mockReturnValueOnce(false);
+      mockScValToNative.mockReturnValue({ id: 1n, proposer: validGAddr, description: "test", startLedger: 100, endLedger: 200, votesFor: 0n, votesAgainst: 0n, votesAbstain: 0n, executed: false, cancelled: false });
+      mockSimulate
+        .mockResolvedValueOnce({ result: { retval: {} } })
+        .mockResolvedValueOnce({ error: "not found" })
+        .mockResolvedValueOnce({ result: { retval: {} } });
+
+      const results = await client.getProposalsBatch([1n, 2n, 3n]);
+
+      expect(results).toHaveLength(3);
+      expect(results[0].proposal).toBeDefined();
+      expect(results[1].error).toBeDefined();
+      expect(results[2].proposal).toBeDefined();
+    });
+
+    it("respects concurrency limit by chunking", async () => {
+      mockIsSimulationError.mockReturnValue(false);
+      mockScValToNative.mockReturnValue({ id: 1n, proposer: validGAddr, description: "test", startLedger: 100, endLedger: 200, votesFor: 0n, votesAgainst: 0n, votesAbstain: 0n, executed: false, cancelled: false });
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+
+      const ids = [1n, 2n, 3n, 4n, 5n];
+      const results = await client.getProposalsBatch(ids, 2);
+
+      expect(results).toHaveLength(5);
+    });
+  });
+
+  describe("getProposalsSummaryBatch()", () => {
+    it("fetches state and votes for multiple proposals", async () => {
+      mockIsSimulationError.mockReturnValue(false);
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative
+        .mockReturnValueOnce(["Active"])
+        .mockReturnValueOnce([1000n, 500n, 100n])
+        .mockReturnValueOnce(["Defeated"])
+        .mockReturnValueOnce([200n, 800n, 0n]);
+
+      const results = await client.getProposalsSummaryBatch([1n, 2n]);
+
+      expect(results).toHaveLength(2);
+      expect(results[0].state).toBe(ProposalState.Active);
+      expect(results[1].state).toBe(ProposalState.Defeated);
+    });
+  });
+
+  describe("castVoteWithReason()", () => {
+    it("calls cast_vote_with_reason on the contract", async () => {
+      mockPrepareTransaction.mockResolvedValue({ sign: jest.fn(), toXDR: jest.fn() });
+      mockSendTransaction.mockResolvedValue({ status: "PENDING", hash: "abc123" });
+      mockGetTransaction.mockResolvedValue({
+        status: "SUCCESS",
+        returnValue: xdr.ScVal.scvVoid(),
+      });
+
+      await client.castVoteWithReason(
+        mockKeypair,
+        1n,
+        VoteSupport.For,
+        "This proposal improves governance.",
+      );
+
+      const { Contract } = require("@stellar/stellar-sdk");
+      const contractInstance = Contract.mock.results[0].value;
+      expect(contractInstance.call).toHaveBeenCalledWith(
+        "cast_vote_with_reason",
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+      );
+    });
+
+    it("throws when transaction fails", async () => {
+      mockPrepareTransaction.mockResolvedValue({ sign: jest.fn(), toXDR: jest.fn() });
+      mockSendTransaction.mockResolvedValue({ status: "ERROR", hash: "abc123" });
+
+      await expect(
+        client.castVoteWithReason(mockKeypair, 1n, VoteSupport.Against, "reason")
+      ).rejects.toThrow("castVoteWithReason failed");
+    });
+  });
+
+  describe("castVoteWithReasonAndSign()", () => {
+    it("calls cast_vote_with_reason via wallet callback", async () => {
+      const mockPrepared = { toXDR: jest.fn().mockReturnValue("unsigned-xdr") };
+      mockPrepareTransaction.mockResolvedValue(mockPrepared);
+      mockSendTransaction.mockResolvedValue({ status: "PENDING", hash: "def456" });
+      mockGetTransaction.mockResolvedValue({
+        status: "SUCCESS",
+        returnValue: xdr.ScVal.scvVoid(),
+      });
+
+      const signCallback = jest.fn().mockResolvedValue("signed-xdr");
+      const { TransactionBuilder } = require("@stellar/stellar-sdk");
+      TransactionBuilder.fromXDR = jest.fn().mockReturnValue({ submit: jest.fn() });
+
+      await client.castVoteWithReasonAndSign(
+        validGAddr,
+        2n,
+        VoteSupport.Abstain,
+        "Needs more discussion",
+        signCallback,
+      );
+
+      expect(signCallback).toHaveBeenCalledWith("unsigned-xdr");
+    });
+  });
 });

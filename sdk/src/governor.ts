@@ -25,6 +25,8 @@ import {
   Network,
   UnknownProposalStateError,
   TimelockInfo,
+  CanProposeResult,
+  VotingHistoryEntry,
 } from "./types";
 
 import { TimelockClient } from "./timelock";
@@ -785,6 +787,88 @@ export class GovernorClient {
   }
 
   /**
+   * Cast a vote with an on-chain reason string.
+   */
+  async castVoteWithReason(
+    signer: Keypair,
+    proposalId: bigint,
+    support: VoteSupport,
+    reason: string,
+  ): Promise<void> {
+    const account = await this.server.getAccount(signer.publicKey());
+
+    const supportScVal = xdr.ScVal.scvVec([
+      xdr.ScVal.scvSymbol(VoteSupport[support]),
+    ]);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "cast_vote_with_reason",
+          nativeToScVal(signer.publicKey(), { type: "address" }),
+          nativeToScVal(proposalId, { type: "u64" }),
+          supportScVal,
+          nativeToScVal(reason, { type: "string" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    prepared.sign(signer);
+    const result = await this.server.sendTransaction(prepared);
+    if (result.status === "ERROR") {
+      throw new Error(`castVoteWithReason failed: ${JSON.stringify(result)}`);
+    }
+    await this.pollForConfirmation(result.hash);
+  }
+
+  /**
+   * Same as {@link castVoteWithReason} but signs with a wallet callback.
+   */
+  async castVoteWithReasonAndSign(
+    signerPublicKey: string,
+    proposalId: bigint,
+    support: VoteSupport,
+    reason: string,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<void> {
+    const account = await this.server.getAccount(signerPublicKey);
+
+    const supportScVal = xdr.ScVal.scvVec([
+      xdr.ScVal.scvSymbol(VoteSupport[support]),
+    ]);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "cast_vote_with_reason",
+          nativeToScVal(signerPublicKey, { type: "address" }),
+          nativeToScVal(proposalId, { type: "u64" }),
+          supportScVal,
+          nativeToScVal(reason, { type: "string" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    const signedXdr = await signUnsignedXdr(prepared.toXDR());
+    const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const result = await this.server.sendTransaction(signed);
+    if (result.status === "ERROR") {
+      throw new Error(`castVoteWithReasonAndSign failed: ${JSON.stringify(result)}`);
+    }
+    await this.pollForConfirmation(result.hash);
+  }
+
+  /**
    * Cancel a proposal (can only be done by the proposer while it's Pending).
    */
   async cancel(
@@ -1054,6 +1138,10 @@ export class GovernorClient {
       .result?.retval;
     if (!raw) throw new Error("No return value");
 
+    const quorum = BigInt(scValToNative(raw));
+    return quorum;
+  }
+
   /**
    * Check if a proposal has reached quorum.
    * Returns true if the sum of for and abstain votes meets or exceeds the required quorum.
@@ -1119,6 +1207,147 @@ export class GovernorClient {
       } catch {
         return false;
       }
+    });
+  }
+
+  /**
+   * Check whether an address can currently submit a proposal.
+   *
+   * This combines all proposal eligibility checks into a single RPC call:
+   * paused state, proposal threshold, cooldown period, and rate limit per period.
+   *
+   * @param proposer The address to check
+   * @returns A structured result indicating if the address is allowed to propose
+   */
+  async canPropose(proposer: string): Promise<CanProposeResult> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.config.governorAddress),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "can_propose",
+              nativeToScVal(proposer, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new Error(`Simulation error: ${result.error}`);
+      }
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) throw new Error("No return value");
+
+      const native = scValToNative(raw) as Record<string, unknown>;
+      return {
+        allowed: Boolean(native.allowed),
+        reason: String(native.reason ?? "unknown"),
+        cooldownEndsAt: native.cooldown_ends_at 
+          ? Number(native.cooldown_ends_at) 
+          : undefined,
+        proposalsThisPeriod: Number(native.proposals_this_period ?? 0),
+        maxPerPeriod: Number(native.max_per_period ?? 0),
+        votingPower: toBigInt(native.voting_power ?? 0),
+        threshold: toBigInt(native.threshold ?? 0),
+      };
+    });
+  }
+
+  /**
+   * Get voting history for a specific address across all proposals.
+   *
+   * Scans VoteCast/vote events filtering by voter address. If an indexer is configured
+   * via the indexerUrl in GovernorConfig, it will use the indexer API for faster results.
+   *
+   * @param voter The address to get voting history for
+   * @param opts Optional parameters for pagination
+   * @returns Array of voting history entries sorted by ledger descending (most recent first)
+   */
+  async getVotingHistory(
+    voter: string,
+    opts?: { fromLedger?: number; limit?: number }
+  ): Promise<VotingHistoryEntry[]> {
+    const limit = opts?.limit ?? 50;
+    
+    // Try indexer first if configured
+    if (this.config.indexerUrl) {
+      try {
+        const response = await fetch(`${this.config.indexerUrl}/profile/${voter}`);
+        if (response.ok) {
+          const data = await response.json() as { votes?: any[] };
+          const votes = data.votes || [];
+          return votes
+            .map((v: any) => ({
+              proposalId: toBigInt(v.proposal_id),
+              support: v.support,
+              weight: toBigInt(v.weight),
+              reason: v.reason,
+              ledger: Number(v.ledger),
+            }))
+            .sort((a: VotingHistoryEntry, b: VotingHistoryEntry) => b.ledger - a.ledger)
+            .slice(0, limit);
+        }
+      } catch (e) {
+        console.warn("Indexer query failed, falling back to event scan:", e);
+      }
+    }
+
+    // Fallback to event scanning
+    return this.retry(async () => {
+      const events = await this.server.getEvents({
+        filters: [
+          {
+            type: "contract",
+            contractIds: [this.config.governorAddress],
+            topics: [["VoteCast", "vote"], [voter]],
+          },
+        ],
+        pagination: {
+          limit: limit * 2, // Fetch extra to filter for relevant events
+        },
+      });
+
+      const history: VotingHistoryEntry[] = [];
+      for (const event of events.events) {
+        if (!event.topic || event.topic.length < 2) continue;
+        
+        // Check if voter matches (second topic)
+        const voterTopic = scValToNative(event.topic[1]);
+        if (String(voterTopic) !== voter) continue;
+
+        // Parse event data
+        const data = event.value?.body?.val;
+        if (!data) continue;
+
+        const native = scValToNative(data) as Record<string, unknown>;
+        const proposalId = toBigInt(native.proposal_id ?? native.proposalId);
+        const supportRaw = native.support ?? native.support;
+        const support = typeof supportRaw === "number" 
+          ? supportRaw 
+          : Number(supportRaw);
+        const weight = toBigInt(native.weight ?? 0);
+        const reason = native.reason as string | undefined;
+        const ledger = Number(event.ledger);
+
+        history.push({
+          proposalId,
+          support: support as VoteSupport,
+          weight,
+          reason,
+          ledger,
+        });
+      }
+
+      // Sort by ledger descending and apply limit
+      return history
+        .sort((a, b) => b.ledger - a.ledger)
+        .slice(0, limit);
     });
   }
 
@@ -1522,53 +1751,6 @@ export class GovernorClient {
   }
 
   /**
-   * Check if an address is allowed to create a new proposal.
-   *
-   * Verifies the proposal cooldown and period-based rate limits.
-   */
-  async canPropose(address: string): Promise<{
-    canPropose: boolean;
-    reason?: string;
-    availableAtLedger?: number;
-  }> {
-    return this.retry(async () => {
-      const settings = await this.getSettings();
-      const lastProposalLedger = await this.getLastProposalLedger(address);
-      const proposalsInPeriod = await this.getProposalsInPeriod(address);
-      const currentLedger = await this.getLatestLedger();
-
-      // Check cooldown
-      const cooldown = settings.proposalCooldown ?? 0;
-      if (lastProposalLedger > 0 && cooldown > 0) {
-        const nextAvailable = lastProposalLedger + cooldown;
-        if (currentLedger < nextAvailable) {
-          return {
-            canPropose: false,
-            reason: `Proposal cooldown active. Please wait ${nextAvailable - currentLedger} more ledgers.`,
-            availableAtLedger: nextAvailable,
-          };
-        }
-      }
-
-      // Check period limit
-      const maxProposals = settings.maxProposalsPerPeriod ?? 0;
-      const periodDuration = settings.proposalPeriodDuration ?? 0;
-      if (maxProposals > 0 && periodDuration > 0 && proposalsInPeriod >= maxProposals) {
-        const nextPeriodStart =
-          (Math.floor(currentLedger / periodDuration) + 1) *
-          periodDuration;
-        return {
-          canPropose: false,
-          reason: `Proposal limit reached for current period (${maxProposals} max).`,
-          availableAtLedger: nextPeriodStart,
-        };
-      }
-
-      return { canPropose: true };
-    });
-  }
-
-  /**
    * Get the voting receipt for a specific voter on a proposal.
    *
    * Returns whether the voter has voted, their support choice, vote weight, and reason.
@@ -1939,6 +2121,79 @@ export class GovernorClient {
       executableAtLedger,
       executionDeadlineLedger,
     };
+  }
+
+  /**
+   * Fetch multiple proposals in a single round-trip using parallel Promise.all.
+   *
+   * Reduces N sequential RPC calls to a single parallel batch. An optional
+   * concurrency limit (default 10) prevents overwhelming the RPC endpoint.
+   *
+   * @param proposalIds Array of proposal IDs to fetch
+   * @param concurrency Max simultaneous RPC calls (default 10)
+   * @returns Array of results — resolved Proposal or Error for each ID
+   */
+  async getProposalsBatch(
+    proposalIds: bigint[],
+    concurrency = 10,
+  ): Promise<Array<{ id: bigint; proposal?: Proposal; error?: Error }>> {
+    const results: Array<{ id: bigint; proposal?: Proposal; error?: Error }> = [];
+
+    for (let i = 0; i < proposalIds.length; i += concurrency) {
+      const chunk = proposalIds.slice(i, i + concurrency);
+      const settled = await Promise.allSettled(
+        chunk.map((id) => this.getProposal(id)),
+      );
+      for (let j = 0; j < chunk.length; j++) {
+        const outcome = settled[j];
+        if (outcome.status === "fulfilled") {
+          results.push({ id: chunk[j], proposal: outcome.value });
+        } else {
+          results.push({ id: chunk[j], error: outcome.reason as Error });
+        }
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Fetch state + votes for multiple proposals in parallel.
+   *
+   * Useful for the proposals list page — replaces sequential fetching with a
+   * single batched round-trip per chunk of proposals.
+   *
+   * @param proposalIds Array of proposal IDs to query
+   * @param concurrency Max simultaneous RPC calls (default 10)
+   */
+  async getProposalsSummaryBatch(
+    proposalIds: bigint[],
+    concurrency = 10,
+  ): Promise<Array<{ id: bigint; state?: ProposalState; votes?: ProposalVotes; error?: Error }>> {
+    const results: Array<{ id: bigint; state?: ProposalState; votes?: ProposalVotes; error?: Error }> = [];
+
+    for (let i = 0; i < proposalIds.length; i += concurrency) {
+      const chunk = proposalIds.slice(i, i + concurrency);
+      const settled = await Promise.allSettled(
+        chunk.map((id) =>
+          Promise.all([
+            this.getProposalState(id),
+            this.getProposalVotes(id),
+          ]),
+        ),
+      );
+      for (let j = 0; j < chunk.length; j++) {
+        const outcome = settled[j];
+        if (outcome.status === "fulfilled") {
+          const [state, votes] = outcome.value;
+          results.push({ id: chunk[j], state, votes });
+        } else {
+          results.push({ id: chunk[j], error: outcome.reason as Error });
+        }
+      }
+    }
+
+    return results;
   }
 }
 

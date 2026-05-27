@@ -309,12 +309,16 @@ export function NavBar() {
 
           {/* Mobile hamburger */}
           <button
-            onClick={() => setIsMenuOpen(true)}
-            aria-label="Open menu"
+            onClick={() => setIsMenuOpen(!isMenuOpen)}
+            aria-label={isMenuOpen ? "Close menu" : "Open menu"}
             aria-expanded={isMenuOpen}
             className="md:hidden p-2 rounded-xl text-gray-600 hover:bg-gray-100 transition-colors"
           >
-            <Menu className="w-6 h-6" aria-hidden />
+            {isMenuOpen ? (
+              <X className="w-6 h-6" aria-hidden />
+            ) : (
+              <Menu className="w-6 h-6" aria-hidden />
+            )}
           </button>
         </div>
       </div>
@@ -334,13 +338,13 @@ export function NavBar() {
             aria-hidden
           />
 
-          <div className="absolute right-0 top-0 bottom-0 w-80 bg-white shadow-2xl flex flex-col">
-            <div className="p-4 flex items-center justify-between border-b border-gray-100">
-              <span className="text-lg font-bold text-gray-900">Menu</span>
+          <div className="absolute right-0 top-0 bottom-0 w-80 bg-white dark:bg-gray-900 shadow-2xl flex flex-col">
+            <div className="p-4 flex items-center justify-between border-b border-gray-100 dark:border-gray-800">
+              <span className="text-lg font-bold text-gray-900 dark:text-white">Menu</span>
               <button
                 onClick={() => setIsMenuOpen(false)}
                 aria-label="Close menu"
-                className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
+                className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
               >
                 <X className="w-6 h-6" aria-hidden />
               </button>
@@ -363,12 +367,12 @@ export function NavBar() {
                     aria-current={isActive ? "page" : undefined}
                     className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl text-base font-medium transition-all ${
                       isActive
-                        ? "text-indigo-600 bg-indigo-50"
-                        : "text-gray-600 hover:bg-gray-50"
+                        ? "text-indigo-600 bg-indigo-50 dark:bg-indigo-900/20"
+                        : "text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                     }`}
                   >
                     <LinkIcon
-                      className={`w-5 h-5 flex-shrink-0 ${isActive ? "text-indigo-600" : "text-gray-400"}`}
+                      className={`w-5 h-5 flex-shrink-0 ${isActive ? "text-indigo-600" : "text-gray-400 dark:text-gray-500"}`}
                       aria-hidden
                     />
                     <span className="flex-1">{link.name}</span>
@@ -387,12 +391,12 @@ export function NavBar() {
                   aria-current={pathname === "/profile" ? "page" : undefined}
                   className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl text-base font-medium transition-all ${
                     pathname === "/profile"
-                      ? "text-indigo-600 bg-indigo-50"
-                      : "text-gray-600 hover:bg-gray-50"
+                      ? "text-indigo-600 bg-indigo-50 dark:bg-indigo-900/20"
+                      : "text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-800"
                   }`}
                 >
                   <User
-                    className={`w-5 h-5 flex-shrink-0 ${pathname === "/profile" ? "text-indigo-600" : "text-gray-400"}`}
+                    className={`w-5 h-5 flex-shrink-0 ${pathname === "/profile" ? "text-indigo-600" : "text-gray-400 dark:text-gray-500"}`}
                     aria-hidden
                   />
                   My Profile
@@ -400,106 +404,45 @@ export function NavBar() {
               )}
             </nav>
 
-            {isMenuOpen && (
-              <div
-                className="fixed inset-0 z-[100] md:hidden"
-                role="dialog"
-                aria-modal
-                aria-label="Navigation menu"
-              >
-                {/* Backdrop */}
-                <div
-                  className="absolute inset-0 bg-gray-900/40 backdrop-blur-sm"
-                  onClick={() => setIsMenuOpen(false)}
-                  aria-hidden
-                />
-
-                <div className="absolute inset-0 bg-white shadow-2xl flex flex-col">
-                  <div className="p-4 flex items-center justify-between border-b border-gray-100">
-                    <span className="text-lg font-bold text-gray-900">
-                      Menu
+            {/* Wallet Section - Mobile */}
+            <div className="p-4 border-t border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-900 mt-auto">
+              {isConnected ? (
+                <div className="flex items-center justify-between px-2 py-3">
+                  <div className="flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-purple-500 flex-shrink-0" />
+                    <span className="text-base font-medium text-gray-900 dark:text-white truncate max-w-[140px]">
+                      {address || "Connected"}
                     </span>
                     <button
-                      onClick={() => setIsMenuOpen(false)}
-                      className="p-2 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-50 transition-colors"
+                      onClick={copyAddress}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                      aria-label="Copy Address"
                     >
-                      <X className="w-6 h-6" aria-hidden />
+                      <Copy className="w-4 h-4" aria-hidden />
                     </button>
                   </div>
 
-                  {/* Nav links */}
-                  <nav
-                    className="flex-1 overflow-y-auto p-4 space-y-1"
-                    aria-label="Mobile navigation"
+                  <button
+                    onClick={handleDisconnect}
+                    className="text-red-600 hover:text-red-700 font-medium text-base transition-colors flex items-center gap-1.5"
                   >
-                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-widest px-2 mb-4">
-                      Navigation
-                    </p>
-
-                    {NAV_LINKS.map((link) => {
-                      const isActive = pathname === link.href;
-                      const LinkIcon = link.icon;
-                      return (
-                        <Link
-                          key={link.name}
-                          href={link.href}
-                          aria-current={isActive ? "page" : undefined}
-                          className={`flex items-center gap-4 px-4 py-3.5 rounded-2xl text-base font-medium transition-all ${
-                            isActive
-                              ? "text-indigo-600 bg-indigo-50"
-                              : "text-gray-600 hover:bg-gray-50"
-                          }`}
-                        >
-                          <LinkIcon
-                            className={`w-5 h-5 flex-shrink-0 ${isActive ? "text-indigo-600" : "text-gray-400"}`}
-                            aria-hidden
-                          />
-                          {link.name}
-                        </Link>
-                      );
-                    })}
-                  </nav>
-
-                  {/* Wallet Section - Simple "alice — Disconnect" style */}
-                  <div className="p-4 border-t border-gray-100 bg-white mt-auto">
-                    {isConnected ? (
-                      <div className="flex items-center justify-between px-2 py-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-base font-medium text-gray-900">
-                            {address || "Connected"}
-                          </span>
-                          <button
-                            onClick={copyAddress}
-                            className="p-1.5 rounded-lg text-gray-400 hover:text-indigo-600 hover:bg-indigo-50 transition-colors"
-                            aria-label="Copy Address"
-                          >
-                            <Copy className="w-4 h-4" aria-hidden />
-                          </button>
-                        </div>
-
-                        <button
-                          onClick={handleDisconnect}
-                          className="text-red-600 hover:text-red-700 font-medium text-base transition-colors flex items-center gap-1.5"
-                        >
-                          Disconnect
-                          <LogOut className="w-4 h-4" aria-hidden />
-                        </button>
-                      </div>
-                    ) : (
-                      <button
-                        onClick={() => {
-                          connect();
-                          setIsMenuOpen(false);
-                        }}
-                        className="w-full py-4 rounded-2xl bg-indigo-600 text-white font-semibold shadow-md hover:bg-indigo-700 transition-all"
-                      >
-                        Connect Wallet
-                      </button>
-                    )}
-                  </div>
+                    Disconnect
+                    <LogOut className="w-4 h-4" aria-hidden />
+                  </button>
                 </div>
-              </div>
-            )}
+              ) : (
+                <button
+                  onClick={() => {
+                    connect();
+                    setIsMenuOpen(false);
+                  }}
+                  disabled={isConnecting}
+                  className="w-full py-4 rounded-2xl bg-indigo-600 text-white font-semibold shadow-md hover:bg-indigo-700 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isConnecting ? "Connecting…" : "Connect Wallet"}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

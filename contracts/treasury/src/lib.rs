@@ -66,6 +66,15 @@ pub struct SpendingCap {
     pub period_ledgers: u32,
 }
 
+/// A slashing event record.
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SlashingEvent {
+    pub reason: Symbol,
+    pub slashed_at: u64,
+    pub slashed_by: Address,
+}
+
 #[contracttype]
 pub enum DataKey {
     TxCount,
@@ -81,6 +90,8 @@ pub enum DataKey {
     DayWindowStart,
     SpendingCap(Address),
     SpentThisPeriod(Address, u32),
+    IsSlashed(Address),
+    SlashingHistory(Address),
 }
 
 #[contractclient(name = "TreasuryClient")]
@@ -197,6 +208,16 @@ impl TreasuryContract {
         data: Bytes,
     ) -> u64 {
         proposer.require_auth();
+        Self::submit_internal(env, proposer, target, fn_name, data)
+    }
+
+    fn submit_internal(
+        env: Env,
+        proposer: Address,
+        target: Address,
+        fn_name: Symbol,
+        data: Bytes,
+    ) -> u64 {
         Self::require_not_executing(&env);
         Self::require_owner(&env, &proposer);
 
@@ -299,7 +320,7 @@ impl TreasuryContract {
             .set(&DataKey::DailySpent, &new_daily_total);
 
         // Proceed with standard proposal submission logic.
-        Self::submit(env, proposer, target, symbol_short!("transfer"), data)
+        Self::submit_internal(env, proposer, target, symbol_short!("transfer"), data)
     }
 
     /// Approve a pending transaction. Executes automatically when threshold reached.
@@ -490,6 +511,118 @@ impl TreasuryContract {
         );
 
         op_hash
+    }
+
+    pub fn get_slashing_history(env: Env, signer: Address) -> Vec<SlashingEvent> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SlashingHistory(signer))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    pub fn is_slashed(env: Env, signer: Address) -> bool {
+        env.storage()
+            .persistent()
+            .get(&DataKey::IsSlashed(signer))
+            .unwrap_or(false)
+    }
+
+    /// Slash (remove) a signer for malicious behavior.
+    /// Only the governor may call this.
+    pub fn slash_signer(env: Env, caller: Address, signer: Address, reason: Symbol) {
+        caller.require_auth();
+
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized");
+        assert!(caller == governor, "not authorized");
+
+        let mut owners: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Owners)
+            .expect("not initialized");
+
+        let mut index: Option<u32> = None;
+        for i in 0..owners.len() {
+            if owners.get(i).unwrap() == signer {
+                index = Some(i);
+                break;
+            }
+        }
+
+        let i = index.expect("not an owner");
+        owners.remove(i);
+
+        env.storage().instance().set(&DataKey::Owners, &owners);
+        env.storage()
+            .persistent()
+            .set(&DataKey::IsSlashed(signer.clone()), &true);
+
+        let mut history = Self::get_slashing_history(env.clone(), signer.clone());
+        history.push_back(SlashingEvent {
+            reason: reason.clone(),
+            slashed_at: env.ledger().timestamp(),
+            slashed_by: caller.clone(),
+        });
+        env.storage()
+            .persistent()
+            .set(&DataKey::SlashingHistory(signer.clone()), &history);
+
+        // Adjust threshold if it exceeds the new owner count.
+        let mut threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::Threshold)
+            .unwrap_or(1);
+        if threshold > owners.len() {
+            threshold = owners.len();
+            if threshold == 0 && !owners.is_empty() {
+                threshold = 1;
+            }
+            env.storage()
+                .instance()
+                .set(&DataKey::Threshold, &threshold);
+        }
+
+        env.events()
+            .publish((symbol_short!("slash"), signer), reason);
+    }
+
+    /// Restore a slashed signer.
+    /// Only the governor may call this.
+    pub fn unslash_signer(env: Env, caller: Address, signer: Address) {
+        caller.require_auth();
+
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized");
+        assert!(caller == governor, "not authorized");
+
+        assert!(Self::is_slashed(env.clone(), signer.clone()), "not slashed");
+
+        let mut owners: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::Owners)
+            .expect("not initialized");
+
+        // Ensure not already an owner (shouldn't be if slashed, but safety first).
+        for i in 0..owners.len() {
+            assert!(owners.get(i).unwrap() != signer, "already an owner");
+        }
+
+        owners.push_back(signer.clone());
+        env.storage().instance().set(&DataKey::Owners, &owners);
+        env.storage()
+            .persistent()
+            .set(&DataKey::IsSlashed(signer.clone()), &false);
+
+        env.events().publish((symbol_short!("unslash"), signer), ());
     }
 
     pub fn get_tx(env: Env, tx_id: u64) -> TxProposal {
@@ -874,8 +1007,9 @@ mod tests {
             max_single_transfer: max_amount,
             max_daily_transfer: max_amount * 2,
         };
-        let settings_key = &DataKey::Settings;
-        env.storage().instance().set(settings_key, &settings);
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+        });
 
         // Submit a proposal at the limit.
         let data = Bytes::new(&env);
@@ -898,11 +1032,23 @@ mod tests {
         let max_amount = 1000i128;
         let proposed_amount = 500i128;
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let settings = TreasurySettings {
             max_single_transfer: max_amount,
             max_daily_transfer: max_amount * 2,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+        });
 
         let data = Bytes::new(&env);
         let proposal_id = client.submit_with_limit(&owner, &target, &data, &proposed_amount);
@@ -925,14 +1071,26 @@ mod tests {
         let max_daily = 3000i128;
         let proposal_amount = 800i128;
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let settings = TreasurySettings {
             max_single_transfer: max_single,
             max_daily_transfer: max_daily,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
-        env.storage()
-            .instance()
-            .set(&DataKey::DayWindowStart, &env.ledger().timestamp());
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+            env.storage()
+                .instance()
+                .set(&DataKey::DayWindowStart, &env.ledger().timestamp());
+        });
 
         let data = Bytes::new(&env);
 
@@ -949,11 +1107,12 @@ mod tests {
         assert_eq!(id3, 3);
 
         // Verify accumulator is at 2400.
-        let daily_spent: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::DailySpent)
-            .unwrap_or(0);
+        let daily_spent: i128 = env.as_contract(&treasury_id, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::DailySpent)
+                .unwrap_or(0)
+        });
         assert_eq!(daily_spent, 2400i128);
     }
 
@@ -972,20 +1131,34 @@ mod tests {
 
         let max_daily = 1000i128;
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let settings = TreasurySettings {
             max_single_transfer: i128::MAX,
             max_daily_transfer: max_daily,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+
+            let initial_time: u64 = 1000;
+            env.ledger().with_mut(|l| l.timestamp = initial_time);
+            env.storage()
+                .instance()
+                .set(&DataKey::DayWindowStart, &initial_time);
+            env.storage()
+                .instance()
+                .set(&DataKey::DailySpent, &max_daily);
+        });
 
         let initial_time: u64 = 1000;
-        env.ledger().with_mut(|l| l.timestamp = initial_time);
-        env.storage()
-            .instance()
-            .set(&DataKey::DayWindowStart, &initial_time);
-        env.storage()
-            .instance()
-            .set(&DataKey::DailySpent, &max_daily);
 
         // Submit at the edge of the limit — should be rejected.
         // (Note: this test uses direct error handling; a panic means validation blocked it)
@@ -1006,7 +1179,7 @@ mod tests {
 
     /// Negative: transfer strictly greater than max_single_transfer is rejected.
     #[test]
-    #[should_panic(expected = "single transfer")]
+    #[should_panic(expected = "Error(Contract, #1)")]
     fn test_submit_with_limit_single_transfer_exceeded() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1018,13 +1191,25 @@ mod tests {
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let max_amount = 1000i128;
 
         let settings = TreasurySettings {
             max_single_transfer: max_amount,
             max_daily_transfer: max_amount * 2,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+        });
 
         let proposed_amount = max_amount + 1;
         let tx_count_before = client.tx_count();
@@ -1039,7 +1224,7 @@ mod tests {
 
     /// Negative: accumulating to exceed daily limit is rejected on the offending proposal.
     #[test]
-    #[should_panic(expected = "daily limit")]
+    #[should_panic(expected = "Error(Contract, #2)")]
     fn test_submit_with_limit_daily_limit_exceeded() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1053,17 +1238,29 @@ mod tests {
 
         let max_daily = 1000i128;
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let settings = TreasurySettings {
             max_single_transfer: i128::MAX,
             max_daily_transfer: max_daily,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
-        env.storage()
-            .instance()
-            .set(&DataKey::DailySpent, &(max_daily - 100i128));
-        env.storage()
-            .instance()
-            .set(&DataKey::DayWindowStart, &env.ledger().timestamp());
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+            env.storage()
+                .instance()
+                .set(&DataKey::DailySpent, &(max_daily - 100i128));
+            env.storage()
+                .instance()
+                .set(&DataKey::DayWindowStart, &env.ledger().timestamp());
+        });
 
         let tx_count_before = client.tx_count();
 
@@ -1088,22 +1285,35 @@ mod tests {
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let settings = TreasurySettings {
             max_single_transfer: 1000i128,
             max_daily_transfer: 1000i128,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
-        env.storage().instance().set(&DataKey::DailySpent, &0i128);
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+            env.storage().instance().set(&DataKey::DailySpent, &0i128);
+        });
 
         let id = client.submit_with_limit(&owner, &target, &data, &0i128);
         assert_eq!(id, 1);
 
         // Verify accumulator is still 0.
-        let daily_spent: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::DailySpent)
-            .unwrap_or(0);
+        let daily_spent: i128 = env.as_contract(&treasury_id, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::DailySpent)
+                .unwrap_or(0)
+        });
         assert_eq!(daily_spent, 0i128);
     }
 
@@ -1120,25 +1330,38 @@ mod tests {
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let limit = 1000i128;
 
         let settings = TreasurySettings {
             max_single_transfer: limit,
             max_daily_transfer: limit,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
-        env.storage().instance().set(&DataKey::DailySpent, &0i128);
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+            env.storage().instance().set(&DataKey::DailySpent, &0i128);
+        });
 
         // First transfer at the limit succeeds.
         let id1 = client.submit_with_limit(&owner, &target, &data, &limit);
         assert_eq!(id1, 1);
 
         // Accumulator is now at `limit`.
-        let daily_spent: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::DailySpent)
-            .unwrap_or(0);
+        let daily_spent: i128 = env.as_contract(&treasury_id, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::DailySpent)
+                .unwrap_or(0)
+        });
         assert_eq!(daily_spent, limit);
 
         // Second transfer at the limit must fail (daily total would be 2x the limit).
@@ -1159,24 +1382,120 @@ mod tests {
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &Address::generate(&env),
+        );
+
         let settings = TreasurySettings {
             max_single_transfer: i128::MAX,
             max_daily_transfer: i128::MAX,
         };
-        env.storage().instance().set(&DataKey::Settings, &settings);
-        env.storage()
-            .instance()
-            .set(&DataKey::DailySpent, &(i128::MAX - 100i128));
+        env.as_contract(&treasury_id, || {
+            env.storage().instance().set(&DataKey::Settings, &settings);
+            env.storage()
+                .instance()
+                .set(&DataKey::DailySpent, &(i128::MAX - 100i128));
+        });
 
         // Submit a transfer of 50 — accumulator is i128::MAX - 50, which is valid.
         let id = client.submit_with_limit(&owner, &target, &data, &50i128);
         assert_eq!(id, 1);
 
-        let daily_spent: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::DailySpent)
-            .unwrap_or(0);
+        let daily_spent: i128 = env.as_contract(&treasury_id, || {
+            env.storage()
+                .instance()
+                .get(&DataKey::DailySpent)
+                .unwrap_or(0)
+        });
         assert_eq!(daily_spent, i128::MAX - 50i128);
+    }
+
+    #[test]
+    fn test_slashing_flow() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (treasury_id, _token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+
+        let owner1 = Address::generate(&env);
+        let owner2 = Address::generate(&env);
+        let mut owners = Vec::new(&env);
+        owners.push_back(owner1.clone());
+        owners.push_back(owner2.clone());
+
+        // Re-initialize with 2 owners and threshold 2.
+        client.initialize(&owners, &2u32, &governor);
+
+        assert_eq!(client.threshold(), 2);
+        assert!(client.is_treasury_owner(&owner1));
+        assert!(client.is_treasury_owner(&owner2));
+
+        // Slash owner1.
+        let reason = Symbol::new(&env, "fraud");
+        client.slash_signer(&governor, &owner1, &reason);
+
+        // Verify owner1 is removed and slashed.
+        assert!(!client.is_treasury_owner(&owner1));
+        assert!(client.is_slashed(&owner1));
+        assert_eq!(client.threshold(), 1); // Threshold should have dropped to 1.
+
+        // Check history.
+        let history = client.get_slashing_history(&owner1);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history.get(0).unwrap().reason, reason);
+        assert_eq!(history.get(0).unwrap().slashed_by, governor);
+
+        // Unslash owner1.
+        client.unslash_signer(&governor, &owner1);
+
+        // Verify owner1 is restored.
+        assert!(client.is_treasury_owner(&owner1));
+        assert!(!client.is_slashed(&owner1));
+        // Threshold remains 1 unless manually increased, which is expected behavior for now
+        // as we only automatically decrease it.
+        assert_eq!(client.threshold(), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "not authorized")]
+    fn test_slash_signer_unauthorized() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (treasury_id, _token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+
+        let owner = Address::generate(&env);
+        let mut owners = Vec::new(&env);
+        owners.push_back(owner.clone());
+        client.initialize(&owners, &1u32, &governor);
+
+        let unauthorized = Address::generate(&env);
+        client.slash_signer(&unauthorized, &owner, &Symbol::new(&env, "bad"));
+    }
+
+    #[test]
+    #[should_panic(expected = "not an owner")]
+    fn test_slash_non_owner() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (treasury_id, _token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+
+        let owner = Address::generate(&env);
+        let mut owners = Vec::new(&env);
+        owners.push_back(owner.clone());
+        client.initialize(&owners, &1u32, &governor);
+
+        let non_owner = Address::generate(&env);
+        client.slash_signer(&governor, &non_owner, &Symbol::new(&env, "bad"));
     }
 }

@@ -7,7 +7,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import { useWallet } from "../../lib/wallet-context";
-import { TreasuryClient, type TreasurySpendingCap, type TreasuryTx } from "../../lib/treasury-client";
+import {
+  TreasuryClient,
+  type TreasurySpendingCap,
+  type TreasuryTx,
+} from "../../lib/treasury-client";
+import { TreasuryBalanceSkeleton } from "../../components/ui/TreasuryBalanceSkeleton";
 import {
   type CalldataArgKind,
   type CalldataArgRow,
@@ -66,11 +71,13 @@ export default function TreasuryPage() {
   const [txs, setTxs] = useState<TreasuryTx[]>([]);
   const [threshold, setThreshold] = useState<number>(1);
   const [ownerAddresses, setOwnerAddresses] = useState<string[]>([]);
-  const [alreadyApproved, setAlreadyApproved] = useState<Record<string, boolean>>(
-    {},
-  );
+  const [alreadyApproved, setAlreadyApproved] = useState<
+    Record<string, boolean>
+  >({});
   const [ownerOnChain, setOwnerOnChain] = useState<boolean | null>(null);
-  const [spendingCap, setSpendingCap] = useState<TreasurySpendingCap | null>(null);
+  const [spendingCap, setSpendingCap] = useState<TreasurySpendingCap | null>(
+    null,
+  );
   const [spentThisPeriod, setSpentThisPeriod] = useState<bigint>(0n);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState<Record<string, boolean>>({});
@@ -85,13 +92,16 @@ export default function TreasuryPage() {
   const [submitDataHex, setSubmitDataHex] = useState("");
   const [argRows, setArgRows] = useState<CalldataArgRow[]>([]);
 
-  const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as StellarNetwork;
+  const network = (process.env.NEXT_PUBLIC_NETWORK ||
+    "testnet") as StellarNetwork;
   const horizonBaseUrl = HORIZON_URLS[network];
 
-  const treasuryContractAddress = process.env.NEXT_PUBLIC_TREASURY_ADDRESS || "";
+  const treasuryContractAddress =
+    process.env.NEXT_PUBLIC_TREASURY_ADDRESS || "";
   const treasuryAccountId = process.env.NEXT_PUBLIC_TREASURY_ACCOUNT || "";
   const usdcIssuer = process.env.NEXT_PUBLIC_USDC_ISSUER || "";
-  const treasuryTokenAddress = process.env.NEXT_PUBLIC_TREASURY_TOKEN_ADDRESS || usdcIssuer;
+  const treasuryTokenAddress =
+    process.env.NEXT_PUBLIC_TREASURY_TOKEN_ADDRESS || usdcIssuer;
   const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL || undefined;
 
   const treasuryClient = useMemo(() => {
@@ -107,9 +117,9 @@ export default function TreasuryPage() {
 
   const canWrite = Boolean(
     isConnected &&
-      publicKey &&
-      (ownerOnChain === true ||
-        (ownerOnChain === null && isEnvFallbackOwner(publicKey))),
+    publicKey &&
+    (ownerOnChain === true ||
+      (ownerOnChain === null && isEnvFallbackOwner(publicKey))),
   );
 
   async function fetchBalances() {
@@ -118,7 +128,8 @@ export default function TreasuryPage() {
     const res = await fetch(`${horizonBaseUrl}/accounts/${treasuryAccountId}`, {
       method: "GET",
     });
-    if (!res.ok) throw new Error(`Failed to fetch treasury balances: ${res.status}`);
+    if (!res.ok)
+      throw new Error(`Failed to fetch treasury balances: ${res.status}`);
 
     const json = (await res.json()) as { balances?: HorizonBalance[] };
     const balances = json.balances ?? [];
@@ -129,7 +140,10 @@ export default function TreasuryPage() {
     setXlmBalance(native?.balance ?? "0");
 
     const usdc = balances.find((b) => {
-      if (b.asset_type !== "credit_alphanum4" && b.asset_type !== "credit_alphanum12") {
+      if (
+        b.asset_type !== "credit_alphanum4" &&
+        b.asset_type !== "credit_alphanum12"
+      ) {
         return false;
       }
       if (b.asset_code !== "USDC") return false;
@@ -192,7 +206,9 @@ export default function TreasuryPage() {
       if (publicKey) {
         if (owners && owners.length > 0) {
           setOwnerOnChain(
-            owners.some((owner) => owner.toUpperCase() === publicKey.toUpperCase()),
+            owners.some(
+              (owner) => owner.toUpperCase() === publicKey.toUpperCase(),
+            ),
           );
         } else {
           const own = await treasuryClient.isOwner(viewer, publicKey);
@@ -203,10 +219,18 @@ export default function TreasuryPage() {
       }
 
       if (treasuryTokenAddress) {
-        const cap = await treasuryClient.getSpendingCap(viewer, treasuryTokenAddress);
+        const cap = await treasuryClient.getSpendingCap(
+          viewer,
+          treasuryTokenAddress,
+        );
         setSpendingCap(cap);
         if (cap) {
-          setSpentThisPeriod(await treasuryClient.getSpentThisPeriod(viewer, treasuryTokenAddress));
+          setSpentThisPeriod(
+            await treasuryClient.getSpentThisPeriod(
+              viewer,
+              treasuryTokenAddress,
+            ),
+          );
         } else {
           setSpentThisPeriod(0n);
         }
@@ -228,7 +252,8 @@ export default function TreasuryPage() {
     try {
       await Promise.all([fetchBalances(), fetchPendingTxs(readViewer)]);
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : "Failed to load treasury data";
+      const msg =
+        e instanceof Error ? e.message : "Failed to load treasury data";
       setError(msg);
     } finally {
       setLoading(false);
@@ -256,9 +281,12 @@ export default function TreasuryPage() {
     try {
       await treasuryClient.approve(publicKey, Number(txId), signTransaction);
       await fetchPendingTxs(readViewer);
-      const executedNow = before !== undefined && before.approvals + 1 >= threshold;
+      const executedNow =
+        before !== undefined && before.approvals + 1 >= threshold;
       if (executedNow) {
-        toast.success("Transaction executed — multi-sig threshold was reached.");
+        toast.success(
+          "Transaction executed — multi-sig threshold was reached.",
+        );
       } else {
         toast.success("Approval recorded.");
       }
@@ -334,82 +362,100 @@ export default function TreasuryPage() {
 
       {!treasuryContractAddress && (
         <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
-          Missing <span className="font-mono">NEXT_PUBLIC_TREASURY_ADDRESS</span> in{" "}
+          Missing{" "}
+          <span className="font-mono">NEXT_PUBLIC_TREASURY_ADDRESS</span> in{" "}
           <span className="font-mono">app/.env.local</span>.
         </div>
       )}
 
       {!treasuryAccountId && (
         <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
-          Missing <span className="font-mono">NEXT_PUBLIC_TREASURY_ACCOUNT</span> (treasury Stellar
-          account for Horizon balance queries).
+          Missing{" "}
+          <span className="font-mono">NEXT_PUBLIC_TREASURY_ACCOUNT</span>{" "}
+          (treasury Stellar account for Horizon balance queries).
         </div>
       )}
 
       {!isConnected && (
         <div className="mb-6 bg-gray-100 border border-gray-200 rounded-xl p-4 text-sm text-gray-700">
-          Connect an owner wallet to submit or approve. Balances and pending transactions load using
-          the treasury account when configured.
+          Connect an owner wallet to submit or approve. Balances and pending
+          transactions load using the treasury account when configured.
         </div>
       )}
 
       {isConnected && publicKey && !canWrite && ownerOnChain === false && (
         <div className="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm text-gray-600">
-          This wallet is not a treasury owner — you can view balances and pending transactions only.
+          This wallet is not a treasury owner — you can view balances and
+          pending transactions only.
         </div>
       )}
 
       {/* Balances */}
-      <div className="grid grid-cols-2 gap-4 mb-8">
-        <div className="bg-white border border-gray-200 rounded-xl p-6">
-          <p className="text-sm text-gray-500">USDC Balance</p>
-          <p className="text-2xl font-bold mt-1">
-            {loading ? "Loading…" : `${usdcBalance} USDC`}
-          </p>
+      {loading ? (
+        <TreasuryBalanceSkeleton />
+      ) : (
+        <div className="grid grid-cols-2 gap-4 mb-8">
+          <div className="bg-white border border-gray-200 rounded-xl p-6">
+            <p className="text-sm text-gray-500">USDC Balance</p>
+            <p className="text-2xl font-bold mt-1">{`${usdcBalance} USDC`}</p>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-xl p-6">
+            <p className="text-sm text-gray-500">XLM Balance</p>
+            <p className="text-2xl font-bold mt-1">{`${xlmBalance} XLM`}</p>
+          </div>
         </div>
-        <div className="bg-white border border-gray-200 rounded-xl p-6">
-          <p className="text-sm text-gray-500">XLM Balance</p>
-          <p className="text-2xl font-bold mt-1">
-            {loading ? "Loading…" : `${xlmBalance} XLM`}
-          </p>
-        </div>
-      </div>
+      )}
 
       <div className="mb-8 bg-white border border-gray-200 rounded-xl p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">Multisig configuration</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">
+          Multisig configuration
+        </h2>
         <p className="text-sm text-gray-500">
           {threshold}-of-{ownerAddresses.length || "?"} multisig
         </p>
         {ownerAddresses.length > 0 && (
           <p className="text-xs text-gray-500 mt-2">
-            On-chain owners: {ownerAddresses.map((address) => `${address.slice(0, 6)}...${address.slice(-4)}`).join(", ")}
+            On-chain owners:{" "}
+            {ownerAddresses
+              .map((address) => `${address.slice(0, 6)}...${address.slice(-4)}`)
+              .join(", ")}
           </p>
         )}
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">Spending cap</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">
+          Spending cap
+        </h2>
         <p className="text-sm text-gray-500 mb-4">
-          Current per-period treasury cap and utilization for the configured token.
+          Current per-period treasury cap and utilization for the configured
+          token.
         </p>
 
         {treasuryTokenAddress ? (
           spendingCap ? (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <p className="text-xs uppercase tracking-wide text-gray-500">Token</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">
+                  Token
+                </p>
                 <p className="mt-1 font-mono text-sm text-gray-800 break-all">
                   {spendingCap.token}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-gray-500">Cap</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">
+                  Cap
+                </p>
                 <p className="mt-1 text-sm text-gray-800">
-                  {spendingCap.maxAmount.toString()} units / {spendingCap.periodLedgers} ledgers
+                  {spendingCap.maxAmount.toString()} units /{" "}
+                  {spendingCap.periodLedgers} ledgers
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-gray-500">Used</p>
+                <p className="text-xs uppercase tracking-wide text-gray-500">
+                  Used
+                </p>
                 <p className="mt-1 text-sm text-gray-800">
                   {spentThisPeriod.toString()} units
                 </p>
@@ -417,23 +463,31 @@ export default function TreasuryPage() {
             </div>
           ) : (
             <p className="text-sm text-gray-500">
-              No spending cap is configured for <span className="font-mono">{treasuryTokenAddress}</span>.
+              No spending cap is configured for{" "}
+              <span className="font-mono">{treasuryTokenAddress}</span>.
             </p>
           )
         ) : (
           <p className="text-sm text-gray-500">
-            Set <span className="font-mono">NEXT_PUBLIC_TREASURY_TOKEN_ADDRESS</span> or
-            <span className="font-mono"> NEXT_PUBLIC_USDC_ISSUER</span> to show utilization.
+            Set{" "}
+            <span className="font-mono">
+              NEXT_PUBLIC_TREASURY_TOKEN_ADDRESS
+            </span>{" "}
+            or
+            <span className="font-mono"> NEXT_PUBLIC_USDC_ISSUER</span> to show
+            utilization.
           </p>
         )}
       </div>
 
       {/* Submit */}
       <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">Submit transaction</h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-1">
+          Submit transaction
+        </h2>
         <p className="text-sm text-gray-500 mb-4">
-          Owners propose a target contract and calldata. Approvals execute automatically when the
-          threshold is met.
+          Owners propose a target contract and calldata. Approvals execute
+          automatically when the threshold is met.
         </p>
 
         {!canWrite && (
@@ -444,7 +498,9 @@ export default function TreasuryPage() {
 
         <form onSubmit={handleSubmitTx} className="space-y-4">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">Target contract / account</label>
+            <label className="block text-xs text-gray-500 mb-1">
+              Target contract / account
+            </label>
             <input
               type="text"
               value={submitTarget}
@@ -486,7 +542,9 @@ export default function TreasuryPage() {
           {calldataMode === "builder" ? (
             <>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">Function name</label>
+                <label className="block text-xs text-gray-500 mb-1">
+                  Function name
+                </label>
                 <input
                   type="text"
                   value={submitFn}
@@ -521,7 +579,9 @@ export default function TreasuryPage() {
                         onChange={(e) => {
                           const kind = e.target.value as CalldataArgKind;
                           setArgRows((rows) =>
-                            rows.map((x) => (x.id === row.id ? { ...x, kind } : x)),
+                            rows.map((x) =>
+                              x.id === row.id ? { ...x, kind } : x,
+                            ),
                           );
                         }}
                         className="border border-gray-200 rounded-md text-xs py-1.5 px-2"
@@ -539,18 +599,26 @@ export default function TreasuryPage() {
                         onChange={(e) => {
                           const v = e.target.value;
                           setArgRows((rows) =>
-                            rows.map((x) => (x.id === row.id ? { ...x, value: v } : x)),
+                            rows.map((x) =>
+                              x.id === row.id ? { ...x, value: v } : x,
+                            ),
                           );
                         }}
                         placeholder={
-                          row.kind === "bool" ? "true / false" : `value ${idx + 1}`
+                          row.kind === "bool"
+                            ? "true / false"
+                            : `value ${idx + 1}`
                         }
                         className="flex-1 min-w-[8rem] border border-gray-200 rounded-md text-sm px-2 py-1.5 font-mono"
                       />
                       <button
                         type="button"
                         disabled={!canWrite}
-                        onClick={() => setArgRows((rows) => rows.filter((x) => x.id !== row.id))}
+                        onClick={() =>
+                          setArgRows((rows) =>
+                            rows.filter((x) => x.id !== row.id),
+                          )
+                        }
                         className="text-xs text-red-600 hover:text-red-800 disabled:opacity-50"
                       >
                         Remove
@@ -562,7 +630,9 @@ export default function TreasuryPage() {
             </>
           ) : (
             <div>
-              <label className="block text-xs text-gray-500 mb-1">Calldata (hex)</label>
+              <label className="block text-xs text-gray-500 mb-1">
+                Calldata (hex)
+              </label>
               <textarea
                 value={submitDataHex}
                 onChange={(e) => setSubmitDataHex(e.target.value)}
@@ -579,7 +649,9 @@ export default function TreasuryPage() {
             <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
               Preview
             </span>
-            <p className="mt-1 font-mono text-xs sm:text-sm break-all">{preview}</p>
+            <p className="mt-1 font-mono text-xs sm:text-sm break-all">
+              {preview}
+            </p>
           </div>
 
           <button
@@ -593,7 +665,9 @@ export default function TreasuryPage() {
       </div>
 
       {/* Pending */}
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">Pending transactions</h2>
+      <h2 className="text-lg font-semibold text-gray-900 mb-4">
+        Pending transactions
+      </h2>
       <div className="space-y-3">
         {txs.length === 0 && !loading && (
           <div className="bg-white border border-gray-200 rounded-xl p-5 text-sm text-gray-500">
@@ -605,7 +679,9 @@ export default function TreasuryPage() {
           const approvals = tx.approvals;
           const has = alreadyApproved[tx.id.toString()] ?? false;
           const pct =
-            threshold > 0 ? Math.min(100, Math.round((approvals / threshold) * 100)) : 0;
+            threshold > 0
+              ? Math.min(100, Math.round((approvals / threshold) * 100))
+              : 0;
           const oneMore = threshold - approvals;
           const atThresholdVisual = oneMore <= 1 && oneMore > 0;
 
@@ -613,14 +689,18 @@ export default function TreasuryPage() {
             <div
               key={tx.id.toString()}
               className={`bg-white border rounded-xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 ${
-                atThresholdVisual ? "border-amber-300 ring-1 ring-amber-100" : "border-gray-200"
+                atThresholdVisual
+                  ? "border-amber-300 ring-1 ring-amber-100"
+                  : "border-gray-200"
               }`}
             >
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-gray-900 leading-snug">
                   {labelPendingTx(tx.target, tx.dataHex)}
                 </p>
-                <p className="text-xs text-gray-400 font-mono mt-1">#{tx.id.toString()}</p>
+                <p className="text-xs text-gray-400 font-mono mt-1">
+                  #{tx.id.toString()}
+                </p>
                 <div className="mt-3 flex items-center gap-3 flex-wrap">
                   <span className="text-sm text-gray-700 font-medium tabular-nums">
                     {approvals}/{threshold}
