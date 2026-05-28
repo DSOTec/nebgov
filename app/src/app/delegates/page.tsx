@@ -51,52 +51,55 @@ export default function DelegatesPage() {
   const [currentDelegatee, setCurrentDelegatee] = useState<string | null>(null);
   const { publicKey } = useWallet();
 
-  useEffect(() => {
-    async function fetchDelegates() {
-      try {
-        const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
-        const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
-        const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-        const network = (process.env.NEXT_PUBLIC_NETWORK ||
-          "testnet") as Network;
-        const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+  async function fetchDelegates() {
+    setLoading(true);
+    setError(null);
+    try {
+      const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
+      const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
+      const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
+      const network = (process.env.NEXT_PUBLIC_NETWORK ||
+        "testnet") as Network;
+      const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
-        if (!governorAddress || !timelockAddress || !votesAddress) {
-          throw new Error("Missing required environment variables.");
-        }
-
-        const client = new VotesClient({
-          governorAddress,
-          timelockAddress,
-          votesAddress,
-          network,
-          ...(rpcUrl && { rpcUrl }),
-        });
-
-        const supply = await client.getTotalSupply();
-        setTotalSupply(supply);
-
-        const topDelegates = await client.getTopDelegates(20);
-        setDelegates(topDelegates);
-        const total = topDelegates.reduce((sum, d) => sum + d.votingPower, 0n);
-        setTotalDelegated(total);
-
-        if (publicKey) {
-          setCurrentDelegatee(await client.getDelegatee(publicKey));
-        } else {
-          setCurrentDelegatee(null);
-        }
-      } catch (err) {
-        console.error("Error fetching delegates:", err);
-        setError(
-          err instanceof Error ? err.message : "Failed to load delegates",
-        );
-      } finally {
-        setLoading(false);
+      if (!governorAddress || !timelockAddress || !votesAddress) {
+        throw new Error("Missing required environment variables.");
       }
-    }
 
+      const client = new VotesClient({
+        governorAddress,
+        timelockAddress,
+        votesAddress,
+        network,
+        ...(rpcUrl && { rpcUrl }),
+      });
+
+      const supply = await client.getTotalSupply();
+      setTotalSupply(supply);
+
+      const topDelegates = await client.getTopDelegates(20);
+      setDelegates(topDelegates);
+      const total = topDelegates.reduce((sum, d) => sum + d.votingPower, 0n);
+      setTotalDelegated(total);
+
+      if (publicKey) {
+        setCurrentDelegatee(await client.getDelegatee(publicKey));
+      } else {
+        setCurrentDelegatee(null);
+      }
+    } catch (err) {
+      console.error("Error fetching delegates:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to load delegates",
+      );
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
     fetchDelegates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicKey]);
 
   function handleDelegateClick(address: string) {
@@ -233,7 +236,7 @@ export default function DelegatesPage() {
                           <div
                             className="bg-indigo-600 h-2 rounded-full"
                             style={{
-                              width: `${Math.min(percentOfSupply * 2, 100)}%`,
+                              width: `${Math.max(2, Math.min(percentOfSupply, 100))}%`,
                             }}
                           />
                         </div>
@@ -264,7 +267,7 @@ export default function DelegatesPage() {
       <DelegateModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onDelegated={() => window.location.reload()}
+        onDelegated={fetchDelegates}
         currentDelegatee={currentDelegatee}
       />
     </div>
