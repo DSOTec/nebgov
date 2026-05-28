@@ -265,7 +265,7 @@ jobs:
     name: Security Scan
     needs: [build]
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
 
@@ -302,7 +302,7 @@ jobs:
         uses: CoinFabrik/scout-actions@v3.2
         with:
           working_directory: .
-          fail_on_error: false
+          fail_on_error: true
 
   security-audit:
     runs-on: ubuntu-latest

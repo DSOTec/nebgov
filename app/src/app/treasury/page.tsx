@@ -164,10 +164,15 @@ export default function TreasuryPage() {
 
       const count = await treasuryClient.txCount(viewer);
       const scanLimit = count !== null && count > 0 ? count : 50;
+      
+      const ids = Array.from({ length: scanLimit }, (_, i) => i + 1);
+      const fetchedTxs = await Promise.all(
+        ids.map((id) => treasuryClient.getTx(viewer, id).catch(() => null))
+      );
+
       const results: TreasuryTx[] = [];
       let misses = 0;
-      for (let id = 1; id <= scanLimit; id++) {
-        const tx = await treasuryClient.getTx(viewer, id);
+      for (const tx of fetchedTxs) {
         if (!tx) {
           misses += 1;
           if (count === null && misses >= 3) break;
@@ -493,6 +498,7 @@ export default function TreasuryPage() {
       </div>
 
       {/* Submit */}
+      {(!isConnected || ownerCheckComplete) && (
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-8">
         <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
           Submit transaction
@@ -675,6 +681,7 @@ export default function TreasuryPage() {
           </button>
         </form>
       </div>
+      )}
 
       {/* Pending */}
       <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">

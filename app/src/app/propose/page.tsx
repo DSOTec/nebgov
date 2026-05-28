@@ -40,6 +40,7 @@ const TITLE_MAX = 100;
 const DESC_MIN = 20;
 const STORAGE_KEY = "nebgov_proposal_draft";
 const DRAFT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+const ACTION_NAME_SIGNAL = "signal";
 
 const STEPS = [
   { id: 1, label: "Content" },
@@ -130,14 +131,14 @@ function buildPayload(actions: WizardAction[], governorAddress: string) {
 
   for (const a of actions) {
     targets.push(a.target.trim() || governorAddress);
-    fnNames.push(a.fnName.trim() || "proposal_count"); // Placeholder if empty
+    fnNames.push(a.fnName.trim() || ACTION_NAME_SIGNAL); // Placeholder if empty
     calldatas.push(encodeGovernorCalldataBytes(a.args));
   }
 
   // If no actions, we still need a signal action for the governor to accept the proposal
   if (targets.length === 0) {
     targets.push(governorAddress);
-    fnNames.push("proposal_count");
+    fnNames.push(ACTION_NAME_SIGNAL);
     calldatas.push(new Uint8Array(0));
   }
 
@@ -740,7 +741,7 @@ function ProposeWizardInner() {
         <div className="space-y-6">
           <p className="text-sm text-gray-600">
             Optional on-chain actions after the vote passes. Leave empty to submit a
-            governance-only signal (uses a safe <span className="font-mono">proposal_count</span>{" "}
+            governance-only signal (uses a safe <span className="font-mono">signal</span>{" "}
             placeholder on the governor).
           </p>
           <button
