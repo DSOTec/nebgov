@@ -2,7 +2,7 @@ import { Skeleton } from "./Skeleton";
 
 export function ProposalCardSkeleton() {
   return (
-    <div className="block bg-white border border-gray-200 rounded-xl p-6">
+    <div className="block bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
       <div className="flex items-start justify-between">
         <div className="flex-1 min-w-0">
           <Skeleton className="h-3 w-24 mb-2" />

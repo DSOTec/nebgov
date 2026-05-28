@@ -316,6 +316,14 @@ impl TokenVotesContract {
             .expect("not initialized")
     }
 
+    /// Get the current nonce for an account (used in delegate_by_sig replay protection).
+    pub fn get_nonce(env: Env, account: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Nonce(account))
+            .unwrap_or(0)
+    }
+
     /// Get voting power at a past ledger sequence (snapshot).
     pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128 {
         let current_ledger = env.ledger().sequence();
@@ -1799,6 +1807,32 @@ mod tests {
 
         // Second call with nonce=0 must fail (nonce is now 1)
         client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
+    }
+
+    /// get_nonce returns 0 before any sig-delegation and the incremented value after.
+    #[test]
+    fn test_get_nonce_view() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&owner, &100i128);
+
+        // Before any delegation the nonce must be 0.
+        assert_eq!(client.get_nonce(&owner), 0u64);
+
+        env.ledger().with_mut(|l| l.timestamp = 1);
+        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
+        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
+
+        // After one successful call the nonce must be 1.
+        assert_eq!(client.get_nonce(&owner), 1u64);
     }
 
     /// Nonce is incremented after a successful delegate_by_sig call.
