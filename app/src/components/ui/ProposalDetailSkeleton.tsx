@@ -11,7 +11,7 @@ export function ProposalDetailSkeleton() {
       </div>
 
       {/* Delegation section */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6">
         <div className="flex items-center justify-between gap-4 mb-4">
           <div>
             <Skeleton className="h-4 w-24 mb-1" />
@@ -23,7 +23,7 @@ export function ProposalDetailSkeleton() {
       </div>
 
       {/* Vote bars section */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-6">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6">
         <Skeleton className="h-4 w-32 mb-4" />
         <div className="space-y-3">
           <div className="flex items-center gap-3">
@@ -45,7 +45,7 @@ export function ProposalDetailSkeleton() {
       </div>
 
       {/* Voting UI */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
         <Skeleton className="h-4 w-24 mb-4" />
         <div className="flex gap-3 mb-4">
           <Skeleton className="h-10 flex-1 rounded-lg" />

@@ -107,8 +107,8 @@ export default function DelegatesPage() {
     <div className="max-w-4xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Delegates</h1>
-          <p className="text-gray-500 mt-1">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Delegates</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
             Top voting power holders in the protocol.
           </p>
         </div>
@@ -124,15 +124,15 @@ export default function DelegatesPage() {
       </div>
 
       {totalSupply > 0n && (
-        <div className="bg-white border border-gray-200 rounded-xl p-4 mb-6">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 mb-6">
           <div className="flex justify-between items-center mb-2">
-            <span className="text-sm text-gray-600">Total Delegated</span>
-            <span className="text-sm font-medium text-gray-900">
+            <span className="text-sm text-gray-600 dark:text-gray-400">Total Delegated</span>
+            <span className="text-sm font-medium text-gray-900 dark:text-white">
               {formatVotes(totalDelegated)} / {formatVotes(totalSupply)} (
               {delegatedPercent.toFixed(1)}%)
             </span>
           </div>
-          <div className="w-full bg-gray-200 rounded-full h-2">
+          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
             <div
               className="bg-indigo-600 h-2 rounded-full transition-all"
               style={{ width: `${Math.min(delegatedPercent, 100)}%` }}
@@ -142,36 +142,36 @@ export default function DelegatesPage() {
       )}
 
       {errorMessage && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-          <p className="text-red-800 text-sm font-medium">
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 mb-6">
+          <p className="text-red-800 dark:text-red-300 text-sm font-medium">
             Error loading delegates
           </p>
-          <p className="text-red-600 text-sm mt-1">{errorMessage}</p>
+          <p className="text-red-600 dark:text-red-400 text-sm mt-1">{errorMessage}</p>
         </div>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
         <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
+          <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
             <tr>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 #
               </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Delegate
               </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Votes
               </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 % of Supply
               </th>
-              <th className="py-3 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Action
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200">
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
             {isLoading && (
               <>
                 <DelegateSkeleton />
@@ -182,7 +182,7 @@ export default function DelegatesPage() {
 
             {!isLoading && delegates.length === 0 && !errorMessage && (
               <tr>
-                <td colSpan={5} className="py-12 text-center text-gray-500">
+                <td colSpan={5} className="py-12 text-center text-gray-500 dark:text-gray-400">
                   No delegates found. Be the first to delegate!
                 </td>
               </tr>
@@ -200,30 +200,30 @@ export default function DelegatesPage() {
                   <tr
                     key={delegate.address}
                     className={
-                      isCurrentUser ? "bg-indigo-50" : "hover:bg-gray-50"
+                      isCurrentUser ? "bg-indigo-50 dark:bg-indigo-900/20" : "hover:bg-gray-50 dark:hover:bg-gray-700/50"
                     }
                   >
-                    <td className="py-4 px-4 text-sm text-gray-500">
+                    <td className="py-4 px-4 text-sm text-gray-500 dark:text-gray-400">
                       {index + 1}
                     </td>
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm text-gray-900">
+                        <span className="font-mono text-sm text-gray-900 dark:text-white">
                           {formatAddress(delegate.address)}
                         </span>
                         {isCurrentUser && (
-                          <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">
+                          <span className="text-xs bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded">
                             You
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="py-4 px-4 text-sm font-medium text-gray-900">
+                    <td className="py-4 px-4 text-sm font-medium text-gray-900 dark:text-white">
                       {formatVotes(delegate.votingPower)}
                     </td>
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-2">
-                        <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-[100px]">
+                        <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2 max-w-[100px]">
                           <div
                             className="bg-indigo-600 h-2 rounded-full"
                             style={{
@@ -231,7 +231,7 @@ export default function DelegatesPage() {
                             }}
                           />
                         </div>
-                        <span className="text-sm text-gray-500">
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
                           {percentOfSupply.toFixed(1)}%
                         </span>
                       </div>
@@ -251,7 +251,7 @@ export default function DelegatesPage() {
         </table>
       </div>
 
-      <p className="mt-4 text-xs text-gray-400 text-center">
+      <p className="mt-4 text-xs text-gray-400 dark:text-gray-500 text-center">
         Estimated data — depends on network conditions
       </p>
 
