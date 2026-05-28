@@ -4176,69 +4176,6 @@
           "v0": {
             "topics": [
               {
-                "symbol": "prop_crtd"
-              },
-              {
-                "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAXI7N"
-              }
-            ],
-            "data": {
-              "vec": [
-                {
-                  "u64": 2
-                },
-                {
-                  "string": "Blocked proposal"
-                },
-                {
-                  "bytes": "6973dddd3ef9cb6a2932702f31777faad9c9bf3124d147a84f31aadb6d139546"
-                },
-                {
-                  "string": "ipfs://blocked"
-                },
-                {
-                  "vec": [
-                    {
-                      "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAITA4"
-                    }
-                  ]
-                },
-                {
-                  "vec": [
-                    {
-                      "symbol": "exec_gov"
-                    }
-                  ]
-                },
-                {
-                  "vec": [
-                    {
-                      "bytes": ""
-                    }
-                  ]
-                },
-                {
-                  "u32": 41
-                },
-                {
-                  "u32": 61
-                }
-              ]
-            }
-          }
-        }
-      },
-      "failed_call": false
-    },
-    {
-      "event": {
-        "ext": "v0",
-        "contract_id": "0000000000000000000000000000000000000000000000000000000000000006",
-        "type_": "contract",
-        "body": {
-          "v0": {
-            "topics": [
-              {
                 "symbol": "ProposalCreated"
               },
               {

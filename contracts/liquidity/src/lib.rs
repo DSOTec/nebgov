@@ -98,20 +98,27 @@ impl LiquidityContract {
             panic!("below minimum liquidity");
         }
 
-        let pool_key = Self::pool_key(outcome_a, outcome_b);
-        let mut pool = Self::get_pool_or_default(&env, outcome_a, outcome_b);
-        let lp_tokens = if pool.total_lp_supply == 0 {
-            amount_a
+        let (na, nb, swapped) = Self::normalize_outcomes(outcome_a, outcome_b);
+        let mut pool = Self::get_pool_or_default(&env, na, nb);
+        // Map incoming amounts to normalized order
+        let (deposit_a, deposit_b) = if !swapped {
+            (amount_a, amount_b)
         } else {
-            (amount_a * pool.total_lp_supply) / pool.reserve_a
+            (amount_b, amount_a)
         };
 
-        pool.reserve_a += amount_a;
-        pool.reserve_b += amount_b;
-        pool.total_lp_supply += lp_tokens;
-        env.storage().persistent().set(&pool_key, &pool);
+        let lp_tokens = if pool.total_lp_supply == 0 {
+            deposit_a
+        } else {
+            (deposit_a * pool.total_lp_supply) / pool.reserve_a
+        };
 
-        let position_key = Self::position_key(provider.clone(), outcome_a, outcome_b);
+        pool.reserve_a += deposit_a;
+        pool.reserve_b += deposit_b;
+        pool.total_lp_supply += lp_tokens;
+        env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
+
+        let position_key = Self::position_key(provider.clone(), na, nb);
         let mut position: LPPosition = env
             .storage()
             .persistent()
@@ -145,32 +152,36 @@ impl LiquidityContract {
             panic!("insufficient shares");
         }
 
-        let pool_key = Self::pool_key(outcome_a, outcome_b);
+        let (na, nb, swapped) = Self::normalize_outcomes(outcome_a, outcome_b);
         let mut pool: Pool = env
             .storage()
             .persistent()
-            .get(&pool_key)
+            .get(&DataKey::Pool(na, nb))
             .expect("pool not found");
 
-        let position_key = Self::position_key(provider.clone(), outcome_a, outcome_b);
+        let position_key = Self::position_key(provider.clone(), na, nb);
         let mut position: LPPosition = env
             .storage()
             .persistent()
             .get(&position_key)
             .expect("no LP position");
 
-        let amount_a = (lp_tokens * pool.reserve_a) / pool.total_lp_supply;
-        let amount_b = (lp_tokens * pool.reserve_b) / pool.total_lp_supply;
+        let amount_a_norm = (lp_tokens * pool.reserve_a) / pool.total_lp_supply;
+        let amount_b_norm = (lp_tokens * pool.reserve_b) / pool.total_lp_supply;
 
-        pool.reserve_a -= amount_a;
-        pool.reserve_b -= amount_b;
+        pool.reserve_a -= amount_a_norm;
+        pool.reserve_b -= amount_b_norm;
         pool.total_lp_supply -= lp_tokens;
         position.lp_tokens -= lp_tokens;
 
-        env.storage().persistent().set(&pool_key, &pool);
+        env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
         env.storage().persistent().set(&position_key, &position);
 
-        (amount_a, amount_b)
+        if !swapped {
+            (amount_a_norm, amount_b_norm)
+        } else {
+            (amount_b_norm, amount_a_norm)
+        }
     }
 
     /// Swap `amount_in` of one pool asset for the other.
@@ -192,14 +203,21 @@ impl LiquidityContract {
             panic!("outcome_in and outcome_out must differ");
         }
 
-        let pool_key = Self::pool_key(outcome_in, outcome_out);
+        let (na, nb, swapped) = Self::normalize_outcomes(outcome_in, outcome_out);
         let mut pool: Pool = env
             .storage()
             .persistent()
-            .get(&pool_key)
+            .get(&DataKey::Pool(na, nb))
             .expect("pool not found");
 
-        let amount_out = (amount_in * pool.reserve_b) / (pool.reserve_a + amount_in);
+        // Determine direction relative to normalized reserves
+        let trading_a_to_b = !swapped;
+
+        let amount_out = if trading_a_to_b {
+            (amount_in * pool.reserve_b) / (pool.reserve_a + amount_in)
+        } else {
+            (amount_in * pool.reserve_a) / (pool.reserve_b + amount_in)
+        };
         let fee = (amount_out * pool.fee_bps as i128) / 10_000;
         let amount_out_with_fee = amount_out - fee;
 
@@ -207,9 +225,15 @@ impl LiquidityContract {
             panic!("slippage exceeded");
         }
 
-        pool.reserve_a += amount_in;
-        pool.reserve_b -= amount_out_with_fee;
-        env.storage().persistent().set(&pool_key, &pool);
+        if trading_a_to_b {
+            pool.reserve_a += amount_in;
+            pool.reserve_b -= amount_out_with_fee;
+        } else {
+            pool.reserve_b += amount_in;
+            pool.reserve_a -= amount_out_with_fee;
+        }
+
+        env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
 
         amount_out_with_fee
     }
@@ -241,10 +265,23 @@ impl LiquidityContract {
 
     /// Get the current pool state.
     pub fn get_pool(env: Env, outcome_a: u32, outcome_b: u32) -> Pool {
-        env.storage()
+        let (na, nb, swapped) = Self::normalize_outcomes(outcome_a, outcome_b);
+        let pool: Pool = env
+            .storage()
             .persistent()
-            .get(&Self::pool_key(outcome_a, outcome_b))
-            .expect("pool not found")
+            .get(&DataKey::Pool(na, nb))
+            .expect("pool not found");
+
+        if !swapped {
+            pool
+        } else {
+            Pool {
+                reserve_a: pool.reserve_b,
+                reserve_b: pool.reserve_a,
+                total_lp_supply: pool.total_lp_supply,
+                fee_bps: pool.fee_bps,
+            }
+        }
     }
 
     /// Get the LP token balance for a provider in a specific pool.
@@ -271,23 +308,34 @@ impl LiquidityContract {
     }
 
     fn pool_key(outcome_a: u32, outcome_b: u32) -> DataKey {
-        DataKey::Pool(outcome_a, outcome_b)
+        let (a, b, _swapped) = Self::normalize_outcomes(outcome_a, outcome_b);
+        DataKey::Pool(a, b)
     }
 
     fn position_key(provider: Address, outcome_a: u32, outcome_b: u32) -> DataKey {
-        DataKey::Position(provider, outcome_a, outcome_b)
+        let (a, b, _swapped) = Self::normalize_outcomes(outcome_a, outcome_b);
+        DataKey::Position(provider, a, b)
     }
 
     fn get_pool_or_default(env: &Env, outcome_a: u32, outcome_b: u32) -> Pool {
+        let (a, b, _swapped) = Self::normalize_outcomes(outcome_a, outcome_b);
         env.storage()
             .persistent()
-            .get(&Self::pool_key(outcome_a, outcome_b))
+            .get(&DataKey::Pool(a, b))
             .unwrap_or(Pool {
                 reserve_a: 0,
                 reserve_b: 0,
                 total_lp_supply: 0,
                 fee_bps: DEFAULT_FEE_BPS,
             })
+    }
+
+    fn normalize_outcomes(a: u32, b: u32) -> (u32, u32, bool) {
+        if a <= b {
+            (a, b, false)
+        } else {
+            (b, a, true)
+        }
     }
 }
 
@@ -398,13 +446,13 @@ mod tests {
         // Check pool exists with (1, 2)
         let pool_ab = client.get_pool(&outcome_a, &outcome_b);
         assert_eq!(pool_ab.reserve_a, amount_a);
+        assert_eq!(pool_ab.reserve_b, amount_b);
 
-        // Verify (2, 1) returns a different pool (not the same one since keys are not normalized)
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.get_pool(&outcome_b, &outcome_a);
-        }));
-        // Should panic because pool (2,1) doesn't exist — keys are not normalized
-        assert!(result.is_err());
+        // (2,1) should return the same pool but with reserves mapped to the
+        // caller's requested order (reserve_a corresponds to outcome 2).
+        let pool_ba = client.get_pool(&outcome_b, &outcome_a);
+        assert_eq!(pool_ba.reserve_a, amount_b);
+        assert_eq!(pool_ba.reserve_b, amount_a);
     }
 
     #[test]
