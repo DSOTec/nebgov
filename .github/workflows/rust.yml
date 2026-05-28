@@ -159,6 +159,12 @@ jobs:
             -p sorogov-treasury \
             --all-targets \
             -- -D warnings
+      - name: Fail on TODO comments in governor contract
+        run: |
+          if grep -RIn --include='*.rs' 'TODO' contracts/governor/src/lib.rs; then
+            echo 'TODO comments found in contracts/governor/src/lib.rs';
+            exit 1;
+          fi
 
   build:
     name: Build WASM

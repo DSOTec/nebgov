@@ -227,7 +227,7 @@ export default function DelegatesPage() {
                           <div
                             className="bg-indigo-600 h-2 rounded-full"
                             style={{
-                              width: `${Math.min(percentOfSupply * 2, 100)}%`,
+                              width: `${Math.max(2, Math.min(percentOfSupply, 100))}%`,
                             }}
                           />
                         </div>

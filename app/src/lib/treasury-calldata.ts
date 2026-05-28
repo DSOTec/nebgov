@@ -117,9 +117,11 @@ export function labelPendingTx(target: string, dataHex: string, fnName?: string)
   }
 
   if (fn) {
+    // SEP-41 transfer signature is transfer(from, to, amount) — three args.
+    // args[0] = from, args[1] = to, args[2] = amount.
     const human =
-      fn === "transfer" && args.length >= 2
-        ? `Transfer ${args[1]} to ${shortAddr(args[0])}`
+      fn === "transfer" && args.length >= 3
+        ? `Transfer ${args[2]} to ${shortAddr(args[1])}`
         : `${fn}(${args.join(", ")})`;
     return `${human} · ${shortAddr(target)}`;
   }

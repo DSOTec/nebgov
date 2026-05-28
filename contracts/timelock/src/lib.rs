@@ -418,26 +418,30 @@ impl TimelockContract {
         if new_delay < MIN_DELAY {
             env.panic_with_error(TimelockError::DelayTooShort);
         }
-        let old_delay: u64 = env.storage().instance().get(&DataKey::MinDelay).unwrap_or(86400);
+        let old_delay: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDelay)
+            .unwrap_or(86400);
         env.storage().instance().set(&DataKey::MinDelay, &new_delay);
-        env.events().publish(
-            (symbol_short!("upd_dly"),),
-            (old_delay, new_delay),
-        );
+        env.events()
+            .publish((symbol_short!("upd_dly"),), (old_delay, new_delay));
     }
 
     /// Update the execution window. Only admin.
     pub fn update_execution_window(env: Env, caller: Address, new_window: u64) {
         caller.require_auth();
         assert!(caller == Self::admin(env.clone()), "only admin");
-        let old_window: u64 = env.storage().instance().get(&DataKey::ExecutionWindow).unwrap_or(1209600);
+        let old_window: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExecutionWindow)
+            .unwrap_or(1209600);
         env.storage()
             .instance()
             .set(&DataKey::ExecutionWindow, &new_window);
-        env.events().publish(
-            (symbol_short!("upd_win"),),
-            (old_window, new_window),
-        );
+        env.events()
+            .publish((symbol_short!("upd_win"),), (old_window, new_window));
     }
 
     fn require_governor(env: &Env, caller: &Address) {
