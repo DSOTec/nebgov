@@ -7,6 +7,9 @@ use soroban_sdk::{
 #[cfg(test)]
 mod load_tests;
 
+/// Minimum TTL to maintain on checkpoint entries (≈ 30 days at 7.5 s/ledger).
+const CHECKPOINT_TTL_LEDGERS: u32 = 345_600;
+
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
 #[derive(Clone)]
@@ -54,9 +57,13 @@ impl TokenVotesContract {
             .instance()
             .set(&DataKey::CheckpointRetentionPeriod, &100800u32);
         // Default time-weighting to disabled
-        env.storage().instance().set(&DataKey::TimeWeightEnabled, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimeWeightEnabled, &false);
         // Default scale to 4,204,800 (~1 year at 7.5s per ledger)
-        env.storage().instance().set(&DataKey::TimeWeightScale, &4204800u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimeWeightScale, &4204800u32);
     }
 
     /// Delegate voting power from caller to delegatee.
@@ -155,8 +162,18 @@ impl TokenVotesContract {
 
         if let Some(old_delegatee) = previous_delegate.clone() {
             if old_delegatee != delegatee {
-                Self::update_account_votes(env, old_delegatee.clone(), -record.balance, -old_weighted_sum);
-                Self::update_account_votes(env, delegatee.clone(), new_record.balance, new_weighted_sum);
+                Self::update_account_votes(
+                    env,
+                    old_delegatee.clone(),
+                    -record.balance,
+                    -old_weighted_sum,
+                );
+                Self::update_account_votes(
+                    env,
+                    delegatee.clone(),
+                    new_record.balance,
+                    new_weighted_sum,
+                );
             } else {
                 let delta = new_record.balance - record.balance;
                 let delta_ws = new_weighted_sum - old_weighted_sum;
@@ -208,7 +225,12 @@ impl TokenVotesContract {
             let weighted_sum = record.balance * record.start_ledger as i128;
             if record.balance > 0 {
                 // Remove voting power from the previous delegate and total supply.
-                Self::update_account_votes(&env, old_delegatee.clone(), -record.balance, -weighted_sum);
+                Self::update_account_votes(
+                    &env,
+                    old_delegatee.clone(),
+                    -record.balance,
+                    -weighted_sum,
+                );
                 Self::update_total_supply_checkpoint(&env, -record.balance, -weighted_sum);
             }
 
@@ -241,14 +263,18 @@ impl TokenVotesContract {
 
     /// Get current voting power of an account.
     pub fn get_votes(env: Env, account: Address) -> i128 {
+        let key = DataKey::Checkpoints(account);
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
-            .get(&DataKey::Checkpoints(account))
+            .get(&key)
             .unwrap_or(soroban_sdk::Vec::new(&env));
         if checkpoints.is_empty() {
             return 0;
         }
+        env.storage()
+            .persistent()
+            .extend_ttl(&key, CHECKPOINT_TTL_LEDGERS, CHECKPOINT_TTL_LEDGERS);
         let last = checkpoints.last().unwrap();
 
         if !Self::time_weight_enabled(env.clone()) {
@@ -290,16 +316,33 @@ impl TokenVotesContract {
             .expect("not initialized")
     }
 
+    /// Get the current nonce for an account (used in delegate_by_sig replay protection).
+    pub fn get_nonce(env: Env, account: Address) -> u64 {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Nonce(account))
+            .unwrap_or(0)
+    }
+
     /// Get voting power at a past ledger sequence (snapshot).
     pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128 {
         let current_ledger = env.ledger().sequence();
-        assert!(ledger <= current_ledger, "ledger must not exceed current ledger");
+        assert!(
+            ledger <= current_ledger,
+            "ledger must not exceed current ledger"
+        );
 
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
-            .get(&DataKey::Checkpoints(account))
+            .get(&key)
             .unwrap_or(soroban_sdk::Vec::new(&env));
+
+        if !checkpoints.is_empty() {
+            env.storage()
+                .persistent()
+                .extend_ttl(&key, CHECKPOINT_TTL_LEDGERS, CHECKPOINT_TTL_LEDGERS);
+        }
 
         let cp = Self::binary_search(&checkpoints, ledger);
         if cp.votes <= 0 {
@@ -332,12 +375,13 @@ impl TokenVotesContract {
     /// the value recorded at or just before `ledger`. This is used by the
     /// governor to compute quorum as a fraction of the historical total supply.
     pub fn get_past_total_supply(env: Env, ledger: u32) -> i128 {
+        let key = DataKey::TotalCheckpoints;
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
-            .get(&DataKey::TotalCheckpoints)
+            .get(&key)
             .unwrap_or(soroban_sdk::Vec::new(&env));
-        
+
         let cp = Self::binary_search(&checkpoints, ledger);
         if cp.votes <= 0 {
             return 0;
@@ -361,7 +405,7 @@ impl TokenVotesContract {
             .unwrap_or(soroban_sdk::Vec::new(&env));
 
         let current_ledger = env.ledger().sequence();
-        
+
         // When using raw checkpoint manually, we assume no weighted sum change for simplicity
         // or we try to estimate it based on last checkpoint.
         let weighted_sum = if checkpoints.is_empty() {
@@ -404,7 +448,7 @@ impl TokenVotesContract {
             .persistent()
             .get(&DataKey::TotalCheckpoints)
             .unwrap_or(soroban_sdk::Vec::new(env));
- 
+
         let current_ledger = env.ledger().sequence();
         let (old_votes, old_weighted_sum) = if checkpoints.is_empty() {
             (0, 0)
@@ -414,7 +458,7 @@ impl TokenVotesContract {
         };
         let new_total = old_votes + delta;
         let new_weighted_sum = old_weighted_sum + delta_weighted_sum;
- 
+
         if !checkpoints.is_empty() && checkpoints.last().unwrap().ledger == current_ledger {
             let last_idx = checkpoints.len() - 1;
             checkpoints.set(
@@ -432,7 +476,7 @@ impl TokenVotesContract {
                 weighted_sum: new_weighted_sum,
             });
         }
- 
+
         env.storage()
             .persistent()
             .set(&DataKey::TotalCheckpoints, &checkpoints);
@@ -662,7 +706,9 @@ impl TokenVotesContract {
             .expect("not initialized");
         admin.require_auth();
 
-        env.storage().instance().set(&DataKey::TimeWeightEnabled, &enabled);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimeWeightEnabled, &enabled);
     }
 
     /// Get whether time-weighted voting is enabled.
@@ -1763,6 +1809,32 @@ mod tests {
         client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
     }
 
+    /// get_nonce returns 0 before any sig-delegation and the incremented value after.
+    #[test]
+    fn test_get_nonce_view() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let owner = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&owner, &100i128);
+
+        // Before any delegation the nonce must be 0.
+        assert_eq!(client.get_nonce(&owner), 0u64);
+
+        env.ledger().with_mut(|l| l.timestamp = 1);
+        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
+        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
+
+        // After one successful call the nonce must be 1.
+        assert_eq!(client.get_nonce(&owner), 1u64);
+    }
+
     /// Nonce is incremented after a successful delegate_by_sig call.
     #[test]
     fn test_delegate_by_sig_nonce_increments() {
@@ -1793,7 +1865,6 @@ mod tests {
         assert_eq!(client.get_votes(&delegatee1), 0);
         assert_eq!(client.get_votes(&delegatee2), 300);
     }
-
 }
 
 #[cfg(test)]

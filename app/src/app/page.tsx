@@ -256,8 +256,8 @@ function ProposalsPageInner() {
       {/* Header */}
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Proposals</h1>
-          <p className="text-gray-500 mt-1">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Proposals</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
             Vote on governance decisions for this protocol.
           </p>
         </div>
@@ -276,13 +276,13 @@ function ProposalsPageInner() {
           placeholder="Search proposals…"
           value={searchValue}
           onChange={(e) => setSearchValue(e.target.value)}
-          className="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          className="flex-1 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
           aria-label="Search proposals"
         />
         <select
           value={sort}
           onChange={(e) => setParam("sort", e.target.value, "newest")}
-          className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white"
+          className="border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
           aria-label="Sort proposals"
         >
           <option value="newest">Newest</option>
@@ -304,7 +304,7 @@ function ProposalsPageInner() {
           className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
             stateFilter === "all"
               ? "bg-indigo-600 text-white border-indigo-600"
-              : "bg-white text-gray-600 border-gray-300 hover:border-indigo-400"
+              : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:border-indigo-400"
           }`}
         >
           All
@@ -316,7 +316,7 @@ function ProposalsPageInner() {
             className={`px-3 py-1.5 rounded-full text-xs font-medium border transition-colors ${
               stateFilter === s
                 ? "bg-indigo-600 text-white border-indigo-600"
-                : "bg-white text-gray-600 border-gray-300 hover:border-indigo-400"
+                : "bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 border-gray-300 dark:border-gray-600 hover:border-indigo-400"
             }`}
           >
             {s}
@@ -348,7 +348,7 @@ function ProposalsPageInner() {
       {!loading && !error && proposals.length === 0 && (
         <div className="text-center py-16">
           <svg
-            className="mx-auto h-12 w-12 text-gray-400"
+            className="mx-auto h-12 w-12 text-gray-400 dark:text-gray-500"
             fill="none"
             viewBox="0 0 24 24"
             stroke="currentColor"
@@ -360,10 +360,10 @@ function ProposalsPageInner() {
               d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
             />
           </svg>
-          <h3 className="mt-2 text-sm font-medium text-gray-900">
+          <h3 className="mt-2 text-sm font-medium text-gray-900 dark:text-white">
             No proposals
           </h3>
-          <p className="mt-1 text-sm text-gray-500">
+          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
             Get started by creating a new proposal.
           </p>
           <div className="mt-6">
@@ -380,12 +380,12 @@ function ProposalsPageInner() {
       {/* Empty — filters produced no results */}
       {!loading && !error && proposals.length > 0 && filtered.length === 0 && (
         <div className="text-center py-12">
-          <p className="text-gray-500 text-sm">
+          <p className="text-gray-500 dark:text-gray-400 text-sm">
             No proposals match your filters
           </p>
           <button
             onClick={() => router.push("?")}
-            className="mt-3 text-indigo-600 text-sm hover:underline font-medium"
+            className="mt-3 text-indigo-600 dark:text-indigo-400 text-sm hover:underline font-medium"
           >
             Reset filters
           </button>
@@ -401,17 +401,17 @@ function ProposalsPageInner() {
               <Link
                 key={p.id.toString()}
                 href={`/proposal/${p.id}`}
-                className="block bg-white border border-gray-200 rounded-xl p-6 hover:border-indigo-300 hover:shadow-sm transition-all"
+                className="block bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition-all"
               >
                 <div className="flex items-start justify-between">
                   <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-400 mb-1">
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mb-1">
                       Proposal #{p.id.toString()}
                     </p>
-                    <h2 className="text-lg font-semibold text-gray-900 truncate">
+                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
                       {p.description}
                     </h2>
-                    <div className="mt-3 flex items-center gap-4 text-sm text-gray-500">
+                    <div className="mt-3 flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
                       <span>
                         For: {(Number(p.votesFor) / 1e7).toLocaleString()}
                       </span>

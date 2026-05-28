@@ -33,6 +33,16 @@ function appNetworkPassphrase(): string {
   return Networks.TESTNET;
 }
 
+function appWalletNetwork(): WalletNetwork {
+  const n = process.env.NEXT_PUBLIC_NETWORK || "testnet";
+  if (n === "mainnet") return WalletNetwork.PUBLIC;
+  if (n === "futurenet") return WalletNetwork.FUTURENET;
+  if (n === "testnet") return WalletNetwork.TESTNET;
+  throw new Error(
+    `NEXT_PUBLIC_NETWORK=${n} invalid — expected one of: mainnet, testnet, futurenet`,
+  );
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 interface WalletContextValue {
@@ -73,8 +83,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
 
   // Initialise the kit once — only on the client
   useEffect(() => {
+    const network = appWalletNetwork();
     kitRef.current = new StellarWalletsKit({
-      network: WalletNetwork.TESTNET,
+      network,
       selectedWalletId: FREIGHTER_ID,
       modules: [new FreighterModule(), new xBullModule(), new AlbedoModule()],
     });

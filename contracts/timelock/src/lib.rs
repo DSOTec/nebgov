@@ -10,6 +10,14 @@ use soroban_sdk::{
 /// Absolute minimum delay in seconds that the admin is allowed to set.
 const MIN_DELAY: u64 = 86_400;
 
+/// Minimum execution window in seconds the admin is allowed to set. A window
+/// smaller than this would risk operations expiring before they can be run.
+const MIN_EXECUTION_WINDOW: u64 = 3_600;
+
+/// Maximum execution window in seconds the admin is allowed to set (~1 year),
+/// preventing an absurdly large window from being configured.
+const MAX_EXECUTION_WINDOW: u64 = 31_536_000;
+
 /// Timelock error codes.
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +30,10 @@ pub enum TimelockError {
     OperationExpired = 3,
     /// New delay is below the absolute minimum allowed.
     DelayTooShort = 4,
+    /// Operation has already been executed or cancelled and cannot be re-scheduled.
+    OperationFinalized = 5,
+    /// New execution window is outside the allowed bounds.
+    ExecutionWindowOutOfRange = 6,
 }
 
 /// A scheduled timelock operation.
@@ -188,6 +200,18 @@ impl TimelockContract {
             predecessor.clone(),
             salt,
         );
+
+        // Same protection as single operations: a finalized batch must not be
+        // resurrected and executed again.
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<_, BatchOperation>(&DataKey::BatchOperation(batch_op_id.clone()))
+        {
+            if existing.executed || existing.cancelled {
+                env.panic_with_error(TimelockError::OperationFinalized);
+            }
+        }
 
         let batch = BatchOperation {
             targets,
@@ -418,26 +442,33 @@ impl TimelockContract {
         if new_delay < MIN_DELAY {
             env.panic_with_error(TimelockError::DelayTooShort);
         }
-        let old_delay: u64 = env.storage().instance().get(&DataKey::MinDelay).unwrap_or(86400);
+        let old_delay: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MinDelay)
+            .unwrap_or(86400);
         env.storage().instance().set(&DataKey::MinDelay, &new_delay);
-        env.events().publish(
-            (symbol_short!("upd_dly"),),
-            (old_delay, new_delay),
-        );
+        env.events()
+            .publish((symbol_short!("upd_dly"),), (old_delay, new_delay));
     }
 
     /// Update the execution window. Only admin.
     pub fn update_execution_window(env: Env, caller: Address, new_window: u64) {
         caller.require_auth();
         assert!(caller == Self::admin(env.clone()), "only admin");
-        let old_window: u64 = env.storage().instance().get(&DataKey::ExecutionWindow).unwrap_or(1209600);
+        if !(MIN_EXECUTION_WINDOW..=MAX_EXECUTION_WINDOW).contains(&new_window) {
+            env.panic_with_error(TimelockError::ExecutionWindowOutOfRange);
+        }
+        let old_window: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ExecutionWindow)
+            .unwrap_or(1209600);
         env.storage()
             .instance()
             .set(&DataKey::ExecutionWindow, &new_window);
-        env.events().publish(
-            (symbol_short!("upd_win"),),
-            (old_window, new_window),
-        );
+        env.events()
+            .publish((symbol_short!("upd_win"),), (old_window, new_window));
     }
 
     fn require_governor(env: &Env, caller: &Address) {
@@ -473,6 +504,19 @@ impl TimelockContract {
             predecessor.clone(),
             salt,
         );
+
+        // Re-scheduling a still-pending operation is idempotent, but resurrecting
+        // one that has already executed or been cancelled would allow it to run a
+        // second time. Block that to prevent double execution.
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<_, Operation>(&DataKey::Operation(op_id.clone()))
+        {
+            if existing.executed || existing.cancelled {
+                env.panic_with_error(TimelockError::OperationFinalized);
+            }
+        }
 
         let op = Operation {
             target,
@@ -529,123 +573,4 @@ impl TimelockContract {
 }
 
 #[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::testutils::Address as _;
-    use soroban_sdk::Env;
-
-    fn setup() -> (Env, Address, Address) {
-        let env = Env::default();
-        let admin = Address::generate(&env);
-        let governor = Address::generate(&env);
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&admin, &governor, &86400, &1209600);
-        (env, admin, governor)
-    }
-
-    #[test]
-    fn test_update_delay_too_short() {
-        let (env, admin, _) = setup();
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&admin, &Address::generate(&env), &86400, &1209600);
-        let client = TimelockContractClient::new(&env, &contract_id);
-
-        // Should panic when new delay is below MIN_DELAY (86400)
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.update_delay(&admin, &0);
-        }));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_update_delay_accepts_valid() {
-        let (env, admin, _) = setup();
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&admin, &Address::generate(&env), &86400, &1209600);
-        let client = TimelockContractClient::new(&env, &contract_id);
-
-        client.update_delay(&admin, &172800);
-
-        let stored: u64 = env.storage().instance().get(&DataKey::MinDelay).unwrap();
-        assert_eq!(stored, 172800);
-    }
-
-    #[test]
-    fn test_update_delay_emits_event() {
-        let (env, admin, _) = setup();
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&admin, &Address::generate(&env), &86400, &1209600);
-        let mut client = TimelockContractClient::new(&env, &contract_id);
-
-        client.update_delay(&admin, &172800);
-
-        let events = env.events().all();
-        let found = events.iter().any(|event| {
-            event.0 == contract_id && event.1 == symbol_short!("upd_dly")
-        });
-        assert!(found, "DelayUpdated event not emitted");
-    }
-
-    #[test]
-    fn test_update_delay_requires_admin_auth() {
-        let (env, _, governor) = setup();
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&governor, &Address::generate(&env), &86400, &1209600);
-        let client = TimelockContractClient::new(&env, &contract_id);
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.update_delay(&governor, &172800);
-        }));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_update_execution_window_zero_should_fail() {
-        let (env, admin, _) = setup();
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&admin, &Address::generate(&env), &86400, &1209600);
-        let client = TimelockContractClient::new(&env, &contract_id);
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.update_execution_window(&admin, &0);
-        }));
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_update_execution_window_emits_event() {
-        let (env, admin, _) = setup();
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&admin, &Address::generate(&env), &86400, &1209600);
-        let mut client = TimelockContractClient::new(&env, &contract_id);
-
-        client.update_execution_window(&admin, &604800);
-
-        let events = env.events().all();
-        let found = events.iter().any(|event| {
-            event.0 == contract_id && event.1 == symbol_short!("upd_win")
-        });
-        assert!(found, "ExecutionWindowUpdated event not emitted");
-    }
-
-    #[test]
-    fn test_update_execution_window_requires_admin_auth() {
-        let (env, _, governor) = setup();
-        let contract_id = env.register_contract(None, TimelockContract);
-        TimelockContractClient::new(&env, &contract_id)
-            .initialize(&governor, &Address::generate(&env), &86400, &1209600);
-        let client = TimelockContractClient::new(&env, &contract_id);
-
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            client.update_execution_window(&governor, &604800);
-        }));
-        assert!(result.is_err());
-    }
-}
+mod test;

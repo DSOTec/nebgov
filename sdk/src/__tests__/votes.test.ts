@@ -8,6 +8,7 @@ var mockSendTransaction = jest.fn();
 var mockIsSimulationError = jest.fn();
 var mockGetLatestLedger = jest.fn();
 var mockGetEvents = jest.fn();
+var mockGetTransaction = jest.fn();
 
 import { VotesClient } from "../votes";
 import { VotesError, VotesErrorCode } from "../errors";
@@ -27,6 +28,7 @@ jest.mock("@stellar/stellar-sdk", () => {
         sendTransaction: mockSendTransaction,
         getLatestLedger: mockGetLatestLedger,
         getEvents: mockGetEvents,
+        getTransaction: mockGetTransaction,
       })),
       Api: {
         isSimulationError: mockIsSimulationError,
@@ -671,7 +673,7 @@ describe("VotesClient", () => {
     it("constructs delegation transaction with correct parameters", async () => {
       mockGetAccount.mockResolvedValue(new Account(validGAddr, "2"));
 
-      await client.delegateBySig(ownerAddr, delegateeAddr, nonce, expiry, signature);
+      await client.delegateBySig(mockKeypair, ownerAddr, delegateeAddr, nonce, expiry, signature);
 
       expect(mockNativeToScVal).toHaveBeenCalledWith(ownerAddr, { type: "address" });
       expect(mockNativeToScVal).toHaveBeenCalledWith(delegateeAddr, { type: "address" });
@@ -689,16 +691,16 @@ describe("VotesClient", () => {
       });
 
       await expect(
-        client.delegateBySig(ownerAddr, delegateeAddr, nonce, expiry, signature)
+        client.delegateBySig(mockKeypair, ownerAddr, delegateeAddr, nonce, expiry, signature)
       ).rejects.toThrow(VotesError);
     });
 
-    it("uses contract address as the source account for the transaction", async () => {
+    it("uses relayer address as the source account for the transaction", async () => {
       mockGetAccount.mockResolvedValue(new Account(validGAddr, "2"));
 
-      await client.delegateBySig(ownerAddr, delegateeAddr, nonce, expiry, signature);
+      await client.delegateBySig(mockKeypair, ownerAddr, delegateeAddr, nonce, expiry, signature);
 
-      expect(mockGetAccount).toHaveBeenCalledWith(validCAddr);
+      expect(mockGetAccount).toHaveBeenCalledWith(mockKeypair.publicKey());
     });
   });
 

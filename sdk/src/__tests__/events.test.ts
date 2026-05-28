@@ -34,6 +34,8 @@ describe("event parsers", () => {
       proposalId: 1n,
       proposer: "GPROPOSER",
       description: "Upgrade config",
+      descriptionHash: "",
+      metadataUri: "",
       targets: ["CTARGET"],
       fnNames: ["update_config"],
       calldatas: ["deadbeef"],
@@ -177,12 +179,32 @@ describe("event parsers", () => {
         votingPeriod: 20,
         quorumNumerator: 4,
         proposalThreshold: 100n,
+        guardian: "",
+        voteType: "Extended",
+        proposalGracePeriod: 0,
+        useDynamicQuorum: false,
+        reflectorOracle: null,
+        minQuorumUsd: 0n,
+        maxCalldataSize: 10000,
+        proposalCooldown: 100,
+        maxProposalsPerPeriod: 5,
+        proposalPeriodDuration: 10000,
       },
       newSettings: {
         votingDelay: 15,
         votingPeriod: 25,
         quorumNumerator: 5,
         proposalThreshold: 200n,
+        guardian: "",
+        voteType: "Extended",
+        proposalGracePeriod: 0,
+        useDynamicQuorum: false,
+        reflectorOracle: null,
+        minQuorumUsd: 0n,
+        maxCalldataSize: 10000,
+        proposalCooldown: 100,
+        maxProposalsPerPeriod: 5,
+        proposalPeriodDuration: 10000,
       },
     });
   });
@@ -192,6 +214,23 @@ describe("event parsers", () => {
       ledger: 9,
       contractId: "C123",
       topic: ["Paused", "GPAUSER"],
+      value: {
+        pauser: "GPAUSER",
+        ledger: 9,
+      },
+    };
+
+    expect(parsePauseEvent(event)).toEqual({
+      pauser: "GPAUSER",
+      ledger: 9,
+    });
+  });
+
+  it("parses Paused when pauser is provided only in the event value", () => {
+    const event: SorobanEvent = {
+      ledger: 9,
+      contractId: "C123",
+      topic: ["Paused"],
       value: {
         pauser: "GPAUSER",
         ledger: 9,

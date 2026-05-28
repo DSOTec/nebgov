@@ -16,6 +16,8 @@ pub enum TreasuryError {
     SingleTransferExceeded = 1,
     /// Proposed transfer would cause daily transfer total to exceed the daily limit.
     DailyLimitExceeded = 2,
+    /// Token address is not on the approved token list.
+    TokenNotApproved = 3,
 }
 
 /// A treasury transaction proposal.
@@ -115,10 +117,7 @@ impl TreasuryContract {
     /// Initialize with owners, threshold, and governor address.
     pub fn initialize(env: Env, owners: Vec<Address>, threshold: u32, governor: Address) {
         assert!(!owners.is_empty(), "no owners");
-        assert!(
-            threshold > 0 && threshold <= owners.len(),
-            "bad threshold"
-        );
+        assert!(threshold > 0 && threshold <= owners.len(), "bad threshold");
         env.storage().instance().set(&DataKey::Owners, &owners);
         env.storage()
             .instance()
@@ -172,12 +171,8 @@ impl TreasuryContract {
             .get(&DataKey::PendingOwner)
             .expect("no pending owner");
         pending.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::Governor, &pending);
-        env.storage()
-            .instance()
-            .remove(&DataKey::PendingOwner);
+        env.storage().instance().set(&DataKey::Governor, &pending);
+        env.storage().instance().remove(&DataKey::PendingOwner);
         env.events()
             .publish((Symbol::new(&env, "OwnershipTransferred"),), (pending,));
     }
@@ -220,9 +215,72 @@ impl TreasuryContract {
 
     /// Get the configured spending cap for a token, if any.
     pub fn get_spending_cap(env: Env, token: Address) -> Option<SpendingCap> {
+        env.storage().instance().get(&DataKey::SpendingCap(token))
+    }
+
+    /// Add a token to the approved token list (governor only).
+    pub fn add_approved_token(env: Env, caller: Address, token: Address) {
+        caller.require_auth();
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized");
+        assert!(caller == governor, "not authorized");
+
+        let mut tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+        // Avoid duplicates
+        for i in 0..tokens.len() {
+            if tokens.get(i).unwrap() == token {
+                return;
+            }
+        }
+        tokens.push_back(token.clone());
         env.storage()
             .instance()
-            .get(&DataKey::SpendingCap(token))
+            .set(&DataKey::ApprovedTokens, &tokens);
+        env.events()
+            .publish((symbol_short!("tok_add"),), token);
+    }
+
+    /// Remove a token from the approved token list (governor only).
+    pub fn remove_approved_token(env: Env, caller: Address, token: Address) {
+        caller.require_auth();
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized");
+        assert!(caller == governor, "not authorized");
+
+        let mut tokens: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+        for i in 0..tokens.len() {
+            if tokens.get(i).unwrap() == token {
+                tokens.remove(i);
+                env.storage()
+                    .instance()
+                    .set(&DataKey::ApprovedTokens, &tokens);
+                env.events()
+                    .publish((symbol_short!("tok_rm"),), token);
+                return;
+            }
+        }
+    }
+
+    /// Get the list of approved tokens.
+    pub fn get_approved_tokens(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env))
     }
 
     /// Get the amount spent in the current spending period for a token.
@@ -293,25 +351,29 @@ impl TreasuryContract {
 
     /// Submit a new transaction with spending limit enforcement.
     ///
-    /// Validates both per-transfer and daily spending limits before allowing
-    /// the proposal to be created. If either limit is exceeded, returns an error
-    /// and leaves all state unchanged.
+    /// Validates that the token is on the approved list, and enforces both
+    /// per-transfer and daily spending limits before allowing the proposal to
+    /// be created. If any check fails, returns an error and leaves all state
+    /// unchanged.
     ///
     /// # Arguments
     /// * `proposer` — Address submitting the proposal (must be an owner)
-    /// * `target` — Contract address to call
-    /// * `data` — Calldata for the contract
-    /// * `amount` — Transfer amount to validate against limits
+    /// * `token`    — Token address to spend (must be on the approved list)
+    /// * `target`   — Contract address to call
+    /// * `data`     — Calldata for the contract
+    /// * `amount`   — Transfer amount to validate against limits
     ///
     /// # Returns
     /// The proposal ID if validation succeeds.
     ///
     /// # Errors
+    /// * `TokenNotApproved`      — `token` is not on the approved token list
     /// * `SingleTransferExceeded` — `amount` exceeds `max_single_transfer`
-    /// * `DailyLimitExceeded` — `amount` + current daily total exceeds `max_daily_transfer`
+    /// * `DailyLimitExceeded`    — `amount` + current daily total exceeds `max_daily_transfer`
     pub fn submit_with_limit(
         env: Env,
         proposer: Address,
+        token: Address,
         target: Address,
         fn_name: Symbol,
         data: Bytes,
@@ -319,6 +381,17 @@ impl TreasuryContract {
     ) -> u64 {
         proposer.require_auth();
         Self::require_owner(&env, &proposer);
+
+        // Validate token is on the approved list.
+        let approved: Vec<Address> = env
+            .storage()
+            .instance()
+            .get(&DataKey::ApprovedTokens)
+            .unwrap_or(Vec::new(&env));
+        let token_approved = approved.iter().any(|t| t == token);
+        if !token_approved {
+            env.panic_with_error(TreasuryError::TokenNotApproved);
+        }
 
         // Load current settings and daily tracking state.
         let settings: TreasurySettings = env
@@ -564,18 +637,20 @@ impl TreasuryContract {
         ));
 
         if cap.is_some() {
-            env.storage()
-                .persistent()
-                .set(&DataKey::SpentThisPeriod(token.clone(), period_start), &new_spent);
+            env.storage().persistent().set(
+                &DataKey::SpentThisPeriod(token.clone(), period_start),
+                &new_spent,
+            );
         }
 
         let hash = env.crypto().sha256(&hash_input);
         let op_hash = Bytes::from_array(&env, &hash.to_array());
 
         env.events().publish(
-            (symbol_short!("bat_xfer"),),
-            (op_hash.clone(), recipients.len()),
+            (symbol_short!("bat_xfer"), token.clone()),
+            (op_hash.clone(), recipients.len() as u32, total_amount),
         );
+
 
         op_hash
     }
@@ -1051,7 +1126,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
@@ -1059,6 +1134,7 @@ mod tests {
 
         let max_amount = 1000i128;
 
+        let governor = Address::generate(&env);
         // Set custom limits.
         client.initialize(
             &{
@@ -1067,8 +1143,11 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        // Approve the token.
+        client.add_approved_token(&governor, &token_addr);
 
         let settings = TreasurySettings {
             max_single_transfer: max_amount,
@@ -1090,7 +1169,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
@@ -1099,6 +1178,7 @@ mod tests {
         let max_amount = 1000i128;
         let proposed_amount = 500i128;
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1106,8 +1186,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let settings = TreasurySettings {
             max_single_transfer: max_amount,
@@ -1128,7 +1210,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
@@ -1138,6 +1220,7 @@ mod tests {
         let max_daily = 3000i128;
         let proposal_amount = 800i128;
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1145,8 +1228,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let settings = TreasurySettings {
             max_single_transfer: max_single,
@@ -1189,7 +1274,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
@@ -1198,6 +1283,7 @@ mod tests {
 
         let max_daily = 1000i128;
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1205,8 +1291,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let settings = TreasurySettings {
             max_single_transfer: i128::MAX,
@@ -1251,13 +1339,14 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1265,8 +1354,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let max_amount = 1000i128;
 
@@ -1296,7 +1387,7 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
@@ -1305,6 +1396,7 @@ mod tests {
 
         let max_daily = 1000i128;
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1312,8 +1404,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let settings = TreasurySettings {
             max_single_transfer: i128::MAX,
@@ -1345,13 +1439,14 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1359,8 +1454,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let settings = TreasurySettings {
             max_single_transfer: 1000i128,
@@ -1390,13 +1487,14 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1404,8 +1502,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let limit = 1000i128;
 
@@ -1442,13 +1542,14 @@ mod tests {
         let env = Env::default();
         env.mock_all_auths();
 
-        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let (treasury_id, token_addr, _governor) = setup(&env);
         let client = TreasuryContractClient::new(&env, &treasury_id);
 
         let owner = Address::generate(&env);
         let target = Address::generate(&env);
         let data = Bytes::new(&env);
 
+        let governor = Address::generate(&env);
         client.initialize(
             &{
                 let mut v = Vec::new(&env);
@@ -1456,8 +1557,10 @@ mod tests {
                 v
             },
             &1u32,
-            &Address::generate(&env),
+            &governor,
         );
+
+        client.add_approved_token(&governor, &token_addr);
 
         let settings = TreasurySettings {
             max_single_transfer: i128::MAX,
@@ -1481,6 +1584,58 @@ mod tests {
                 .unwrap_or(0)
         });
         assert_eq!(daily_spent, i128::MAX - 50i128);
+    }
+
+    /// Negative: unapproved token is rejected with TokenNotApproved error.
+    #[test]
+    #[should_panic(expected = "Error(Contract, #3)")]
+    fn test_submit_with_limit_unapproved_token_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (treasury_id, _token_addr, _governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+
+        let owner = Address::generate(&env);
+        let target = Address::generate(&env);
+        let data = Bytes::new(&env);
+        let unapproved_token = Address::generate(&env);
+
+        let governor = Address::generate(&env);
+        client.initialize(
+            &{
+                let mut v = Vec::new(&env);
+                v.push_back(owner.clone());
+                v
+            },
+            &1u32,
+            &governor,
+        );
+
+        // No token approved — must panic with TokenNotApproved.
+        client.submit_with_limit(&owner, &unapproved_token, &target, &data, &100i128);
+    }
+
+    /// add_approved_token / remove_approved_token round-trip.
+    #[test]
+    fn test_approved_token_management() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+
+        assert_eq!(client.get_approved_tokens().len(), 0);
+
+        client.add_approved_token(&governor, &token_addr);
+        assert_eq!(client.get_approved_tokens().len(), 1);
+
+        // Adding the same token again is idempotent.
+        client.add_approved_token(&governor, &token_addr);
+        assert_eq!(client.get_approved_tokens().len(), 1);
+
+        client.remove_approved_token(&governor, &token_addr);
+        assert_eq!(client.get_approved_tokens().len(), 0);
     }
 
     #[test]

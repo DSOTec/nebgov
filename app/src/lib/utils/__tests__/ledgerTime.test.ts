@@ -91,8 +91,19 @@ describe("getProposalTimeInfo", () => {
     expect(result).toBeNull();
   });
 
+  it("returns queue deadline info for Succeeded state when deadline is in the future", () => {
+    const result = getProposalTimeInfo("Succeeded", 1000, 1200, 1100, undefined, 1400);
+    expect(result).not.toBeNull();
+    expect(result?.label).toBe("Queue deadline");
+    expect(result?.targetLedger).toBe(1400);
+  });
+
+  it("returns null for Succeeded state when deadline is passed", () => {
+    const result = getProposalTimeInfo("Succeeded", 1000, 1200, 1500, undefined, 1400);
+    expect(result).toBeNull();
+  });
+
   it("returns null for non-time-sensitive states", () => {
-    expect(getProposalTimeInfo("Succeeded", 1000, 1200, 1300)).toBeNull();
     expect(getProposalTimeInfo("Defeated", 1000, 1200, 1300)).toBeNull();
     expect(getProposalTimeInfo("Executed", 1000, 1200, 1300)).toBeNull();
   });

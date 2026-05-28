@@ -175,8 +175,7 @@ function toGovernorSettings(value: unknown): GovernorSettings | null {
     votingDelay === null ||
     votingPeriod === null ||
     quorumNumerator === null ||
-    proposalThreshold === null ||
-    proposalGracePeriod === null
+    proposalThreshold === null
   ) {
     return null;
   }
@@ -188,7 +187,7 @@ function toGovernorSettings(value: unknown): GovernorSettings | null {
     proposalThreshold,
     guardian: String(value.guardian ?? ""),
     voteType: VoteType.Extended,
-    proposalGracePeriod,
+    proposalGracePeriod: toNumber(value.proposal_grace_period) ?? 0,
     useDynamicQuorum: Boolean(value.use_dynamic_quorum),
     reflectorOracle:
       value.reflector_oracle === undefined || value.reflector_oracle === null
@@ -326,6 +325,8 @@ export function parseProposalCreatedEvent(
       proposalId,
       proposer: String(event.topic[1]),
       description: String(event.value[1] ?? ""),
+      descriptionHash: "",
+      metadataUri: "",
       targets: Array.isArray(event.value[2]) ? event.value[2] : [],
       fnNames: Array.isArray(event.value[3]) ? event.value[3] : [],
       calldatas: Array.isArray(event.value[4]) ? event.value[4] : [],
@@ -643,9 +644,14 @@ export function parsePauseEvent(event: SorobanEvent): PauseEventData | null {
 
   // The pauser address is the second topic segment when present; fall back to
   // the value field for completeness.
-  const pauser = event.topic[1] ?? String(event.value.pauser ?? "");
+  const pauser =
+    typeof event.topic[1] === "string"
+      ? event.topic[1]
+      : event.value.pauser === undefined || event.value.pauser === null
+      ? ""
+      : String(event.value.pauser);
 
-  return { pauser: String(pauser), ledger };
+  return { pauser, ledger };
 }
 
 export function parseUnpauseEvent(event: SorobanEvent): UnpauseEventData | null {

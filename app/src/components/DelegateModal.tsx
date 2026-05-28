@@ -162,6 +162,7 @@ export function DelegateModal({
       );
 
       await client.delegateBySig(
+        signer,
         publicKey,
         delegatee.trim(),
         nonce,

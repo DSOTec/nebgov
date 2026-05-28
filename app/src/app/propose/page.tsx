@@ -40,6 +40,7 @@ const TITLE_MAX = 100;
 const DESC_MIN = 20;
 const STORAGE_KEY = "nebgov_proposal_draft";
 const DRAFT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
+const ACTION_NAME_SIGNAL = "signal";
 
 const STEPS = [
   { id: 1, label: "Content" },
@@ -130,14 +131,14 @@ function buildPayload(actions: WizardAction[], governorAddress: string) {
 
   for (const a of actions) {
     targets.push(a.target.trim() || governorAddress);
-    fnNames.push(a.fnName.trim() || "proposal_count"); // Placeholder if empty
+    fnNames.push(a.fnName.trim() || ACTION_NAME_SIGNAL); // Placeholder if empty
     calldatas.push(encodeGovernorCalldataBytes(a.args));
   }
 
   // If no actions, we still need a signal action for the governor to accept the proposal
   if (targets.length === 0) {
     targets.push(governorAddress);
-    fnNames.push("proposal_count");
+    fnNames.push(ACTION_NAME_SIGNAL);
     calldatas.push(new Uint8Array(0));
   }
 
@@ -367,6 +368,19 @@ function ProposeWizardInner() {
     return err;
   }
 
+  function validateProposal(): string[] {
+    const errors: string[] = [];
+    const title = draft.title.trim();
+    if (!title) errors.push("Title is required.");
+    if (title.length > TITLE_MAX) errors.push(`Title must be under ${TITLE_MAX} characters.`);
+    if (title.length > 0 && title.length < TITLE_MIN) errors.push(`Title must be at least ${TITLE_MIN} characters.`);
+    if (!draft.description.trim()) errors.push("Description is required.");
+    if (draft.description.trim().length > 0 && draft.description.trim().length < DESC_MIN) {
+      errors.push(`Description must be at least ${DESC_MIN} characters.`);
+    }
+    return errors;
+  }
+
   async function runReviewLoads() {
     if (!clients || !publicKey) return;
     setReviewLoading(true);
@@ -551,6 +565,11 @@ function ProposeWizardInner() {
       }
     }
     if (step === 3) {
+      const proposalErrors = validateProposal();
+      if (proposalErrors.length) {
+        setStepErrors(proposalErrors);
+        return;
+      }
       if (!isConnected || !publicKey) {
         setStepErrors(["Connect your wallet to submit."]);
         return;
@@ -740,7 +759,7 @@ function ProposeWizardInner() {
         <div className="space-y-6">
           <p className="text-sm text-gray-600">
             Optional on-chain actions after the vote passes. Leave empty to submit a
-            governance-only signal (uses a safe <span className="font-mono">proposal_count</span>{" "}
+            governance-only signal (uses a safe <span className="font-mono">signal</span>{" "}
             placeholder on the governor).
           </p>
           <button

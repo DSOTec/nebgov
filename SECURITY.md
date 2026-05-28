@@ -4,48 +4,54 @@
 
 | Version | Supported |
 | ------- | --------- |
-| latest  | yes       |
-| < 0.1.0 | no        |
+| latest  | ✅        |
+| < 0.1.0 | ❌        |
 
 ## Reporting a Vulnerability
 
-**Please do not open a public GitHub issue for security vulnerabilities.**
+**Do not open a public GitHub issue for security vulnerabilities.**
 
-Report vulnerabilities privately via one of:
+Please report vulnerabilities privately via one of:
 
-- GitHub Security Advisories: https://github.com/nebgov/nebgov/security/advisories/new
-- Email: security@nebgov.xyz
+- **GitHub Security Advisories (preferred):** https://github.com/nebgov/nebgov/security/advisories/new
+- **Email:** security@nebgov.io
 
-Include:
+Include in your report:
 
 - Description of the vulnerability
 - Steps to reproduce
 - Affected contracts/components
-- Potential impact
+- Potential impact assessment
+- Suggested fix (optional)
 
-You will receive an acknowledgement within 48 hours.
+We will **acknowledge your report within 48 hours** and provide a fix timeline within **7 days** of confirmation.
 
 ## Disclosure Policy
 
-- We aim to release a fix within 14 days of confirmation
-- We will coordinate disclosure timing with the reporter
-- Credit given to reporters in release notes, if desired
+- We aim to release a fix within **14 days** of confirmation.
+- We will coordinate disclosure timing with the reporter.
+- Credit is given to reporters in release notes, if desired.
+- We ask that you do not publicly disclose the vulnerability until a fix has been released.
+
+## Bug Bounty
+
+We do not currently operate a formal bug bounty program. Responsible disclosure is recognized in our release notes.
 
 ## Scope
 
-In scope:
+**In scope:**
 
-- governor
-- timelock
-- token-votes
-- token-votes-wrapper
-- treasury
-- governor-factory contracts
+- `contracts/governor`
+- `contracts/timelock`
+- `contracts/token-votes`
+- `contracts/token-votes-wrapper`
+- `contracts/treasury`
+- `contracts/governor-factory`
 
-Out of scope:
+**Out of scope:**
 
-- frontend UI bugs (open a regular issue)
-- third-party dependencies
+- Frontend UI bugs with no security impact (open a regular issue)
+- Third-party dependency vulnerabilities (report upstream)
 
 ## Known Issues
 
@@ -55,60 +61,21 @@ See [docs/security/threat-model.md](./docs/security/threat-model.md) for documen
 
 ### Automated Vulnerability Scanning
 
-All JavaScript dependencies are automatically scanned for known vulnerabilities using `pnpm audit` in our CI pipeline. The scan runs on every pull request and push to main, covering all workspaces:
+All JavaScript dependencies are automatically scanned for known vulnerabilities using `pnpm audit` in our CI pipeline on every pull request and push to `main`, covering:
 
-- `sdk/` - TypeScript SDK
-- `app/` - Next.js frontend
-- `packages/indexer/` - Event indexer API
-- `backend/` - Backend services (if present)
+- `sdk/` — TypeScript SDK
+- `app/` — Next.js frontend
+- `packages/indexer/` — Event indexer
+- `backend/` — Backend services
 
 ### Rust Security Audits
 
-All Rust dependencies are automatically scanned for known security vulnerabilities using `cargo-audit` via the `rustsec/audit-check` action.
+All Rust dependencies are scanned using `cargo-audit` via the `rustsec/audit-check` action on every PR and push to `main`.
 
-- **Frequency**: Every PR and push to `main`.
-- **Database**: [RustSec Advisory Database](https://rustsec.org/advisories/).
-- **Reporting**: Vulnerabilities are posted as comments on pull requests.
-- **Configuration**: Suppression of false positives or non-applicable advisories is handled in `.cargo/audit.toml`.
-
-### Handling False Positives
-
-If a vulnerability is flagged that doesn't apply to our usage or is a false positive, you can suppress it using one of these methods:
-
-#### Method 1: Using .npmrc (Recommended)
-
-Create or update `.npmrc` in the workspace root:
-
-```
-audit-level=high
-```
-
-#### Method 2: Package.json Overrides
-
-Add to the root `package.json`:
-
-```json
-{
-  "pnpm": {
-    "auditConfig": {
-      "ignoreCves": ["CVE-2023-XXXXX"]
-    }
-  }
-}
-```
-
-#### Method 3: Temporary Bypass
-
-For temporary issues during development:
-
-```bash
-pnpm audit --audit-level=high --ignore-registry-errors
-```
+- **Database:** [RustSec Advisory Database](https://rustsec.org/advisories/)
+- **Configuration:** `.cargo/audit.toml`
 
 ### Severity Levels
 
-- **Critical/High**: Blocks CI and prevents merging
-- **Moderate/Low**: Reported but doesn't block CI
-- **Info**: Logged for awareness only
-
-When suppressing vulnerabilities, document the reasoning in the commit message and consider creating a GitHub issue to track the decision.
+- **Critical/High:** Blocks CI and prevents merging
+- **Moderate/Low:** Reported but does not block CI

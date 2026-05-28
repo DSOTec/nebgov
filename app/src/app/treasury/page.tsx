@@ -12,7 +12,10 @@ import {
   type TreasurySpendingCap,
   type TreasuryTx,
 } from "../../lib/treasury-client";
-import { TreasuryBalanceSkeleton } from "../../components/ui/TreasuryBalanceSkeleton";
+import {
+  TreasuryBalanceSkeleton,
+  TreasuryPendingSkeleton,
+} from "../../components/ui/TreasuryBalanceSkeleton";
 import {
   type CalldataArgKind,
   type CalldataArgRow,
@@ -161,10 +164,15 @@ export default function TreasuryPage() {
 
       const count = await treasuryClient.txCount(viewer);
       const scanLimit = count !== null && count > 0 ? count : 50;
+      
+      const ids = Array.from({ length: scanLimit }, (_, i) => i + 1);
+      const fetchedTxs = await Promise.all(
+        ids.map((id) => treasuryClient.getTx(viewer, id).catch(() => null))
+      );
+
       const results: TreasuryTx[] = [];
       let misses = 0;
-      for (let id = 1; id <= scanLimit; id++) {
-        const tx = await treasuryClient.getTx(viewer, id);
+      for (const tx of fetchedTxs) {
         if (!tx) {
           misses += 1;
           if (count === null && misses >= 3) break;
@@ -355,16 +363,16 @@ export default function TreasuryPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-8">Treasury</h1>
+      <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-8">Treasury</h1>
 
       {error && (
-        <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+        <div className="mb-6 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 text-sm text-red-700 dark:text-red-300">
           {error}
         </div>
       )}
 
       {!treasuryContractAddress && (
-        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
+        <div className="mb-6 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl p-4 text-sm text-yellow-800 dark:text-yellow-300">
           Missing{" "}
           <span className="font-mono">NEXT_PUBLIC_TREASURY_ADDRESS</span> in{" "}
           <span className="font-mono">app/.env.local</span>.
@@ -372,7 +380,7 @@ export default function TreasuryPage() {
       )}
 
       {!treasuryAccountId && (
-        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-xl p-4 text-sm text-yellow-800">
+        <div className="mb-6 bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800 rounded-xl p-4 text-sm text-yellow-800 dark:text-yellow-300">
           Missing{" "}
           <span className="font-mono">NEXT_PUBLIC_TREASURY_ACCOUNT</span>{" "}
           (treasury Stellar account for Horizon balance queries).
@@ -380,20 +388,20 @@ export default function TreasuryPage() {
       )}
 
       {!isConnected && (
-        <div className="mb-6 bg-gray-100 border border-gray-200 rounded-xl p-4 text-sm text-gray-700">
+        <div className="mb-6 bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm text-gray-700 dark:text-gray-300">
           Connect an owner wallet to submit or approve. Balances and pending
           transactions load using the treasury account when configured.
         </div>
       )}
 
       {isConnected && publicKey && !ownerCheckComplete && (
-        <div className="mb-6 bg-blue-50 border border-blue-200 rounded-xl p-4 text-sm text-blue-700">
+        <div className="mb-6 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-xl p-4 text-sm text-blue-700 dark:text-blue-300">
           Verifying treasury owner permissions...
         </div>
       )}
 
       {isConnected && publicKey && !canWrite && ownerOnChain === false && (
-        <div className="mb-6 bg-gray-50 border border-gray-200 rounded-xl p-4 text-sm text-gray-600">
+        <div className="mb-6 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 text-sm text-gray-600 dark:text-gray-400">
           This wallet is not a treasury owner — you can view balances and
           pending transactions only.
         </div>
@@ -404,26 +412,26 @@ export default function TreasuryPage() {
         <TreasuryBalanceSkeleton />
       ) : (
         <div className="grid grid-cols-2 gap-4 mb-8">
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <p className="text-sm text-gray-500">USDC Balance</p>
-            <p className="text-2xl font-bold mt-1">{`${usdcBalance} USDC`}</p>
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+            <p className="text-sm text-gray-500 dark:text-gray-400">USDC Balance</p>
+            <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">{`${usdcBalance} USDC`}</p>
           </div>
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <p className="text-sm text-gray-500">XLM Balance</p>
-            <p className="text-2xl font-bold mt-1">{`${xlmBalance} XLM`}</p>
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+            <p className="text-sm text-gray-500 dark:text-gray-400">XLM Balance</p>
+            <p className="text-2xl font-bold mt-1 text-gray-900 dark:text-white">{`${xlmBalance} XLM`}</p>
           </div>
         </div>
       )}
 
-      <div className="mb-8 bg-white border border-gray-200 rounded-xl p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">
+      <div className="mb-8 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
           Multisig configuration
         </h2>
-        <p className="text-sm text-gray-500">
+        <p className="text-sm text-gray-500 dark:text-gray-400">
           {threshold}-of-{ownerAddresses.length || "?"} multisig
         </p>
         {ownerAddresses.length > 0 && (
-          <p className="text-xs text-gray-500 mt-2">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-2">
             On-chain owners:{" "}
             {ownerAddresses
               .map((address) => `${address.slice(0, 6)}...${address.slice(-4)}`)
@@ -432,11 +440,11 @@ export default function TreasuryPage() {
         )}
       </div>
 
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-8">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
           Spending cap
         </h2>
-        <p className="text-sm text-gray-500 mb-4">
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
           Current per-period treasury cap and utilization for the configured
           token.
         </p>
@@ -445,39 +453,39 @@ export default function TreasuryPage() {
           spendingCap ? (
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div>
-                <p className="text-xs uppercase tracking-wide text-gray-500">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
                   Token
                 </p>
-                <p className="mt-1 font-mono text-sm text-gray-800 break-all">
+                <p className="mt-1 font-mono text-sm text-gray-800 dark:text-gray-200 break-all">
                   {spendingCap.token}
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-gray-500">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
                   Cap
                 </p>
-                <p className="mt-1 text-sm text-gray-800">
+                <p className="mt-1 text-sm text-gray-800 dark:text-gray-200">
                   {spendingCap.maxAmount.toString()} units /{" "}
                   {spendingCap.periodLedgers} ledgers
                 </p>
               </div>
               <div>
-                <p className="text-xs uppercase tracking-wide text-gray-500">
+                <p className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
                   Used
                 </p>
-                <p className="mt-1 text-sm text-gray-800">
+                <p className="mt-1 text-sm text-gray-800 dark:text-gray-200">
                   {spentThisPeriod.toString()} units
                 </p>
               </div>
             </div>
           ) : (
-            <p className="text-sm text-gray-500">
+            <p className="text-sm text-gray-500 dark:text-gray-400">
               No spending cap is configured for{" "}
               <span className="font-mono">{treasuryTokenAddress}</span>.
             </p>
           )
         ) : (
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
             Set{" "}
             <span className="font-mono">
               NEXT_PUBLIC_TREASURY_TOKEN_ADDRESS
@@ -490,24 +498,25 @@ export default function TreasuryPage() {
       </div>
 
       {/* Submit */}
-      <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">
-        <h2 className="text-lg font-semibold text-gray-900 mb-1">
+      {(!isConnected || ownerCheckComplete) && (
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-8">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
           Submit transaction
         </h2>
-        <p className="text-sm text-gray-500 mb-4">
+        <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
           Owners propose a target contract and calldata. Approvals execute
           automatically when the threshold is met.
         </p>
 
         {!canWrite && (
-          <p className="text-sm text-gray-500 mb-4 italic">
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4 italic">
             Read-only — owner wallet required to submit.
           </p>
         )}
 
         <form onSubmit={handleSubmitTx} className="space-y-4">
           <div>
-            <label className="block text-xs text-gray-500 mb-1">
+            <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
               Target contract / account
             </label>
             <input
@@ -516,7 +525,7 @@ export default function TreasuryPage() {
               onChange={(e) => setSubmitTarget(e.target.value)}
               placeholder="C… or G…"
               disabled={!canWrite}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-50 disabled:text-gray-400"
+              className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:bg-gray-50 dark:disabled:bg-gray-600 disabled:text-gray-400 dark:disabled:text-gray-500"
               required
             />
           </div>
@@ -529,7 +538,7 @@ export default function TreasuryPage() {
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 calldataMode === "builder"
                   ? "bg-indigo-600 text-white"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
               } disabled:opacity-50`}
             >
               Argument builder
@@ -541,7 +550,7 @@ export default function TreasuryPage() {
               className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
                 calldataMode === "raw"
                   ? "bg-indigo-600 text-white"
-                  : "bg-gray-100 text-gray-700 hover:bg-gray-200"
+                  : "bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600"
               } disabled:opacity-50`}
             >
               Raw hex
@@ -551,7 +560,7 @@ export default function TreasuryPage() {
           {calldataMode === "builder" ? (
             <>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">
+                <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                   Function name
                 </label>
                 <input
@@ -560,13 +569,13 @@ export default function TreasuryPage() {
                   onChange={(e) => setSubmitFn(e.target.value)}
                   placeholder="transfer"
                   disabled={!canWrite}
-                  className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-50"
+                  className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:bg-gray-50 dark:disabled:bg-gray-600"
                   required
                 />
               </div>
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500">Arguments</span>
+                  <span className="text-xs text-gray-500 dark:text-gray-400">Arguments</span>
                   <button
                     type="button"
                     disabled={!canWrite}
@@ -580,7 +589,7 @@ export default function TreasuryPage() {
                   {argRows.map((row, idx) => (
                     <li
                       key={row.id}
-                      className="flex flex-wrap gap-2 items-center border border-gray-100 rounded-lg p-2"
+                      className="flex flex-wrap gap-2 items-center border border-gray-100 dark:border-gray-600 rounded-lg p-2"
                     >
                       <select
                         value={row.kind}
@@ -593,7 +602,7 @@ export default function TreasuryPage() {
                             ),
                           );
                         }}
-                        className="border border-gray-200 rounded-md text-xs py-1.5 px-2"
+                        className="border border-gray-200 dark:border-gray-600 rounded-md text-xs py-1.5 px-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                       >
                         <option value="address">address</option>
                         <option value="i128">i128</option>
@@ -618,7 +627,7 @@ export default function TreasuryPage() {
                             ? "true / false"
                             : `value ${idx + 1}`
                         }
-                        className="flex-1 min-w-[8rem] border border-gray-200 rounded-md text-sm px-2 py-1.5 font-mono"
+                        className="flex-1 min-w-[8rem] border border-gray-200 dark:border-gray-600 rounded-md text-sm px-2 py-1.5 font-mono bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
                       />
                       <button
                         type="button"
@@ -639,7 +648,7 @@ export default function TreasuryPage() {
             </>
           ) : (
             <div>
-              <label className="block text-xs text-gray-500 mb-1">
+              <label className="block text-xs text-gray-500 dark:text-gray-400 mb-1">
                 Calldata (hex)
               </label>
               <textarea
@@ -648,14 +657,14 @@ export default function TreasuryPage() {
                 placeholder="0x…"
                 disabled={!canWrite}
                 rows={3}
-                className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 disabled:bg-gray-50"
+                className="w-full border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-700 text-gray-900 dark:text-white disabled:bg-gray-50 dark:disabled:bg-gray-600"
                 required
               />
             </div>
           )}
 
-          <div className="rounded-lg bg-slate-50 border border-slate-100 px-3 py-2 text-sm text-slate-800">
-            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">
+          <div className="rounded-lg bg-slate-50 dark:bg-gray-700 border border-slate-100 dark:border-gray-600 px-3 py-2 text-sm text-slate-800 dark:text-gray-200">
+            <span className="text-xs font-semibold text-slate-500 dark:text-gray-400 uppercase tracking-wide">
               Preview
             </span>
             <p className="mt-1 font-mono text-xs sm:text-sm break-all">
@@ -672,14 +681,17 @@ export default function TreasuryPage() {
           </button>
         </form>
       </div>
+      )}
 
       {/* Pending */}
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
         Pending transactions
       </h2>
       <div className="space-y-3">
+        {loading && <TreasuryPendingSkeleton />}
+
         {txs.length === 0 && !loading && (
-          <div className="bg-white border border-gray-200 rounded-xl p-5 text-sm text-gray-500">
+          <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-5 text-sm text-gray-500 dark:text-gray-400">
             No pending transactions.
           </div>
         )}
@@ -697,24 +709,24 @@ export default function TreasuryPage() {
           return (
             <div
               key={tx.id.toString()}
-              className={`bg-white border rounded-xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 ${
+              className={`bg-white dark:bg-gray-800 border rounded-xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 ${
                 atThresholdVisual
-                  ? "border-amber-300 ring-1 ring-amber-100"
-                  : "border-gray-200"
+                  ? "border-amber-300 dark:border-amber-700 ring-1 ring-amber-100 dark:ring-amber-900/30"
+                  : "border-gray-200 dark:border-gray-700"
               }`}
             >
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium text-gray-900 leading-snug">
+                <p className="text-sm font-medium text-gray-900 dark:text-white leading-snug">
                   {labelPendingTx(tx.target, tx.dataHex, tx.fnName)}
                 </p>
-                <p className="text-xs text-gray-400 font-mono mt-1">
+                <p className="text-xs text-gray-400 dark:text-gray-500 font-mono mt-1">
                   #{tx.id.toString()}
                 </p>
                 <div className="mt-3 flex items-center gap-3 flex-wrap">
-                  <span className="text-sm text-gray-700 font-medium tabular-nums">
+                  <span className="text-sm text-gray-700 dark:text-gray-300 font-medium tabular-nums">
                     {approvals}/{threshold}
                   </span>
-                  <div className="w-48 max-w-full bg-gray-100 rounded-full h-2">
+                  <div className="w-48 max-w-full bg-gray-100 dark:bg-gray-700 rounded-full h-2">
                     <div
                       className={`h-2 rounded-full transition-all ${
                         atThresholdVisual ? "bg-amber-500" : "bg-indigo-600"
@@ -723,7 +735,7 @@ export default function TreasuryPage() {
                     />
                   </div>
                   {oneMore === 1 && (
-                    <span className="text-xs font-medium text-amber-700">
+                    <span className="text-xs font-medium text-amber-700 dark:text-amber-400">
                       One more approval executes this tx
                     </span>
                   )}
@@ -742,8 +754,8 @@ export default function TreasuryPage() {
                 }
                 className={`shrink-0 text-sm rounded-lg px-4 py-2 font-medium border transition-colors ${
                   has
-                    ? "text-gray-400 border-gray-100 bg-gray-50 cursor-not-allowed"
-                    : "text-indigo-600 border-indigo-200 hover:bg-indigo-50"
+                    ? "text-gray-400 dark:text-gray-500 border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-700 cursor-not-allowed"
+                    : "text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-700 hover:bg-indigo-50 dark:hover:bg-indigo-900/20"
                 } disabled:opacity-50 disabled:cursor-not-allowed`}
               >
                 {has

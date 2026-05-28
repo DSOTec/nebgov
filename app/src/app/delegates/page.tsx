@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import Link from "next/link";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { VotesClient, type TopDelegate, type Network } from "@nebgov/sdk";
 import { useWallet } from "../../lib/wallet-context";
 import { DelegateModal } from "../../components/DelegateModal";
@@ -41,25 +41,18 @@ function formatVotes(votes: bigint): string {
 }
 
 export default function DelegatesPage() {
-  const [delegates, setDelegates] = useState<TopDelegate[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [totalDelegated, setTotalDelegated] = useState(0n);
-  const [totalSupply, setTotalSupply] = useState(0n);
   const [modalOpen, setModalOpen] = useState(false);
   const [prefillAddress, setPrefillAddress] = useState<string>("");
-  const [currentDelegatee, setCurrentDelegatee] = useState<string | null>(null);
   const { publicKey } = useWallet();
+  const queryClient = useQueryClient();
 
-  async function fetchDelegates() {
-    setLoading(true);
-    setError(null);
-    try {
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["delegates", publicKey],
+    queryFn: async () => {
       const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
       const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
       const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-      const network = (process.env.NEXT_PUBLIC_NETWORK ||
-        "testnet") as Network;
+      const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
       const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
       if (!governorAddress || !timelockAddress || !votesAddress) {
@@ -75,37 +68,35 @@ export default function DelegatesPage() {
       });
 
       const supply = await client.getTotalSupply();
-      setTotalSupply(supply);
-
-      const topDelegates = await client.getTopDelegates(20);
-      setDelegates(topDelegates);
-      const total = topDelegates.reduce((sum, d) => sum + d.votingPower, 0n);
-      setTotalDelegated(total);
-
-      if (publicKey) {
-        setCurrentDelegatee(await client.getDelegatee(publicKey));
-      } else {
-        setCurrentDelegatee(null);
-      }
-    } catch (err) {
-      console.error("Error fetching delegates:", err);
-      setError(
-        err instanceof Error ? err.message : "Failed to load delegates",
+      const delegates = await client.getTopDelegates(20);
+      const totalDelegated = delegates.reduce(
+        (sum, delegate) => sum + delegate.votingPower,
+        0n,
       );
-    } finally {
-      setLoading(false);
-    }
-  }
+      const currentDelegatee = publicKey
+        ? await client.getDelegatee(publicKey)
+        : null;
 
-  useEffect(() => {
-    fetchDelegates();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [publicKey]);
+      return {
+        delegates,
+        totalDelegated,
+        totalSupply: supply,
+        currentDelegatee,
+      };
+    },
+  });
 
   function handleDelegateClick(address: string) {
     setPrefillAddress(address);
     setModalOpen(true);
   }
+
+  const delegates: TopDelegate[] = data?.delegates ?? [];
+  const totalDelegated = data?.totalDelegated ?? 0n;
+  const totalSupply = data?.totalSupply ?? 0n;
+  const currentDelegatee = data?.currentDelegatee ?? null;
+  const errorMessage =
+    error instanceof Error ? error.message : error ? "Failed to load delegates" : null;
 
   const delegatedPercent =
     totalSupply > 0n
@@ -116,8 +107,8 @@ export default function DelegatesPage() {
     <div className="max-w-4xl mx-auto px-4 py-8">
       <div className="flex items-center justify-between mb-8">
         <div>
-          <h1 className="text-3xl font-bold text-gray-900">Delegates</h1>
-          <p className="text-gray-500 mt-1">
+          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Delegates</h1>
+          <p className="text-gray-500 dark:text-gray-400 mt-1">
             Top voting power holders in the protocol.
           </p>
         </div>
@@ -133,15 +124,15 @@ export default function DelegatesPage() {
       </div>
 
       {totalSupply > 0n && (
-        <div className="bg-white border border-gray-200 rounded-xl p-4 mb-6">
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4 mb-6">
           <div className="flex justify-between items-center mb-2">
-            <span className="text-sm text-gray-600">Total Delegated</span>
-            <span className="text-sm font-medium text-gray-900">
+            <span className="text-sm text-gray-600 dark:text-gray-400">Total Delegated</span>
+            <span className="text-sm font-medium text-gray-900 dark:text-white">
               {formatVotes(totalDelegated)} / {formatVotes(totalSupply)} (
               {delegatedPercent.toFixed(1)}%)
             </span>
           </div>
-          <div className="w-full bg-gray-200 rounded-full h-2">
+          <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2">
             <div
               className="bg-indigo-600 h-2 rounded-full transition-all"
               style={{ width: `${Math.min(delegatedPercent, 100)}%` }}
@@ -150,38 +141,38 @@ export default function DelegatesPage() {
         </div>
       )}
 
-      {error && (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-6">
-          <p className="text-red-800 text-sm font-medium">
+      {errorMessage && (
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4 mb-6">
+          <p className="text-red-800 dark:text-red-300 text-sm font-medium">
             Error loading delegates
           </p>
-          <p className="text-red-600 text-sm mt-1">{error}</p>
+          <p className="text-red-600 dark:text-red-400 text-sm mt-1">{errorMessage}</p>
         </div>
       )}
 
-      <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl overflow-hidden">
         <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
+          <thead className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700">
             <tr>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 #
               </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Delegate
               </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Votes
               </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 % of Supply
               </th>
-              <th className="py-3 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+              <th className="py-3 px-4 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                 Action
               </th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200">
-            {loading && (
+          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+            {isLoading && (
               <>
                 <DelegateSkeleton />
                 <DelegateSkeleton />
@@ -189,15 +180,15 @@ export default function DelegatesPage() {
               </>
             )}
 
-            {!loading && delegates.length === 0 && !error && (
+            {!isLoading && delegates.length === 0 && !errorMessage && (
               <tr>
-                <td colSpan={5} className="py-12 text-center text-gray-500">
+                <td colSpan={5} className="py-12 text-center text-gray-500 dark:text-gray-400">
                   No delegates found. Be the first to delegate!
                 </td>
               </tr>
             )}
 
-            {!loading &&
+            {!isLoading &&
               delegates.map((delegate, index) => {
                 const isCurrentUser = publicKey === delegate.address;
                 const percentOfSupply =
@@ -209,30 +200,30 @@ export default function DelegatesPage() {
                   <tr
                     key={delegate.address}
                     className={
-                      isCurrentUser ? "bg-indigo-50" : "hover:bg-gray-50"
+                      isCurrentUser ? "bg-indigo-50 dark:bg-indigo-900/20" : "hover:bg-gray-50 dark:hover:bg-gray-700/50"
                     }
                   >
-                    <td className="py-4 px-4 text-sm text-gray-500">
+                    <td className="py-4 px-4 text-sm text-gray-500 dark:text-gray-400">
                       {index + 1}
                     </td>
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-2">
-                        <span className="font-mono text-sm text-gray-900">
+                        <span className="font-mono text-sm text-gray-900 dark:text-white">
                           {formatAddress(delegate.address)}
                         </span>
                         {isCurrentUser && (
-                          <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">
+                          <span className="text-xs bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded">
                             You
                           </span>
                         )}
                       </div>
                     </td>
-                    <td className="py-4 px-4 text-sm font-medium text-gray-900">
+                    <td className="py-4 px-4 text-sm font-medium text-gray-900 dark:text-white">
                       {formatVotes(delegate.votingPower)}
                     </td>
                     <td className="py-4 px-4">
                       <div className="flex items-center gap-2">
-                        <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-[100px]">
+                        <div className="flex-1 bg-gray-200 dark:bg-gray-700 rounded-full h-2 max-w-[100px]">
                           <div
                             className="bg-indigo-600 h-2 rounded-full"
                             style={{
@@ -240,7 +231,7 @@ export default function DelegatesPage() {
                             }}
                           />
                         </div>
-                        <span className="text-sm text-gray-500">
+                        <span className="text-sm text-gray-500 dark:text-gray-400">
                           {percentOfSupply.toFixed(1)}%
                         </span>
                       </div>
@@ -260,14 +251,17 @@ export default function DelegatesPage() {
         </table>
       </div>
 
-      <p className="mt-4 text-xs text-gray-400 text-center">
+      <p className="mt-4 text-xs text-gray-400 dark:text-gray-500 text-center">
         Estimated data — depends on network conditions
       </p>
 
       <DelegateModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onDelegated={fetchDelegates}
+        onDelegated={() => {
+          queryClient.invalidateQueries({ queryKey: ["delegates"] });
+          queryClient.invalidateQueries({ queryKey: ["myVotingPower"] });
+        }}
         currentDelegatee={currentDelegatee}
       />
     </div>

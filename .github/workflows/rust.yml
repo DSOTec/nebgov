@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  STELLAR_CLI_VERSION: "22.0.1"
 
 jobs:
   fmt:
@@ -41,14 +42,26 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cache/soroban
+            ~/.stellar
             target
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Cache Stellar CLI
+        id: cache-stellar
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/stellar
+          key: ${{ runner.os }}-stellar-cli-${{ env.STELLAR_CLI_VERSION }}
 
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
       - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli
+        if: steps.cache-stellar.outputs.cache-hit != 'true'
+        run: cargo install --locked stellar-cli --version ${{ env.STELLAR_CLI_VERSION }}
 
       - name: Build WASMs for test dependencies
         run: |
@@ -103,14 +116,26 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cache/soroban
+            ~/.stellar
             target
           key: ${{ runner.os }}-cargo-clippy-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-clippy-
+
+      - name: Cache Stellar CLI
+        id: cache-stellar
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/stellar
+          key: ${{ runner.os }}-stellar-cli-${{ env.STELLAR_CLI_VERSION }}
 
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
       - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli
+        if: steps.cache-stellar.outputs.cache-hit != 'true'
+        run: cargo install --locked stellar-cli --version ${{ env.STELLAR_CLI_VERSION }}
 
       - name: Build WASMs for test dependencies
         run: |
@@ -134,6 +159,12 @@ jobs:
             -p sorogov-treasury \
             --all-targets \
             -- -D warnings
+      - name: Fail on TODO comments in governor contract
+        run: |
+          if grep -RIn --include='*.rs' 'TODO' contracts/governor/src/lib.rs; then
+            echo 'TODO comments found in contracts/governor/src/lib.rs';
+            exit 1;
+          fi
 
   build:
     name: Build WASM
@@ -152,14 +183,26 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            ~/.cache/soroban
+            ~/.stellar
             target
           key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wasm-
+
+      - name: Cache Stellar CLI
+        id: cache-stellar
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/stellar
+          key: ${{ runner.os }}-stellar-cli-${{ env.STELLAR_CLI_VERSION }}
 
       - name: Install System Dependencies
         run: sudo apt-get update && sudo apt-get install -y libdbus-1-dev libudev-dev pkg-config
 
       - name: Install Stellar CLI
-        run: cargo install --locked stellar-cli
+        if: steps.cache-stellar.outputs.cache-hit != 'true'
+        run: cargo install --locked stellar-cli --version ${{ env.STELLAR_CLI_VERSION }}
 
       - name: Build release WASM
         run: |
@@ -222,7 +265,7 @@ jobs:
     name: Security Scan
     needs: [build]
     runs-on: ubuntu-latest
-    continue-on-error: true
+    continue-on-error: false
     steps:
       - uses: actions/checkout@v4
 
@@ -259,7 +302,7 @@ jobs:
         uses: CoinFabrik/scout-actions@v3.2
         with:
           working_directory: .
-          fail_on_error: false
+          fail_on_error: true
 
   security-audit:
     runs-on: ubuntu-latest
