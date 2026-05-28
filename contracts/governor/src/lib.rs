@@ -687,6 +687,12 @@ impl GovernorContract {
             env.panic_with_error(GovernorError::AlreadyVoted);
         }
 
+        // Write HasVoted BEFORE any cross-contract call (compute_votes) to prevent
+        // a malicious token contract from re-entering cast_vote for double weight.
+        env.storage()
+            .persistent()
+            .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
+
         let mut proposal = Self::must_get_proposal(&env, proposal_id);
 
         // Look up the voter's snapshot voting power at the proposal's start ledger
@@ -714,9 +720,6 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-        env.storage()
-            .persistent()
-            .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
 
         // Store voting receipt
         let receipt = VotingReceipt {
@@ -755,6 +758,12 @@ impl GovernorContract {
             env.panic_with_error(GovernorError::AlreadyVoted);
         }
 
+        // Write HasVoted BEFORE the cross-contract call (compute_votes) to prevent
+        // a malicious token contract from re-entering cast_vote_with_reason.
+        env.storage()
+            .persistent()
+            .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
+
         let mut proposal = Self::must_get_proposal(&env, proposal_id);
 
         // Look up the voter's snapshot voting power at the proposal's start ledger
@@ -780,9 +789,6 @@ impl GovernorContract {
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
-        env.storage()
-            .persistent()
-            .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
 
         // Store the reason in persistent storage
         env.storage()
