@@ -167,9 +167,16 @@ impl LiquidityContract {
         position.lp_tokens += lp_tokens;
         env.storage().persistent().set(&position_key, &position);
 
+        if pool.total_lp_supply == 0 {
+            env.events().publish(
+                (soroban_sdk::Symbol::new(&env, "PoolCreated"), na, nb),
+                (provider.clone(), deposit_a, deposit_b, lp_tokens),
+            );
+        }
+
         env.events().publish(
-            (symbol_short!("add_liq"), provider),
-            (na, nb, deposit_a, deposit_b, lp_tokens),
+            (soroban_sdk::Symbol::new(&env, "LiquidityAdded"), na, nb),
+            (provider.clone(), deposit_a, deposit_b, lp_tokens),
         );
 
         lp_tokens
@@ -230,8 +237,8 @@ impl LiquidityContract {
         };
 
         env.events().publish(
-            (symbol_short!("rm_liq"), provider.clone()),
-            (na, nb, out_a, out_b, lp_tokens),
+            (soroban_sdk::Symbol::new(&env, "LiquidityRemoved"), na, nb),
+            (provider.clone(), out_a, out_b, lp_tokens),
         );
 
         // Return the real tokens to the provider after burning their shares.
@@ -299,6 +306,11 @@ impl LiquidityContract {
             pool.reserve_b += amount_in;
             pool.reserve_a -= amount_out_with_fee;
         }
+
+        env.events().publish(
+            (soroban_sdk::Symbol::new(&env, "Swap"), na, nb),
+            (trader.clone(), amount_in, amount_out_with_fee, trading_a_to_b),
+        );
 
         env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
 
@@ -571,7 +583,7 @@ mod tests {
         client.add_liquidity(&provider, &outcome_a, &outcome_b, &100_000, &200_000);
 
         let events = env.events().all();
-        let event_symbol = Symbol::new(&env, "add_liq");
+        let event_symbol = Symbol::new(&env, "LiquidityAdded");
         let found = events.iter().any(|event| {
             if event.0 != contract_id {
                 return false;
@@ -697,7 +709,7 @@ mod tests {
         client.remove_liquidity(&provider, &outcome_a, &outcome_b, &lp);
 
         let events = env.events().all();
-        let event_symbol = Symbol::new(&env, "rm_liq");
+        let event_symbol = Symbol::new(&env, "LiquidityRemoved");
         let found = events.iter().any(|event| {
             if event.0 != contract_id {
                 return false;
