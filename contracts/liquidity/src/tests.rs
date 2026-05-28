@@ -155,7 +155,7 @@ fn test_update_pool_fee_rejects_non_governor() {
 }
 
 #[test]
-#[should_panic(expected = "amounts must be positive")]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn test_add_liquidity_rejects_zero_amounts() {
     let (env, contract_id, _, provider, _) = setup_liquidity();
     let client = LiquidityContractClient::new(&env, &contract_id);
