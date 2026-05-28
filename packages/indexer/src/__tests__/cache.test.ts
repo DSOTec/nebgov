@@ -55,11 +55,11 @@ describe("invalidatePattern()", () => {
     const fn = jest.fn().mockResolvedValue("x");
     await cached("proposals:0:20", 5000, fn);
     await cached("proposals:20:20", 5000, fn);
-    await cached("delegates:10", 5000, fn);
+    await cached("delegates:10:0", 5000, fn);
     invalidatePattern("proposals:");
     await cached("proposals:0:20", 5000, fn);
     await cached("proposals:20:20", 5000, fn);
-    await cached("delegates:10", 5000, fn); // should still be cached
+    await cached("delegates:10:0", 5000, fn); // should still be cached
     expect(fn).toHaveBeenCalledTimes(5); // 3 initial + 2 re-fetched proposals, delegates still cached
   });
 });

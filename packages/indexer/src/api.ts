@@ -465,24 +465,44 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
-  // GET /delegates?top=20
+  // GET /delegates?limit=20&offset=0
   app.get("/delegates", strictLimiter, async (req: Request, res: Response): Promise<void> => {
-    const top = Math.min(Number(req.query.top ?? 20), 100);
-    const key = `delegates:${top}`;
+    const limit = Math.min(Number(req.query.limit ?? 20), 100);
+    const offset = Math.max(Number(req.query.offset ?? 0), 0);
+    const key = `delegates:${limit}:${offset}`;
     try {
       const data = await cached(key, TTL.delegates, async () => {
-        const result = await pool.query(
-          `SELECT new_delegatee as address, COUNT(*) as delegator_count
-           FROM delegates d1
-           WHERE ledger = (
-             SELECT MAX(d2.ledger) FROM delegates d2 WHERE d2.delegator = d1.delegator
-           )
-           GROUP BY new_delegatee
-           ORDER BY delegator_count DESC
-           LIMIT $1`,
-          [top],
-        );
-        return { delegates: result.rows };
+        const [countResult, result] = await Promise.all([
+          pool.query(
+            `WITH latest_delegations AS (
+              SELECT DISTINCT ON (delegator) delegator, new_delegatee
+              FROM delegates
+              ORDER BY delegator, ledger DESC
+            )
+            SELECT COUNT(DISTINCT new_delegatee)::int AS total FROM latest_delegations`
+          ),
+          pool.query(
+            `WITH latest_delegations AS (
+              SELECT DISTINCT ON (delegator) delegator, new_delegatee
+              FROM delegates
+              ORDER BY delegator, ledger DESC
+            )
+            SELECT new_delegatee AS address, COUNT(*)::int AS delegator_count
+            FROM latest_delegations
+            GROUP BY new_delegatee
+            ORDER BY delegator_count DESC
+            LIMIT $1 OFFSET $2`,
+            [limit, offset],
+          ),
+        ]);
+        const total = countResult.rows[0]?.total ?? 0;
+        return {
+          delegates: result.rows,
+          total,
+          limit,
+          offset,
+          hasMore: offset + limit < total,
+        };
       });
       res.json(data);
     } catch {

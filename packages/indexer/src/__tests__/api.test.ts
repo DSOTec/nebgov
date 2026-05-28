@@ -271,6 +271,61 @@ describe("GET /proposals with cursor pagination", () => {
       expect(response.body).toEqual({ error: "Internal server error" });
     });
   });
+
+  describe("GET /delegates", () => {
+    const mockDelegates = [
+      { address: "GABC456...", delegator_count: 12 },
+      { address: "GDEF789...", delegator_count: 8 },
+    ];
+
+    it("should return paginated delegates with total count", async () => {
+      (mockPool.query as jest.Mock)
+        .mockResolvedValueOnce({ rows: [{ total: 25 }] })
+        .mockResolvedValueOnce({ rows: mockDelegates });
+
+      const response = await request(app).get("/delegates?limit=2&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.delegates).toEqual(mockDelegates);
+      expect(response.body.total).toBe(25);
+      expect(response.body.limit).toBe(2);
+      expect(response.body.offset).toBe(0);
+      expect(response.body.hasMore).toBe(true);
+    });
+
+    it("should use default limit=20 offset=0 when no params provided", async () => {
+      (mockPool.query as jest.Mock)
+        .mockResolvedValueOnce({ rows: [{ total: 0 }] })
+        .mockResolvedValueOnce({ rows: [] });
+
+      const response = await request(app).get("/delegates");
+
+      expect(response.status).toBe(200);
+      expect(response.body.limit).toBe(20);
+      expect(response.body.offset).toBe(0);
+      expect(response.body.total).toBe(0);
+    });
+
+    it("should return hasMore=false when offset+limit >= total", async () => {
+      (mockPool.query as jest.Mock)
+        .mockResolvedValueOnce({ rows: [{ total: 10 }] })
+        .mockResolvedValueOnce({ rows: mockDelegates });
+
+      const response = await request(app).get("/delegates?limit=10&offset=5");
+
+      expect(response.status).toBe(200);
+      expect(response.body.hasMore).toBe(false);
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("DB error"));
+
+      const response = await request(app).get("/delegates?limit=10");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
