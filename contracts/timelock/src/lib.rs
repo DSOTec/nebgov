@@ -10,6 +10,14 @@ use soroban_sdk::{
 /// Absolute minimum delay in seconds that the admin is allowed to set.
 const MIN_DELAY: u64 = 86_400;
 
+/// Minimum execution window in seconds the admin is allowed to set. A window
+/// smaller than this would risk operations expiring before they can be run.
+const MIN_EXECUTION_WINDOW: u64 = 3_600;
+
+/// Maximum execution window in seconds the admin is allowed to set (~1 year),
+/// preventing an absurdly large window from being configured.
+const MAX_EXECUTION_WINDOW: u64 = 31_536_000;
+
 /// Timelock error codes.
 #[contracterror]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -22,6 +30,10 @@ pub enum TimelockError {
     OperationExpired = 3,
     /// New delay is below the absolute minimum allowed.
     DelayTooShort = 4,
+    /// Operation has already been executed or cancelled and cannot be re-scheduled.
+    OperationFinalized = 5,
+    /// New execution window is outside the allowed bounds.
+    ExecutionWindowOutOfRange = 6,
 }
 
 /// A scheduled timelock operation.
@@ -188,6 +200,18 @@ impl TimelockContract {
             predecessor.clone(),
             salt,
         );
+
+        // Same protection as single operations: a finalized batch must not be
+        // resurrected and executed again.
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<_, BatchOperation>(&DataKey::BatchOperation(batch_op_id.clone()))
+        {
+            if existing.executed || existing.cancelled {
+                env.panic_with_error(TimelockError::OperationFinalized);
+            }
+        }
 
         let batch = BatchOperation {
             targets,
@@ -432,6 +456,9 @@ impl TimelockContract {
     pub fn update_execution_window(env: Env, caller: Address, new_window: u64) {
         caller.require_auth();
         assert!(caller == Self::admin(env.clone()), "only admin");
+        if !(MIN_EXECUTION_WINDOW..=MAX_EXECUTION_WINDOW).contains(&new_window) {
+            env.panic_with_error(TimelockError::ExecutionWindowOutOfRange);
+        }
         let old_window: u64 = env
             .storage()
             .instance()
@@ -477,6 +504,19 @@ impl TimelockContract {
             predecessor.clone(),
             salt,
         );
+
+        // Re-scheduling a still-pending operation is idempotent, but resurrecting
+        // one that has already executed or been cancelled would allow it to run a
+        // second time. Block that to prevent double execution.
+        if let Some(existing) = env
+            .storage()
+            .persistent()
+            .get::<_, Operation>(&DataKey::Operation(op_id.clone()))
+        {
+            if existing.executed || existing.cancelled {
+                env.panic_with_error(TimelockError::OperationFinalized);
+            }
+        }
 
         let op = Operation {
             target,
