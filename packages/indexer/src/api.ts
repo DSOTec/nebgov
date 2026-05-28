@@ -118,6 +118,12 @@ const TTL = {
 
 const HEALTH_LAG_THRESHOLD = Number(process.env.HEALTH_LAG_THRESHOLD ?? 100);
 const STELLAR_LEDGER_CLOSE_TIME_SECONDS = 5; // Stellar ledgers close approximately every 5 seconds
+const STELLAR_PUBLIC_KEY_REGEX = /^G[A-Z2-7]{55}$/;
+const INVALID_ADDRESS_ERROR = "Invalid Stellar address";
+
+function isValidStellarPublicKey(address: string): boolean {
+  return STELLAR_PUBLIC_KEY_REGEX.test(address);
+}
 
 interface HealthResponse {
   status: "ok" | "degraded";
@@ -329,7 +335,8 @@ export function createApp(server: SorobanRpc.Server): express.Application {
           };
         });
         res.json(data);
-      } catch {
+      } catch (error) {
+        console.error("Profile lookup error:", error);
         res.status(500).json({ error: "Internal server error" });
       }
     },
@@ -515,7 +522,14 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     "/profile/:address",
     strictLimiter,
     async (req: Request, res: Response): Promise<void> => {
-      const { address } = req.params;
+      // Validate before querying to avoid malformed input reaching the database.
+      const normalizedAddress = req.params.address.trim().toUpperCase();
+      if (!isValidStellarPublicKey(normalizedAddress)) {
+        res.status(400).json({ error: INVALID_ADDRESS_ERROR });
+        return;
+      }
+
+      const address = normalizedAddress;
       const key = `profile:${address}`;
       try {
         const data = await cached(key, TTL.profile, async () => {
