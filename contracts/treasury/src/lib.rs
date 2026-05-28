@@ -550,9 +550,10 @@ impl TreasuryContract {
         let op_hash = Bytes::from_array(&env, &hash.to_array());
 
         env.events().publish(
-            (symbol_short!("bat_xfer"),),
-            (op_hash.clone(), recipients.len()),
+            (symbol_short!("bat_xfer"), token.clone()),
+            (op_hash.clone(), recipients.len() as u32, total_amount),
         );
+
 
         op_hash
     }

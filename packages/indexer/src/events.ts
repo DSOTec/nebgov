@@ -135,10 +135,10 @@ export async function processEvents(
               await handleVoteCast(event, topics, true);
               break;
             case "ProposalQueued":
-              await handleProposalQueued(topics);
+              await handleProposalQueued(event, topics);
               break;
             case "ProposalExecuted":
-              await handleProposalExecuted(topics);
+              await handleProposalExecuted(event, topics);
               break;
             case "DelegateChanged":
               await handleDelegateChanged(event, topics);
@@ -180,17 +180,35 @@ async function handleProposalCreated(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
 ): Promise<void> {
-  const proposer = topics[1] as string;
-  const data = scValToNative(event.value) as unknown[];
-  const [id, description, , , , startLedger, endLedger] = data as [
-    bigint,
-    string,
-    unknown,
-    unknown,
-    unknown,
-    number,
-    number,
-  ];
+  const data = scValToNative(event.value);
+  let id: bigint | number;
+  let description: string;
+  let startLedger: number;
+  let endLedger: number;
+  let proposer = topics[1] as string;
+
+  if (Array.isArray(data)) {
+    [id, description, , , , startLedger, endLedger] = data as [
+      bigint | number,
+      string,
+      unknown,
+      unknown,
+      unknown,
+      number,
+      number,
+    ];
+  } else if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    id = (obj.id ?? obj.proposal_id) as bigint | number;
+    description = String(obj.description ?? "");
+    startLedger = Number(obj.start_ledger ?? obj.vote_start ?? obj.start);
+    endLedger = Number(obj.end_ledger ?? obj.vote_end ?? obj.end);
+    if (obj.proposer !== undefined) {
+      proposer = String(obj.proposer);
+    }
+  } else {
+    throw new Error("Invalid proposal created event format");
+  }
 
   invalidatePattern("proposals:");
   await pool.query(
@@ -211,7 +229,7 @@ async function handleVoteCast(
   topics: unknown[],
   withReason: boolean,
 ): Promise<void> {
-  const data = scValToNative(event.value) as unknown[];
+  const data = scValToNative(event.value);
   let voter: string;
   let proposalId: string;
   let support: number;
@@ -221,19 +239,41 @@ async function handleVoteCast(
   if (withReason) {
     // topic: (event_name, proposal_id, voter)
     // value: (support, weight, reason)
-    voter = topics[2] as string;
-    proposalId = String(topics[1] as bigint);
-    support = Number(data[0]);
-    weight = String(data[1]);
-    reason = String(data[2]);
+    if (Array.isArray(data)) {
+      voter = topics[2] as string;
+      proposalId = String(topics[1] as bigint);
+      support = Number(data[0]);
+      weight = String(data[1]);
+      reason = String(data[2]);
+    } else if (data && typeof data === "object") {
+      const obj = data as Record<string, unknown>;
+      voter = String(obj.voter ?? topics[2] ?? "");
+      proposalId = String(obj.id ?? obj.proposal_id);
+      support = Number(obj.support);
+      weight = String(obj.weight ?? "0");
+      reason = obj.reason ? String(obj.reason) : null;
+    } else {
+      throw new Error("Invalid vote cast with reason event format");
+    }
   } else {
     // topic: (event_name, voter)
     // value: (proposal_id, support, weight)
-    voter = topics[1] as string;
-    proposalId = String(data[0] as bigint);
-    support = Number(data[1]);
-    weight = String(data[2]);
-    reason = null;
+    if (Array.isArray(data)) {
+      voter = topics[1] as string;
+      proposalId = String(data[0] as bigint);
+      support = Number(data[1]);
+      weight = String(data[2]);
+      reason = null;
+    } else if (data && typeof data === "object") {
+      const obj = data as Record<string, unknown>;
+      voter = String(obj.voter ?? topics[1] ?? "");
+      proposalId = String(obj.id ?? obj.proposal_id);
+      support = Number(obj.support);
+      weight = String(obj.weight ?? "0");
+      reason = null;
+    } else {
+      throw new Error("Invalid vote cast event format");
+    }
   }
 
   // Upsert vote
@@ -266,8 +306,18 @@ async function handleVoteCast(
   });
 }
 
-async function handleProposalQueued(topics: unknown[]): Promise<void> {
-  const proposalId = String(topics[1] as bigint);
+async function handleProposalQueued(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value);
+  let proposalId: string;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const obj = data as Record<string, unknown>;
+    proposalId = String(obj.id ?? obj.proposal_id);
+  } else {
+    proposalId = String(topics[1] as bigint);
+  }
   await pool.query("UPDATE proposals SET queued = true WHERE id = $1", [
     proposalId,
   ]);
@@ -276,8 +326,18 @@ async function handleProposalQueued(topics: unknown[]): Promise<void> {
   broadcast({ type: "proposal_queued", data: { proposal_id: proposalId } });
 }
 
-async function handleProposalExecuted(topics: unknown[]): Promise<void> {
-  const proposalId = String(topics[1] as bigint);
+async function handleProposalExecuted(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value);
+  let proposalId: string;
+  if (data && typeof data === "object" && !Array.isArray(data)) {
+    const obj = data as Record<string, unknown>;
+    proposalId = String(obj.id ?? obj.proposal_id);
+  } else {
+    proposalId = String(topics[1] as bigint);
+  }
   await pool.query("UPDATE proposals SET executed = true WHERE id = $1", [
     proposalId,
   ]);
@@ -345,20 +405,35 @@ async function handleTreasuryBatchTransfer(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
 ): Promise<void> {
-  // Event: topics = ("bat_xfer", token_address)
-  //        value  = (op_hash: Bytes, recipient_count: u32, total_amount: i128)
-  const token = topics[1] as string;
-  const data = scValToNative(event.value) as unknown[];
-  const opHashBytes = data[0] as Uint8Array;
-  const opHash = Buffer.from(opHashBytes).toString("hex");
-  const recipientCount = Number(data[1]);
-  const totalAmount = String(data[2] as bigint);
+  const data = scValToNative(event.value);
+  let token = topics[1] as string | undefined;
+  let opHash: string;
+  let recipientCount: number;
+  let totalAmount: string;
+
+  if (Array.isArray(data)) {
+    const opHashBytes = data[0] as Uint8Array;
+    opHash = Buffer.from(opHashBytes).toString("hex");
+    recipientCount = Number(data[1]);
+    totalAmount = data[2] !== undefined ? String(data[2] as bigint) : "0";
+  } else if (data && typeof data === "object") {
+    const obj = data as Record<string, unknown>;
+    const opHashBytes = (obj.op_hash ?? obj.operation_hash) as Uint8Array;
+    opHash = Buffer.from(opHashBytes).toString("hex");
+    recipientCount = Number(obj.recipient_count ?? obj.recipients_len ?? obj.count);
+    totalAmount = String((obj.total_amount ?? obj.amount) as bigint);
+    if (obj.token ?? obj.token_address) {
+      token = String(obj.token ?? obj.token_address);
+    }
+  } else {
+    throw new Error("Invalid treasury batch transfer event format");
+  }
 
   await pool.query(
     `INSERT INTO treasury_transfers (op_hash, token, recipient_count, total_amount, ledger)
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT DO NOTHING`,
-    [opHash, token, recipientCount, totalAmount, event.ledger],
+    [opHash, token ?? null, recipientCount, totalAmount, event.ledger],
   );
 }
 
