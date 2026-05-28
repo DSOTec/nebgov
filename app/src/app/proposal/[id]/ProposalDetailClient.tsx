@@ -62,6 +62,14 @@ function supportLabel(support: number): string {
   return "Abstain";
 }
 
+function explorerTxUrl(network: Network, txHash: string): string {
+  const base =
+    network === "mainnet"
+      ? "https://stellar.expert/explorer/public"
+      : "https://stellar.expert/explorer/testnet";
+  return `${base}/tx/${txHash}`;
+}
+
 function reasonPreview(reason: string, expanded: boolean): string {
   if (expanded || reason.length <= 200) return reason;
   return `${reason.slice(0, 200)}...`;
@@ -115,6 +123,16 @@ export default function ProposalDetailClient({ params }: Props) {
   const [voteError, setVoteError] = useState<string | null>(null);
   const [votedSupport, setVotedSupport] = useState<VoteSupport | null>(null);
   const [voteType, setVoteType] = useState<VoteType>(VoteType.Simple);
+  // Queue / Execute lifecycle actions (issue #362)
+  const [isQueuing, setIsQueuing] = useState(false);
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionTxHash, setActionTxHash] = useState<string | null>(null);
+  const [timelockInfo, setTimelockInfo] = useState<{
+    executableAtLedger: number;
+    executionDeadlineLedger: number;
+  } | null>(null);
+  const [latestLedger, setLatestLedger] = useState<number | null>(null);
   const [currentDelegatee, setCurrentDelegatee] = useState<string | null>(null);
   const [delegationError, setDelegationError] = useState<string | null>(null);
 
@@ -254,6 +272,39 @@ export default function ProposalDetailClient({ params }: Props) {
       .catch(() => {});
   }, [governorClient]);
 
+  // Load timelock timing for the Execute countdown while a proposal is Queued.
+  useEffect(() => {
+    if (!governorClient || proposal.state !== ProposalState.Queued) {
+      setTimelockInfo(null);
+      setLatestLedger(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [info, ledger] = await Promise.all([
+          governorClient.getTimelockInfo(proposalId),
+          governorClient.getLatestLedger(),
+        ]);
+        if (!cancelled) {
+          setTimelockInfo({
+            executableAtLedger: info.executableAtLedger,
+            executionDeadlineLedger: info.executionDeadlineLedger,
+          });
+          setLatestLedger(ledger);
+        }
+      } catch {
+        if (!cancelled) {
+          setTimelockInfo(null);
+          setLatestLedger(null);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [governorClient, proposal.state, proposalId]);
+
   useEffect(() => {
     if (!votesClient || !publicKey) {
       setCurrentDelegatee(null);
@@ -356,6 +407,27 @@ export default function ProposalDetailClient({ params }: Props) {
     quorumValue > 0n ? Math.min(100, Number((quorumVotes * 100n) / quorumValue)) : 0;
   const quorumColor = quorumReached ? "bg-green-500" : "bg-blue-500";
 
+  const ledgersUntilExecutable =
+    timelockInfo !== null && latestLedger !== null
+      ? Math.max(0, timelockInfo.executableAtLedger - latestLedger)
+      : null;
+  // Stellar closes a ledger roughly every 5 seconds.
+  const minutesUntilExecutable =
+    ledgersUntilExecutable !== null
+      ? Math.ceil((ledgersUntilExecutable * 5) / 60)
+      : null;
+  const executeReady =
+    proposal.state === ProposalState.Queued &&
+    latestLedger !== null &&
+    timelockInfo !== null &&
+    latestLedger >= timelockInfo.executableAtLedger &&
+    latestLedger <= timelockInfo.executionDeadlineLedger;
+  const executeExpired =
+    proposal.state === ProposalState.Queued &&
+    latestLedger !== null &&
+    timelockInfo !== null &&
+    latestLedger > timelockInfo.executionDeadlineLedger;
+
   async function handleCastVote() {
     if (selectedSupport === null || !governorClient || !publicKey || isVoting)
       return;
@@ -404,6 +476,48 @@ export default function ProposalDetailClient({ params }: Props) {
       setVoteError(message);
     } finally {
       setIsVoting(false);
+    }
+  }
+
+  async function handleQueue() {
+    if (!governorClient || !publicKey || isQueuing) return;
+    setIsQueuing(true);
+    setActionError(null);
+    setActionTxHash(null);
+    try {
+      const hash = await governorClient.queueWithSign(
+        publicKey,
+        proposalId,
+        signTransaction,
+      );
+      setActionTxHash(hash);
+      await loadProposal();
+    } catch (err) {
+      reportFrontendError("proposal_queue", err, { proposalId: params.id });
+      setActionError(getErrorMessage(err));
+    } finally {
+      setIsQueuing(false);
+    }
+  }
+
+  async function handleExecute() {
+    if (!governorClient || !publicKey || isExecuting) return;
+    setIsExecuting(true);
+    setActionError(null);
+    setActionTxHash(null);
+    try {
+      const hash = await governorClient.executeWithSign(
+        publicKey,
+        proposalId,
+        signTransaction,
+      );
+      setActionTxHash(hash);
+      await loadProposal();
+    } catch (err) {
+      reportFrontendError("proposal_execute", err, { proposalId: params.id });
+      setActionError(getErrorMessage(err));
+    } finally {
+      setIsExecuting(false);
     }
   }
 
@@ -817,6 +931,119 @@ export default function ProposalDetailClient({ params }: Props) {
         )}
       </div>
       </ErrorBoundary>
+
+      {/* Queue / Execute lifecycle actions (issue #362) */}
+      {(proposal.state === ProposalState.Succeeded ||
+        proposal.state === ProposalState.Queued) && (
+        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-6">
+          <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-4">
+            Governance Actions
+          </h2>
+
+          {!isConnected ? (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                Connect your wallet to{" "}
+                {proposal.state === ProposalState.Succeeded
+                  ? "queue"
+                  : "execute"}{" "}
+                this proposal.
+              </p>
+              <button
+                onClick={connect}
+                className="inline-flex items-center justify-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-indigo-700"
+              >
+                Connect Wallet
+              </button>
+            </div>
+          ) : proposal.state === ProposalState.Succeeded ? (
+            <>
+              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                This proposal succeeded. Queue it to start the timelock delay
+                before execution.
+              </p>
+              <button
+                onClick={handleQueue}
+                disabled={isQueuing}
+                aria-busy={isQueuing}
+                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+              >
+                {isQueuing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Queuing...
+                  </>
+                ) : (
+                  "Queue Proposal"
+                )}
+              </button>
+            </>
+          ) : executeExpired ? (
+            <p className="text-sm text-amber-700 dark:text-amber-400">
+              The execution window for this proposal has passed.
+            </p>
+          ) : (
+            <>
+              {!executeReady && minutesUntilExecutable !== null && (
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                  Executable in ~{minutesUntilExecutable} min (
+                  {ledgersUntilExecutable} ledgers).
+                </p>
+              )}
+              <button
+                onClick={handleExecute}
+                disabled={!executeReady || isExecuting}
+                aria-busy={isExecuting}
+                className="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+              >
+                {isExecuting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Executing...
+                  </>
+                ) : executeReady ? (
+                  "Execute Proposal"
+                ) : minutesUntilExecutable !== null ? (
+                  `Executable in ~${minutesUntilExecutable} min`
+                ) : (
+                  "Checking timelock…"
+                )}
+              </button>
+            </>
+          )}
+
+          {actionError && (
+            <div
+              role="alert"
+              className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700 flex gap-2 items-start"
+            >
+              <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+              {actionError}
+            </div>
+          )}
+
+          {actionTxHash && (
+            <div
+              className="mt-4 p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-sm text-emerald-800 flex items-center gap-2"
+              aria-live="polite"
+            >
+              <span>Transaction submitted.</span>
+              <a
+                href={explorerTxUrl(
+                  (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network,
+                  actionTxHash,
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 font-medium underline"
+              >
+                View on explorer
+                <ExternalLink className="w-3.5 h-3.5" />
+              </a>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Voting UI */}
       {proposal.state === ProposalState.Active && !voted && (

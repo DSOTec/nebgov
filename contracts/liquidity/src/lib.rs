@@ -18,7 +18,9 @@
 //! - traders must authorize `swap`
 //! - only the configured governor may call `update_pool_fee`
 
-use soroban_sdk::{contract, contracterror, contractimpl, contracttype, Address, Env};
+use soroban_sdk::{
+    contract, contracterror, contractimpl, contracttype, symbol_short, token, Address, Env,
+};
 
 const MIN_LIQUIDITY: i128 = 1_000;
 const DEFAULT_FEE_BPS: u32 = 30;
@@ -44,6 +46,8 @@ enum DataKey {
     Governor,
     Pool(u32, u32),
     Position(Address, u32, u32),
+    /// SEP-41 token backing a given outcome id.
+    OutcomeToken(u32),
 }
 
 /// Liquidity contract error codes.
@@ -79,6 +83,24 @@ impl LiquidityContract {
             .expect("not initialized")
     }
 
+    /// Register the SEP-41 token backing an outcome. Only the governor may call
+    /// this. Once both outcomes of a pool have a registered token, liquidity and
+    /// swap operations move real tokens instead of tracking phantom balances.
+    pub fn set_outcome_token(env: Env, caller: Address, outcome: u32, token: Address) {
+        caller.require_auth();
+        Self::require_governor(&env, &caller);
+        env.storage()
+            .persistent()
+            .set(&DataKey::OutcomeToken(outcome), &token);
+    }
+
+    /// Return the SEP-41 token registered for an outcome, if any.
+    pub fn get_outcome_token(env: Env, outcome: u32) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OutcomeToken(outcome))
+    }
+
     /// Add liquidity to a pool and mint LP shares.
     pub fn add_liquidity(
         env: Env,
@@ -107,6 +129,17 @@ impl LiquidityContract {
             (amount_b, amount_a)
         };
 
+        // Pull the real tokens into the pool before minting LP shares, so the
+        // recorded reserves are always backed by actual on-chain balances.
+        if let (Some(token_a), Some(token_b)) = (
+            Self::outcome_token(&env, outcome_a),
+            Self::outcome_token(&env, outcome_b),
+        ) {
+            let contract = env.current_contract_address();
+            token::TokenClient::new(&env, &token_a).transfer(&provider, &contract, &amount_a);
+            token::TokenClient::new(&env, &token_b).transfer(&provider, &contract, &amount_b);
+        }
+
         let lp_tokens = if pool.total_lp_supply == 0 {
             deposit_a
         } else {
@@ -126,6 +159,11 @@ impl LiquidityContract {
             .unwrap_or(LPPosition { lp_tokens: 0 });
         position.lp_tokens += lp_tokens;
         env.storage().persistent().set(&position_key, &position);
+
+        env.events().publish(
+            (symbol_short!("add_liq"), provider),
+            (na, nb, deposit_a, deposit_b, lp_tokens),
+        );
 
         lp_tokens
     }
@@ -177,11 +215,29 @@ impl LiquidityContract {
         env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
         env.storage().persistent().set(&position_key, &position);
 
-        if !swapped {
+        // Amounts mapped back to the caller's requested outcome order.
+        let (out_a, out_b) = if !swapped {
             (amount_a_norm, amount_b_norm)
         } else {
             (amount_b_norm, amount_a_norm)
+        };
+
+        env.events().publish(
+            (symbol_short!("rm_liq"), provider.clone()),
+            (na, nb, out_a, out_b, lp_tokens),
+        );
+
+        // Return the real tokens to the provider after burning their shares.
+        if let (Some(token_a), Some(token_b)) = (
+            Self::outcome_token(&env, outcome_a),
+            Self::outcome_token(&env, outcome_b),
+        ) {
+            let contract = env.current_contract_address();
+            token::TokenClient::new(&env, &token_a).transfer(&contract, &provider, &out_a);
+            token::TokenClient::new(&env, &token_b).transfer(&contract, &provider, &out_b);
         }
+
+        (out_a, out_b)
     }
 
     /// Swap `amount_in` of one pool asset for the other.
@@ -234,6 +290,21 @@ impl LiquidityContract {
         }
 
         env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
+
+        // Move the real tokens: pull what the trader sends in, send out what
+        // they receive. Uses the caller's outcome ids directly.
+        if let (Some(token_in), Some(token_out)) = (
+            Self::outcome_token(&env, outcome_in),
+            Self::outcome_token(&env, outcome_out),
+        ) {
+            let contract = env.current_contract_address();
+            token::TokenClient::new(&env, &token_in).transfer(&trader, &contract, &amount_in);
+            token::TokenClient::new(&env, &token_out).transfer(
+                &contract,
+                &trader,
+                &amount_out_with_fee,
+            );
+        }
 
         amount_out_with_fee
     }
@@ -307,6 +378,12 @@ impl LiquidityContract {
         assert!(caller == &Self::governor(env.clone()), "only governor");
     }
 
+    fn outcome_token(env: &Env, outcome: u32) -> Option<Address> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::OutcomeToken(outcome))
+    }
+
     fn pool_key(outcome_a: u32, outcome_b: u32) -> DataKey {
         let (a, b, _swapped) = Self::normalize_outcomes(outcome_a, outcome_b);
         DataKey::Pool(a, b)
@@ -349,6 +426,7 @@ mod tests {
 
     fn setup() -> (Env, Address, Address, Address) {
         let env = Env::default();
+        env.mock_all_auths();
         let governor = Address::generate(&env);
         let provider = Address::generate(&env);
         let contract_id = env.register_contract(None, LiquidityContract);
@@ -495,6 +573,106 @@ mod tests {
             false
         });
         assert!(found);
+    }
+
+    /// Deploy the liquidity contract plus two SAC tokens registered to outcomes
+    /// 1 and 2, with `provider` funded. Returns the pieces tests need.
+    fn setup_with_tokens() -> (Env, Address, Address, Address, Address, Address) {
+        let env = Env::default();
+        env.mock_all_auths();
+        let governor = Address::generate(&env);
+        let provider = Address::generate(&env);
+        let contract_id = env.register_contract(None, LiquidityContract);
+        let client = LiquidityContractClient::new(&env, &contract_id);
+        client.initialize(&governor);
+
+        let admin = Address::generate(&env);
+        let token_a = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let token_b = env.register_stellar_asset_contract_v2(admin).address();
+
+        client.set_outcome_token(&governor, &1u32, &token_a);
+        client.set_outcome_token(&governor, &2u32, &token_b);
+
+        token::StellarAssetClient::new(&env, &token_a).mint(&provider, &500_000);
+        token::StellarAssetClient::new(&env, &token_b).mint(&provider, &500_000);
+
+        (env, provider, governor, contract_id, token_a, token_b)
+    }
+
+    #[test]
+    /// Issue #379: add_liquidity moves real tokens into the contract.
+    fn test_add_liquidity_transfers_real_tokens() {
+        let (env, provider, _governor, contract_id, token_a, token_b) = setup_with_tokens();
+        let client = LiquidityContractClient::new(&env, &contract_id);
+
+        client.add_liquidity(&provider, &1u32, &2u32, &100_000, &200_000);
+
+        let tok_a = token::TokenClient::new(&env, &token_a);
+        let tok_b = token::TokenClient::new(&env, &token_b);
+        // Pool now holds the deposited tokens; provider was debited.
+        assert_eq!(tok_a.balance(&contract_id), 100_000);
+        assert_eq!(tok_b.balance(&contract_id), 200_000);
+        assert_eq!(tok_a.balance(&provider), 400_000);
+        assert_eq!(tok_b.balance(&provider), 300_000);
+    }
+
+    #[test]
+    /// Issue #379: remove_liquidity returns real tokens to the provider.
+    fn test_remove_liquidity_returns_real_tokens() {
+        let (env, provider, _governor, contract_id, token_a, token_b) = setup_with_tokens();
+        let client = LiquidityContractClient::new(&env, &contract_id);
+
+        let lp = client.add_liquidity(&provider, &1u32, &2u32, &100_000, &200_000);
+        client.remove_liquidity(&provider, &1u32, &2u32, &lp);
+
+        let tok_a = token::TokenClient::new(&env, &token_a);
+        let tok_b = token::TokenClient::new(&env, &token_b);
+        // Full withdrawal drains the pool back to the provider.
+        assert_eq!(tok_a.balance(&contract_id), 0);
+        assert_eq!(tok_b.balance(&contract_id), 0);
+        assert_eq!(tok_a.balance(&provider), 500_000);
+        assert_eq!(tok_b.balance(&provider), 500_000);
+    }
+
+    #[test]
+    /// Issue #379: swap pulls the input token and pays out the output token.
+    fn test_swap_transfers_real_tokens() {
+        let (env, provider, _governor, contract_id, token_a, token_b) = setup_with_tokens();
+        let client = LiquidityContractClient::new(&env, &contract_id);
+
+        client.add_liquidity(&provider, &1u32, &2u32, &100_000, &200_000);
+
+        let trader = Address::generate(&env);
+        token::StellarAssetClient::new(&env, &token_a).mint(&trader, &50_000);
+
+        let amount_out = client.swap(&trader, &1u32, &2u32, &10_000, &1i128);
+
+        let tok_a = token::TokenClient::new(&env, &token_a);
+        let tok_b = token::TokenClient::new(&env, &token_b);
+        // Trader paid token_a and received token_out.
+        assert_eq!(tok_a.balance(&trader), 40_000);
+        assert_eq!(tok_b.balance(&trader), amount_out);
+        // Contract reserves reflect the real movement.
+        assert_eq!(tok_a.balance(&contract_id), 110_000);
+        assert_eq!(tok_b.balance(&contract_id), 200_000 - amount_out);
+    }
+
+    #[test]
+    #[should_panic(expected = "only governor")]
+    /// Issue #379: only the governor may register outcome tokens.
+    fn test_set_outcome_token_requires_governor() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let governor = Address::generate(&env);
+        let contract_id = env.register_contract(None, LiquidityContract);
+        let client = LiquidityContractClient::new(&env, &contract_id);
+        client.initialize(&governor);
+
+        let not_governor = Address::generate(&env);
+        let token = env
+            .register_stellar_asset_contract_v2(Address::generate(&env))
+            .address();
+        client.set_outcome_token(&not_governor, &1u32, &token);
     }
 
     #[test]
