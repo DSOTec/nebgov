@@ -54,5 +54,57 @@ jobs:
       - name: Build backend
         run: pnpm --filter nebgov-backend run build
 
+      - name: Type check backend
+        run: pnpm --filter nebgov-backend exec tsc --noEmit
+
       - name: Test backend
         run: pnpm --filter nebgov-backend run test
+
+  indexer:
+    name: Indexer Build & Test
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: nebgov_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/nebgov_test
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run indexer database migrations
+        run: pnpm --filter @nebgov/indexer run migrate
+
+      - name: Type check indexer
+        run: pnpm --filter @nebgov/indexer exec tsc --noEmit
+
+      - name: Build indexer
+        run: pnpm --filter @nebgov/indexer run build
+
+      - name: Test indexer
+        run: pnpm --filter @nebgov/indexer run test
