@@ -55,13 +55,6 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
-function isEnvFallbackOwner(publicKey: string): boolean {
-  const raw = process.env.NEXT_PUBLIC_TREASURY_OWNER_PUBKEYS;
-  if (!raw?.trim()) return false;
-  const keys = raw.split(",").map((s) => s.trim().toUpperCase());
-  return keys.includes(publicKey.toUpperCase());
-}
-
 export default function TreasuryPage() {
   const { isConnected, publicKey, signTransaction } = useWallet();
 
