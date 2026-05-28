@@ -522,6 +522,7 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     "/profile/:address",
     strictLimiter,
     async (req: Request, res: Response): Promise<void> => {
+      // Validate before querying to avoid malformed input reaching the database.
       const normalizedAddress = req.params.address.trim().toUpperCase();
       if (!isValidStellarPublicKey(normalizedAddress)) {
         res.status(400).json({ error: INVALID_ADDRESS_ERROR });
