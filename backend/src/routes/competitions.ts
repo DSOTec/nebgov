@@ -152,7 +152,7 @@ router.get(
   },
 );
 
-// GET /competitions/:id - Get single competition
+// GET /competitions/:id - Get single competition with user participation state
 router.get(
   "/:id",
   authenticate,
