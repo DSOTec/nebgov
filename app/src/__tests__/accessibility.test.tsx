@@ -1,10 +1,20 @@
 /**
  * @jest-environment jsdom
  */
+/// <reference types="@testing-library/jest-dom" />
 
 import React from 'react';
 import { render } from '@testing-library/react';
 import { axe, toHaveNoViolations } from 'jest-axe';
+
+declare global {
+  // eslint-disable-next-line @typescript-eslint/no-namespace
+  namespace jest {
+    interface Matchers<R> {
+      toHaveNoViolations(): R;
+    }
+  }
+}
 import { VotingModal } from '../components/VotingModal';
 import { VoteSupport } from '@nebgov/sdk';
 

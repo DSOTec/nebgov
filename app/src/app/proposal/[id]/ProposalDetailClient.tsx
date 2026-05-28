@@ -351,6 +351,11 @@ export default function ProposalDetailClient({ params }: Props) {
   const totalVotes =
     proposal.votesFor + proposal.votesAgainst + proposal.votesAbstain;
 
+  const quorumVotes = proposal.votesFor + proposal.votesAbstain;
+  const quorumPercentage =
+    quorumValue > 0n ? Math.min(100, Number((quorumVotes * 100n) / quorumValue)) : 0;
+  const quorumColor = quorumReached ? "bg-green-500" : "bg-blue-500";
+
   async function handleCastVote() {
     if (selectedSupport === null || !governorClient || !publicKey || isVoting)
       return;
