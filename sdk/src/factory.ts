@@ -27,6 +27,11 @@ export class FactoryClient {
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
   }
 
+  /**
+   * Get the total number of governor instances deployed via this factory.
+   *
+   * @returns The governor count, or 0n on simulation error
+   */
   async getGovernorCount(): Promise<bigint> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
@@ -44,6 +49,13 @@ export class FactoryClient {
     return raw ? BigInt(scValToNative(raw)) : 0n;
   }
 
+  /**
+   * Fetch a governor entry by its sequential ID.
+   *
+   * @param id - The governor ID (1-indexed) to look up
+   * @returns The governor entry with addresses and token info
+   * @throws {Error} If the simulation fails or returns no value
+   */
   async getGovernor(id: bigint): Promise<GovernorEntry> {
     const result = await this.server.simulateTransaction(
       new TransactionBuilder(
@@ -70,6 +82,12 @@ export class FactoryClient {
     return scValToNative(raw) as GovernorEntry;
   }
 
+  /**
+   * Fetch all governor entries deployed through this factory with optional pagination.
+   *
+   * @param opts - Pagination options (limit and offset)
+   * @returns Array of governor entries, empty if none exist
+   */
   async getAllGovernors(opts?: {
     limit?: number;
     offset?: number;

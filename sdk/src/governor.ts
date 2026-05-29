@@ -186,13 +186,13 @@ export class GovernorClient {
   /**
    * Create a new governance proposal (multi-action, matching on-chain `propose`).
    *
-   * @param signer The account proposing the change
-   * @param description A brief summary of the proposal
-   * @param descriptionHash SHA-256 hash of the full description (hex string)
-   * @param metadataUri URI pointing to the full description (ipfs:// or https://)
-   * @param targets Calldata targets (same length as `fnNames` / `calldatas`)
-   * @param fnNames Function names on each target
-   * @param calldatas Encoded arguments for each call
+   * @param signer - The account proposing the change
+   * @param description - A brief summary of the proposal
+   * @param descriptionHashOrTargets - SHA-256 hex hash, or legacy targets array
+   * @param metadataUriOrFnNames - IPFS/https URI, or legacy fnNames array
+   * @param targetsOrCalldatas - Targets array (modern) or calldatas array (legacy)
+   * @param fnNamesArg - Function names on each target (modern signature)
+   * @param calldatasArg - Encoded arguments for each call (modern signature)
    * @returns The unique identifier of the created proposal
    */
   async propose(
@@ -344,7 +344,11 @@ export class GovernorClient {
     return { proposalId, txHash: result.hash };
   }
 
-  /** Minimum voting power required to create a proposal (`proposal_threshold`). */
+  /**
+   * Query the minimum voting power required to create a proposal.
+   *
+   * @returns The proposal threshold in raw voting-power units. Returns 0n on simulation error.
+   */
   async proposalThreshold(): Promise<bigint> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
@@ -364,7 +368,13 @@ export class GovernorClient {
     });
   }
 
-  /** Read the full governor settings struct via `get_settings()`. */
+  /**
+   * Read the full on-chain governor settings struct.
+   *
+   * @param sourceAccount - Optional alternate account to use for the simulation
+   * @returns Parsed GovernorSettings with all configurable parameters
+   * @throws {Error} If the simulation fails or no return value is received
+   */
   async getSettings(
     sourceAccount?: string,
   ): Promise<GovernorSettings> {
@@ -421,7 +431,13 @@ export class GovernorClient {
   }
 
   /**
-   * Simulate a single contract invocation (for validating calldata before proposing).
+   * Simulate a single contract invocation to validate calldata before proposing.
+   *
+   * @param footprintSourceAccount - Account used for the simulation footprint
+   * @param contractId - Target contract address
+   * @param functionName - Function to invoke
+   * @param args - XDR ScVal arguments for the function
+   * @returns Result indicating success/failure with optional CPU and memory cost hints
    */
   async simulateTargetInvocation(
     footprintSourceAccount: string,
@@ -463,7 +479,11 @@ export class GovernorClient {
   }
 
   /**
-   * Simulate each action in a proposal and aggregate compute hints.
+   * Simulate each action in a proposal and aggregate compute resource hints.
+   *
+   * @param actions - Array of proposal actions to simulate sequentially
+   * @param sourceAccount - Optional alternate account for simulation footprint
+   * @returns Aggregated simulation result with total compute units and per-action errors
    */
   async simulateProposal(
     actions: ProposalAction[],
@@ -524,7 +544,18 @@ export class GovernorClient {
     });
   }
 
-  /** Resource hints for the full `propose` transaction (simulation only). */
+  /**
+   * Simulate the full `propose` transaction and return resource cost hints.
+   *
+   * @param proposer - Stellar address of the proposer
+   * @param description - Human-readable proposal summary
+   * @param descriptionHash - SHA-256 hash of the full description (hex)
+   * @param metadataUri - URI pointing to the full description
+   * @param targets - Contract addresses to invoke
+   * @param fnNames - Function names on each target
+   * @param calldatas - Encoded arguments for each call
+   * @returns Cost estimates including CPU instructions and memory bytes
+   */
   async estimateProposeResources(
     proposer: string,
     description: string,
@@ -585,11 +616,12 @@ export class GovernorClient {
   }
 
   /**
-   * Simulate the governor's `estimate_execution_gas` view and return its cost hint.
+   * Simulate the governor's `estimate_execution_gas` view and return a cost hint.
    *
-   * `sourceAccount` should be any funded account on the selected network. If it
-   * is omitted, the client falls back to the configured governor address for
-   * compatibility with existing SDK read methods.
+   * @param proposalId - The proposal ID to estimate execution gas for
+   * @param sourceAccount - Any funded account for simulation (falls back to governor address)
+   * @returns Detailed gas and fee estimates for executing the proposal
+   * @throws {Error} If the simulation fails or returns no value
    */
   async estimateExecutionGas(
     proposalId: bigint,
@@ -646,7 +678,12 @@ export class GovernorClient {
   }
 
   /**
-   * Simulate `cast_vote` and return the estimated resource cost without submitting.
+   * Simulate `cast_vote` and return estimated resource costs without submitting.
+   *
+   * @param voter - Stellar address casting the vote
+   * @param proposalId - The proposal ID to vote on
+   * @param support - Vote direction (For, Against, or Abstain)
+   * @returns Cost estimates including CPU, memory, and fee in stroops
    */
   async estimateVoteGas(
     voter: string,
@@ -714,9 +751,6 @@ export class GovernorClient {
     });
   }
 
-  /**
-   * Cast a vote on an active proposal.
-   */
   /**
    * Cast a vote on an active proposal.
    *
@@ -883,7 +917,11 @@ export class GovernorClient {
   }
 
   /**
-   * Cancel a proposal (can only be done by the proposer while it's Pending).
+   * Cancel a proposal. Only callable by the proposer while the proposal is Pending.
+   *
+   * @param signer - Keypair of the proposer authorising the cancellation
+   * @param proposalId - The proposal ID to cancel
+   * @throws {Error} If the transaction fails or the caller is not authorised
    */
   async cancel(
     signer: Keypair,
@@ -919,12 +957,13 @@ export class GovernorClient {
   }
 
   /**
-   * Cancel a proposal via governance (must be called by the governor contract itself).
+   * Cancel a proposal via governance. Must be called by the governor contract itself.
    *
-   * This is typically used as an action in another proposal.
+   * Typically used as an action inside another proposal (e.g. to cancel a rogue proposal).
    *
-   * @param signer The account authorizing the transaction (must be the governor itself if called directly)
-   * @param proposalId The ID of the proposal to cancel
+   * @param signer - Keypair authorising the call (must be the governor signer)
+   * @param proposalId - The ID of the proposal to cancel
+   * @throws {Error} If the transaction fails
    */
   async cancelByGovernance(
     signer: Keypair,
@@ -1136,8 +1175,11 @@ export class GovernorClient {
   }
 
   /**
-   * Get the current state of a proposal.
-   * TODO issue #17: decode all 7 ProposalState variants.
+   * Get the current on-chain lifecycle state of a proposal.
+   *
+   * @param proposalId - The proposal ID to query
+   * @returns The current ProposalState (Pending, Active, Defeated, Succeeded, Queued, Executed, Cancelled, Expired)
+   * @throws {Error} If the simulation fails or the state variant is unrecognised
    */
   async getProposalState(proposalId: bigint): Promise<ProposalState> {
     return this.retry(async () => {
@@ -1227,7 +1269,11 @@ export class GovernorClient {
   }
 
   /**
-   * Get vote breakdown for a proposal.
+   * Get the vote breakdown (for, against, abstain) for a proposal.
+   *
+   * @param proposalId - The proposal ID to query
+   * @returns Aggregated vote tallies
+   * @throws {Error} If the simulation fails
    */
   async getProposalVotes(proposalId: bigint): Promise<ProposalVotes> {
     return this.retry(async () => {
@@ -1265,7 +1311,13 @@ export class GovernorClient {
 
   /**
    * Get the quorum required for a specific proposal.
-   * The quorum is calculated based on the total supply at the proposal's start ledger.
+   *
+   * Quorum is calculated dynamically based on total supply at the proposal's start ledger
+   * and the configured quorum numerator.
+   *
+   * @param proposalId - The proposal ID to query
+   * @returns The minimum vote weight required to meet quorum
+   * @throws {Error} If the simulation fails
    */
   async getQuorum(proposalId: bigint): Promise<bigint> {
     return this.retry(async () => {
@@ -1298,8 +1350,11 @@ export class GovernorClient {
   }
 
   /**
-   * Check if a proposal has reached quorum.
-   * Returns true if the sum of for and abstain votes meets or exceeds the required quorum.
+   * Check whether a proposal has reached quorum.
+   *
+   * @param proposalId - The proposal ID to check
+   * @returns True if for + abstain votes meet or exceed the required quorum
+   * @throws {Error} If the simulation fails
    */
   async isQuorumReached(proposalId: bigint): Promise<boolean> {
     const result = await this.server.simulateTransaction(
@@ -1330,8 +1385,11 @@ export class GovernorClient {
   }
 
   /**
-   * Check if an address has voted on a proposal.
-   * Returns true if the address has cast a vote.
+   * Check whether an address has already voted on a proposal.
+   *
+   * @param proposalId - The proposal ID to check
+   * @param voter - Stellar address to check
+   * @returns True if the address has cast a vote on this proposal
    */
   async hasVoted(proposalId: bigint, voter: string): Promise<boolean> {
     return this.retry(async () => {
@@ -1505,7 +1563,11 @@ export class GovernorClient {
     });
   }
 
-  /** Current Soroban ledger sequence from the RPC backing this client. */
+  /**
+   * Get the current Soroban ledger sequence from the RPC node.
+   *
+   * @returns The latest confirmed ledger sequence number
+   */
   async getLatestLedger(): Promise<number> {
     return this.retry(async () => {
       const info = await this.server.getLatestLedger();
@@ -1549,7 +1611,9 @@ export class GovernorClient {
   }
 
   /**
-   * Get total number of proposals.
+   * Get the total number of proposals ever created in this governor.
+   *
+   * @returns The total proposal count
    */
   async proposalCount(): Promise<bigint> {
     return this.retry(async () => {
@@ -1572,12 +1636,12 @@ export class GovernorClient {
   }
 
   /**
-   * Get a single proposal from the indexer API (fast path).
-   * Falls back to on-chain queries if indexer is unavailable.
-   * 
-   * @param proposalId The proposal ID to fetch
-   * @param indexerUrl Optional indexer API URL (defaults to environment variable)
-   * @returns The proposal data or null if not found
+   * Fetch a proposal's metadata from the configured indexer API.
+   *
+   * Returns null if no indexer is configured or the proposal is not found.
+   *
+   * @param proposalId - The proposal ID to look up
+   * @param indexerUrl - Override indexer URL (defaults to config.indexerUrl)
    */
   async getProposalFromIndexer(
     proposalId: bigint, 
@@ -1609,12 +1673,24 @@ export class GovernorClient {
     }
   }
 
+  /**
+   * Calculate the ledger at which a proposal will expire (endLedger + grace period).
+   *
+   * @param proposalId - The proposal ID to calculate expiry for
+   * @returns The ledger sequence when the proposal expires
+   */
   async getProposalExpiryLedger(proposalId: bigint): Promise<number> {
     const proposal = await this.getProposal(proposalId);
     const settings = await this.getSettings();
     return proposal.endLedger + settings.proposalGracePeriod;
   }
 
+  /**
+   * Scan ProposalCancelled events to find cancellation actions performed by the guardian.
+   *
+   * @param fromLedger - Earliest ledger to start scanning from (default: 1)
+   * @returns Array of guardian cancellation events with proposal ID, canceller, and ledger
+   */
   async getGuardianActivity(
     fromLedger?: number,
   ): Promise<{
@@ -1858,6 +1934,12 @@ export class GovernorClient {
       .slice(0, limit);
   }
 
+  /**
+   * Get the most recent ledger at which an address created a proposal.
+   *
+   * @param address - Stellar address to query
+   * @returns The ledger sequence of the address's last proposal, or 0 if none
+   */
   async getLastProposalLedger(address: string): Promise<number> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
@@ -1881,6 +1963,12 @@ export class GovernorClient {
     });
   }
 
+  /**
+   * Get the number of proposals created by an address in the current rate-limit period.
+   *
+   * @param address - Stellar address to query
+   * @returns Number of proposals made in the current period
+   */
   async getProposalsInPeriod(address: string): Promise<number> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
@@ -1981,8 +2069,11 @@ export class GovernorClient {
   }
 
   /**
-   * Return the on-chain vote reason for a voter on a proposal.
-   * Empty string means no reason recorded.
+   * Return the on-chain vote reason provided by a voter on a proposal.
+   *
+   * @param proposalId - The proposal ID
+   * @param voter - Stellar address of the voter
+   * @returns The reason string, or empty string if none was recorded
    */
   async getVoteReason(proposalId: bigint, voter: string): Promise<string> {
     const receipt = await this.getReceipt(proposalId, voter);
@@ -1990,7 +2081,11 @@ export class GovernorClient {
   }
 
   /**
-   * Validate settings before building or submitting an update_config proposal.
+   * Validate governor settings before submitting an update_config proposal.
+   *
+   * @param newSettings - The proposed settings to validate
+   * @param limits - Optional upper/lower bounds for validation
+   * @throws {GovernorError} If any setting falls outside the allowed range
    */
   validateGovernorSettings(
     newSettings: GovernorSettings,
@@ -2154,7 +2249,11 @@ export class GovernorClient {
   }
 
   /**
-   * Fetch a proposal by its ID.
+   * Fetch a proposal's full on-chain data by ID.
+   *
+   * @param proposalId - The proposal ID to fetch
+   * @returns The Proposal struct with all fields
+   * @throws {Error} If the proposal is not found or the simulation fails
    */
   async getProposal(proposalId: bigint): Promise<Proposal> {
     return this.retry(async () => {

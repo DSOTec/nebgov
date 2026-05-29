@@ -79,10 +79,11 @@ export class TimelockClient {
    * Only the governor may call this. The operation becomes executable once
    * `delay` seconds have elapsed since scheduling.
    *
-   * @param signer  - Keypair authorising the call (must be the governor signer)
-   * @param target  - Strkey address of the contract to invoke on execution
-   * @param data    - Encoded calldata for the target invocation
-   * @param delay   - Delay in seconds; must be >= the contract's `minDelay`
+   * @param signer      - Keypair authorising the call (must be the governor signer)
+   * @param target      - Strkey address of the contract to invoke on execution
+   * @param data        - Encoded calldata for the target invocation
+   * @param fnNameOrDelay - Function name string, or delay in seconds (bigint)
+   * @param delayArg    - Delay in seconds (required when fnNameOrDelay is a function name); must be >= minDelay
    * @returns Hex-encoded operation ID (SHA-256 of `data`)
    */
   async schedule(
@@ -442,7 +443,12 @@ export class TimelockClient {
   }
 
   /**
-   * Get the configured execution window (in seconds).
+   * Get the configured execution window duration in seconds.
+   *
+   * Defines the maximum time after the delay period during which an operation
+   * can still be executed before it expires.
+   *
+   * @returns The execution window in seconds, or 0n on error
    */
   async executionWindow(): Promise<bigint> {
     const result = await this.server.simulateTransaction(

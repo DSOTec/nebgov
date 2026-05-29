@@ -1,8 +1,7 @@
 {
   "entryPoints": ["src/index.ts"],
   "out": "docs",
-  "plugin": ["typedoc-plugin-markdown"],
-  "treatWarningsAsErrors": true,
+  "theme": "default",
   "excludePrivate": true,
   "excludeProtected": true,
   "excludeInternal": true,
