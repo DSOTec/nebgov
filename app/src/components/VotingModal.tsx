@@ -192,6 +192,7 @@ export function VotingModal({
     estimatedFeeStroops !== null ? Number(estimatedFeeStroops) / 1e7 : null;
 
   async function handleConfirm() {
+    if (submitting) return;
     if (support === null) {
       toast.error("Select a vote option first.");
       return;

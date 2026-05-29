@@ -81,6 +81,7 @@ export function DelegateModal({
 
   async function handleDelegate(e: FormEvent) {
     e.preventDefault();
+    if (submitting) return;
     if (!delegatee.trim()) return;
 
     setSubmitting(true);
@@ -112,6 +113,7 @@ export function DelegateModal({
   }
 
   async function handleUndelegate() {
+    if (submitting) return;
     if (!isConnected || !publicKey) {
       toast.error("Connect your wallet first.");
       return;
@@ -142,6 +144,7 @@ export function DelegateModal({
   }
 
   async function handleDelegateBySig() {
+    if (submitting) return;
     if (!delegatee.trim()) return;
 
     setSubmitting(true);

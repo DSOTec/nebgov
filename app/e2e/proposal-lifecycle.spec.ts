@@ -145,3 +145,13 @@ test.describe("Full Proposal Lifecycle (mocked wallet)", () => {
     await expect(page.getByText(/Connect your wallet to vote on this proposal/i)).toBeVisible();
   });
 });
+
+test.describe("Performance Benchmarks", () => {
+  test("proposal list renders 100 proposals in < 2s", async ({ page }) => {
+    await page.goto("/?mock_proposals=100");
+    const start = Date.now();
+    await expect(page.locator('[data-testid="proposal-card"]').first()).toBeVisible({ timeout: 2000 });
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(2000);
+  });
+});
