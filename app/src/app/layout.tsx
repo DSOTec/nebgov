@@ -5,6 +5,7 @@ import { getMessages } from "next-intl/server";
 import "./globals.css";
 import { NavBar } from "../components/NavBar";
 import { GovernorNotificationsProvider } from "../components/GovernorNotificationsProvider";
+import { ReactQueryProvider } from "../components/ReactQueryProvider";
 import { WalletProvider } from "../lib/wallet-context";
 import { Toaster } from "react-hot-toast";
 import { getLocale } from "next-intl/server";
@@ -36,23 +37,15 @@ export default async function RootLayout({
       </head>
       <body className={`${inter.className} bg-gray-50 dark:bg-gray-900 min-h-screen`}>
         <NextIntlClientProvider messages={messages}>
-          <WalletProvider>
-            <GovernorNotificationsProvider>
-              <Toaster
-                position="bottom-right"
-                toastOptions={{
-                  duration: 4000,
-                  style: { maxWidth: "400px" },
-                  success: { duration: 4000 },
-                  error: { duration: 6000 },
-                }}
-                containerStyle={{ bottom: 24, right: 24 }}
-                gutter={8}
-              />
-              <NavBar />
-              <main className="pt-16">{children}</main>
-            </GovernorNotificationsProvider>
-          </WalletProvider>
+          <ReactQueryProvider>
+            <WalletProvider>
+              <GovernorNotificationsProvider>
+                <Toaster position="bottom-right" />
+                <NavBar />
+                <main className="pt-16">{children}</main>
+              </GovernorNotificationsProvider>
+            </WalletProvider>
+          </ReactQueryProvider>
         </NextIntlClientProvider>
       </body>
     </html>

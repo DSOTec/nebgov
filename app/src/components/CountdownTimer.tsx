@@ -9,6 +9,7 @@ interface CountdownTimerProps {
   startLedger?: number;
   endLedger?: number;
   vetoWindowCloseLedger?: number;
+  queueDeadlineLedger?: number;
   // Overrides for generic use
   label?: string;
   targetLedger?: number;
@@ -19,6 +20,7 @@ export function CountdownTimer({
   startLedger, 
   endLedger, 
   vetoWindowCloseLedger,
+  queueDeadlineLedger,
   label: labelOverride,
   targetLedger: targetOverride
 }: CountdownTimerProps) {
@@ -32,7 +34,14 @@ export function CountdownTimer({
       setLabel(labelOverride);
       setTarget(targetOverride);
     } else if (state && startLedger !== undefined && endLedger !== undefined) {
-      const timeInfo = getProposalTimeInfo(state, startLedger, endLedger, currentLedger, vetoWindowCloseLedger);
+      const timeInfo = getProposalTimeInfo(
+        state, 
+        startLedger, 
+        endLedger, 
+        currentLedger, 
+        vetoWindowCloseLedger,
+        queueDeadlineLedger
+      );
       if (timeInfo) {
         setLabel(timeInfo.label);
         setTarget(timeInfo.targetLedger);
@@ -41,7 +50,7 @@ export function CountdownTimer({
         setTarget(0);
       }
     }
-  }, [state, startLedger, endLedger, currentLedger, vetoWindowCloseLedger, labelOverride, targetOverride]);
+  }, [state, startLedger, endLedger, currentLedger, vetoWindowCloseLedger, queueDeadlineLedger, labelOverride, targetOverride]);
 
   useEffect(() => {
     if (target === 0 || currentLedger === 0) {

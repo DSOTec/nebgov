@@ -680,8 +680,7 @@ fn test_cancel_queued_after_window_closes() {
 
     // Advance ledger far past the veto window (min_delay is 100 seconds, roughly 10-20 ledgers)
     // Use a very large advance to ensure we're well past the veto window
-    env.ledger()
-        .with_mut(|l| l.sequence_number += 1000);
+    env.ledger().with_mut(|l| l.sequence_number += 1000);
 
     // Try to cancel after veto window closes — should fail
     governor_client.cancel_queued(&guardian, &proposal_id);
@@ -1019,7 +1018,12 @@ fn setup_dynamic_quorum_governor<'a>(
     env: &'a Env,
     total_supply: i128,
     quorum_numerator: u32,
-) -> (GovernorContractClient<'a>, ConfigurableVotesContractClient<'a>, Address, Address) {
+) -> (
+    GovernorContractClient<'a>,
+    ConfigurableVotesContractClient<'a>,
+    Address,
+    Address,
+) {
     let admin = Address::generate(env);
     let guardian = Address::generate(env);
 
@@ -1051,10 +1055,7 @@ fn setup_dynamic_quorum_governor<'a>(
 }
 
 /// Create a minimal proposal and return its ID.
-fn create_minimal_proposal(
-    env: &Env,
-    governor_client: &GovernorContractClient,
-) -> u64 {
+fn create_minimal_proposal(env: &Env, governor_client: &GovernorContractClient) -> u64 {
     let proposer = Address::generate(env);
     let mock_target = env.register(MockTarget, ());
 
@@ -1098,7 +1099,10 @@ fn test_dynamic_quorum_uses_max_of_static_and_dynamic() {
 
     // Sanity: without dynamic quorum, result is the static quorum.
     let static_q = governor_client.quorum(&proposal_id);
-    assert_eq!(static_q, 100_000, "static quorum should be 10% of 1_000_000");
+    assert_eq!(
+        static_q, 100_000,
+        "static quorum should be 10% of 1_000_000"
+    );
 
     // Register a configurable oracle: price = $1 (1_000_000 in 6-decimal).
     let oracle_id = env.register(ConfigurableOracleContract, ());
@@ -1517,18 +1521,12 @@ fn test_unpause_via_governance_restores_functionality() {
 
     let ts_before_queue = env.ledger().timestamp();
     governor_client.queue(&proposal_id);
-    assert_eq!(
-        governor_client.state(&proposal_id),
-        ProposalState::Queued
-    );
+    assert_eq!(governor_client.state(&proposal_id), ProposalState::Queued);
 
     env.ledger()
         .with_mut(|l| l.timestamp = ts_before_queue + min_delay + 1);
     governor_client.execute(&proposal_id);
-    assert_eq!(
-        governor_client.state(&proposal_id),
-        ProposalState::Executed
-    );
+    assert_eq!(governor_client.state(&proposal_id), ProposalState::Executed);
 
     // Pause the contract and verify operations are blocked
     governor_client.pause(&admin);
@@ -1570,7 +1568,7 @@ fn test_unpause_via_governance_restores_functionality() {
     // Unpause directly — governance self-calls are blocked by re-entry
     // protection, so the pauser/admin calls unpause() directly (auth mocked).
     // This mirrors how a contract upgrade or admin action would unpause.
-    GovernorContractClient::new(&env, &governor_id).unpause();
+    GovernorContractClient::new(&env, &governor_id).unpause(&admin);
     assert!(
         !governor_client.is_paused(),
         "contract should be unpaused after direct unpause"
@@ -1678,12 +1676,10 @@ fn test_set_pauser_requires_self_auth() {
 
     let pauser = Address::generate(&env);
 
-    // Use mock_all_auths for setup, then replace with specific mock for the test call.
-    // This ensures set_pauser's env.current_contract_address().require_auth() is NOT mocked.
     env.mock_all_auths();
 
     votes_client.initialize(&admin, &token_addr);
-    timelock_client.initialize(&admin, &governor_id, &1, &1_209_600);
+    TimelockContractClient::new(&env, &timelock_id).initialize(&admin, &governor_id, &1, &1_209_600);
     governor_client.initialize(
         &admin,
         &votes_id,
@@ -1724,5 +1720,238 @@ fn test_set_pauser_requires_self_auth() {
     assert!(
         result.is_err(),
         "set_pauser should fail without contract self-auth"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// ReentrantVotesContract — a malicious token mock that re-enters the governor
+// during get_past_votes.  This tests that HasVoted is written BEFORE the
+// cross-contract vote-weight query, preventing a reentrant double-vote.
+// Soroban's built-in reentrancy guard also blocks this, but the defense-in-
+// depth ordering ensures protection regardless of the runtime layer.
+// ---------------------------------------------------------------------------
+
+mod reentrant_votes {
+    use soroban_sdk::{contract, contractimpl, contracttype, Address, Env};
+
+    #[contracttype]
+    pub enum DataKey {
+        Governor,
+    }
+
+    #[contract]
+    pub struct Contract;
+
+    #[contractimpl]
+    impl Contract {
+        pub fn set_governor(env: Env, governor: Address) {
+            env.storage()
+                .instance()
+                .set(&DataKey::Governor, &governor);
+        }
+
+        pub fn get_votes(_env: Env, _account: Address) -> i128 {
+            1_000_000
+        }
+
+        pub fn get_past_votes(env: Env, account: Address, _ledger: u32) -> i128 {
+            let governor: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Governor)
+                .expect("governor not set");
+            // Attempt re-entrant vote — Soroban's guard or the HasVoted check
+            // will reject this.
+            crate::GovernorContractClient::new(&env, &governor).cast_vote(
+                &account,
+                &0u64,
+                &crate::VoteSupport::For,
+            );
+            1_000_000
+        }
+
+        pub fn get_past_total_supply(_env: Env, _ledger: u32) -> i128 {
+            10_000_000
+        }
+    }
+}
+
+/// Helper: register governor with a votes token and return the proposal id.
+fn setup_proposal_with_token(
+    env: &Env,
+    votes_token_id: &Address,
+) -> (Address, Address, u64) {
+    let admin = Address::generate(env);
+    let proposer = Address::generate(env);
+    let guardian = Address::generate(env);
+    let timelock_id = Address::generate(env);
+
+    let governor_id = env.register(crate::GovernorContract, ());
+    let governor_client = crate::GovernorContractClient::new(env, &governor_id);
+
+    governor_client.initialize(
+        &admin,
+        votes_token_id,
+        &timelock_id,
+        &10_u32,
+        &20_u32,
+        &50_u32,
+        &1_000_i128,
+        &guardian,
+        &crate::VoteType::Extended,
+        &120_960_u32,
+    );
+
+    // Create proposal using propose_dummy pattern (inline)
+    let target = Address::generate(env);
+    let fn_name = Symbol::new(env, "exec");
+    let calldata = Bytes::new(env);
+    let description = soroban_sdk::String::from_str(env, "Test proposal");
+    let description_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(env, b"Test proposal"))
+        .into();
+    let metadata_uri =
+        soroban_sdk::String::from_str(env, "https://example.com/proposal/1");
+
+    let mut targets = soroban_sdk::Vec::new(env);
+    targets.push_back(target);
+    let mut fn_names = soroban_sdk::Vec::new(env);
+    fn_names.push_back(fn_name);
+    let mut calldatas = soroban_sdk::Vec::new(env);
+    calldatas.push_back(calldata);
+
+    let proposal_id = governor_client.propose(
+        &proposer,
+        &description,
+        &description_hash,
+        &metadata_uri,
+        &targets,
+        &fn_names,
+        &calldatas,
+    );
+
+    (governor_id, proposer, proposal_id)
+}
+
+/// Test that a reentrant double-vote attempt via a malicious token contract
+/// is rejected (either by Soroban's host-level guard or by the AlreadyVoted
+/// check after the HasVoted-reorder fix).
+#[test]
+#[should_panic]
+fn test_reentrant_vote_rejected() {
+    use soroban_sdk::testutils::Address as _;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let voter = Address::generate(&env);
+
+    // Register the malicious token contract.
+    let votes_token_id =
+        env.register(reentrant_votes::Contract, ());
+    let reentrant_client =
+        reentrant_votes::ContractClient::new(&env, &votes_token_id);
+
+    let (governor_id, _proposer, proposal_id) =
+        setup_proposal_with_token(&env, &votes_token_id);
+
+    // Point the malicious token at the governor so it can re-enter.
+    reentrant_client.set_governor(&governor_id);
+
+    // Advance to active state so voting is allowed.
+    env.ledger().with_mut(|li| li.sequence_number += 101);
+
+    // cast_vote triggers compute_votes → token.get_past_votes → re-enters
+    // governor.cast_vote. This should panic (reentrancy guard or AlreadyVoted).
+    let governor_client =
+        crate::GovernorContractClient::new(&env, &governor_id);
+    governor_client.cast_vote(&voter, &proposal_id, &crate::VoteSupport::For);
+}
+
+/// Test that cast_vote_with_reason also rejects double-votes.
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_cannot_vote_twice_with_reason() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(crate::GovernorContract, ());
+    let client = crate::GovernorContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let votes_token_id = env.register(ConfigurableVotesContract, ());
+    let votes_client = ConfigurableVotesContractClient::new(&env, &votes_token_id);
+    let timelock = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    let voter = Address::generate(&env);
+
+    // Give the proposer and voter enough voting power.
+    votes_client.set_votes(&proposer, &1_000_000);
+    votes_client.set_votes(&voter, &1_000_000);
+    votes_client.set_total_supply(&10_000_000);
+
+    client.initialize(
+        &admin,
+        &votes_token_id,
+        &timelock,
+        &100_u32,
+        &1000_u32,
+        &50_u32,
+        &1000_i128,
+        &guardian,
+        &crate::VoteType::Extended,
+        &120_960_u32,
+    );
+
+    // Create proposal inline.
+    let target = Address::generate(&env);
+    let fn_name = Symbol::new(&env, "exec");
+    let calldata = Bytes::new(&env);
+    let description = soroban_sdk::String::from_str(&env, "Double vote test");
+    let description_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, b"Double vote test"))
+        .into();
+    let metadata_uri =
+        soroban_sdk::String::from_str(&env, "https://example.com/proposal/dv");
+
+    let mut targets = soroban_sdk::Vec::new(&env);
+    targets.push_back(target);
+    let mut fn_names = soroban_sdk::Vec::new(&env);
+    fn_names.push_back(fn_name);
+    let mut calldatas = soroban_sdk::Vec::new(&env);
+    calldatas.push_back(calldata);
+
+    let proposal_id = client.propose(
+        &proposer,
+        &description,
+        &description_hash,
+        &metadata_uri,
+        &targets,
+        &fn_names,
+        &calldatas,
+    );
+
+    // Advance to active state.
+    env.ledger().with_mut(|li| li.sequence_number += 101);
+
+    let reason = soroban_sdk::String::from_str(&env, "First vote");
+
+    // Cast first vote with reason — should succeed.
+    client.cast_vote_with_reason(
+        &voter,
+        &proposal_id,
+        &crate::VoteSupport::For,
+        &reason,
+    );
+
+    // Attempt to vote again with reason — should panic with AlreadyVoted (#12).
+    let reason2 = soroban_sdk::String::from_str(&env, "Second attempt");
+    client.cast_vote_with_reason(
+        &voter,
+        &proposal_id,
+        &crate::VoteSupport::Against,
+        &reason2,
     );
 }

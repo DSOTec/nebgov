@@ -920,6 +920,172 @@ fn test_execution_window_config() {
 }
 
 #[test]
+/// Issue #449: an operation that has already executed cannot be re-scheduled
+/// (which would otherwise reset `executed` and allow double execution).
+fn test_cannot_reschedule_executed_operation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+    let data = Bytes::new(&env);
+    let fn_name = Symbol::new(&env, "exec");
+    let salt = Bytes::from_slice(&env, b"reschedule_salt");
+
+    let op_id = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0u64,
+        &Bytes::new(&env),
+        &salt,
+    );
+    client.execute(&governor, &op_id);
+    assert!(client.is_done(&op_id));
+
+    // Re-scheduling the same (target, data, predecessor, salt) must be rejected.
+    let result = client.try_schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0u64,
+        &Bytes::new(&env),
+        &salt,
+    );
+    assert!(result.is_err(), "rescheduling an executed op should fail");
+
+    // The original record is untouched: still executed, not re-armed.
+    let op: Operation = env.as_contract(&contract_id, || {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Operation(op_id.clone()))
+            .unwrap()
+    });
+    assert!(op.executed);
+}
+
+#[test]
+/// Issue #449: a cancelled operation cannot be resurrected via re-scheduling.
+fn test_cannot_reschedule_cancelled_operation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &100, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+    let data = Bytes::new(&env);
+    let fn_name = Symbol::new(&env, "exec");
+    let salt = Bytes::from_slice(&env, b"cancel_salt");
+
+    let op_id = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &100u64,
+        &Bytes::new(&env),
+        &salt,
+    );
+    client.cancel(&admin, &op_id);
+
+    let result = client.try_schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &100u64,
+        &Bytes::new(&env),
+        &salt,
+    );
+    assert!(result.is_err(), "rescheduling a cancelled op should fail");
+}
+
+#[test]
+/// Issue #449: re-scheduling a still-pending operation stays idempotent.
+fn test_can_reschedule_pending_operation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &100, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+    let data = Bytes::new(&env);
+    let fn_name = Symbol::new(&env, "exec");
+    let salt = Bytes::from_slice(&env, b"pending_salt");
+
+    let id1 = client.schedule(
+        &governor, &target, &data, &fn_name, &100u64, &Bytes::new(&env), &salt,
+    );
+    let id2 = client.schedule(
+        &governor, &target, &data, &fn_name, &100u64, &Bytes::new(&env), &salt,
+    );
+    assert_eq!(id1, id2);
+}
+
+#[test]
+/// Issue #380: update_delay rejects a delay below MIN_DELAY and accepts a valid one.
+fn test_update_delay_enforces_minimum() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &86_400, &1_209_600);
+
+    // Zero / below-minimum delay is rejected (no more timelock bypass).
+    let too_short = client.try_update_delay(&admin, &0u64);
+    assert!(too_short.is_err(), "delay of 0 should be rejected");
+    let below_min = client.try_update_delay(&admin, &100u64);
+    assert!(below_min.is_err(), "delay below MIN_DELAY should be rejected");
+
+    // A delay at/above the minimum is accepted.
+    client.update_delay(&admin, &172_800u64);
+    assert_eq!(client.min_delay(), 172_800u64);
+}
+
+#[test]
+/// Issue #380: update_execution_window rejects values outside the allowed bounds.
+fn test_update_execution_window_bounds() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &86_400, &1_209_600);
+
+    // Too small — operations could expire before they can run.
+    let too_small = client.try_update_execution_window(&admin, &10u64);
+    assert!(too_small.is_err(), "tiny execution window should be rejected");
+
+    // Too large — beyond the protocol-defined maximum.
+    let too_large = client.try_update_execution_window(&admin, &99_999_999_999u64);
+    assert!(too_large.is_err(), "huge execution window should be rejected");
+
+    // A value within bounds is accepted.
+    client.update_execution_window(&admin, &604_800u64);
+    assert_eq!(client.execution_window(), 604_800u64);
+}
+
+#[test]
 #[should_panic(expected = "only admin")]
 /// Test that only admin can update execution window.
 fn test_update_execution_window_unauthorized() {

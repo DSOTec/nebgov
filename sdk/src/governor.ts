@@ -997,6 +997,145 @@ export class GovernorClient {
   }
 
   /**
+   * Queue a Succeeded proposal into the timelock so it can later be executed.
+   *
+   * Permissionless: any connected account may submit this. The signer only
+   * pays the transaction fee.
+   *
+   * @returns The Stellar transaction hash, suitable for a block-explorer link.
+   */
+  async queue(signer: Keypair, proposalId: bigint): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "queue",
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw new Error(`queue failed: ${JSON.stringify(result)}`);
+      }
+      await this.pollForConfirmation(result.hash);
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Same as {@link queue} but signs with a wallet callback (unsigned XDR in →
+   * signed XDR out).
+   */
+  async queueWithSign(
+    signerPublicKey: string,
+    proposalId: bigint,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<string> {
+    const account = await this.server.getAccount(signerPublicKey);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call("queue", nativeToScVal(proposalId, { type: "u64" })),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    const signedXdr = await signUnsignedXdr(prepared.toXDR());
+    const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const result = await this.server.sendTransaction(signed);
+    if (result.status === "ERROR") {
+      throw new Error(`queueWithSign failed: ${JSON.stringify(result)}`);
+    }
+    await this.pollForConfirmation(result.hash);
+    return result.hash;
+  }
+
+  /**
+   * Execute a Queued proposal once its timelock delay has elapsed.
+   *
+   * Permissionless: any connected account may submit this. The signer only
+   * pays the transaction fee.
+   *
+   * @returns The Stellar transaction hash, suitable for a block-explorer link.
+   */
+  async execute(signer: Keypair, proposalId: bigint): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "execute",
+            nativeToScVal(proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw new Error(`execute failed: ${JSON.stringify(result)}`);
+      }
+      await this.pollForConfirmation(result.hash);
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Same as {@link execute} but signs with a wallet callback (unsigned XDR in →
+   * signed XDR out).
+   */
+  async executeWithSign(
+    signerPublicKey: string,
+    proposalId: bigint,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<string> {
+    const account = await this.server.getAccount(signerPublicKey);
+
+    const tx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "execute",
+          nativeToScVal(proposalId, { type: "u64" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const prepared = await this.server.prepareTransaction(tx);
+    const signedXdr = await signUnsignedXdr(prepared.toXDR());
+    const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+    const result = await this.server.sendTransaction(signed);
+    if (result.status === "ERROR") {
+      throw new Error(`executeWithSign failed: ${JSON.stringify(result)}`);
+    }
+    await this.pollForConfirmation(result.hash);
+    return result.hash;
+  }
+
+  /**
    * Get the current state of a proposal.
    * TODO issue #17: decode all 7 ProposalState variants.
    */
@@ -2119,15 +2258,11 @@ export class GovernorClient {
       timelockClient.executionWindow(),
     ]);
 
-    // Conversion logic: roughly 1 ledger per 10 seconds for veto window
-    // and for estimating executable/deadline ledgers.
-    const votingDelay = settings.votingDelay;
-    
-    // Per requirement: Use QueueTime + voting_delay/10
-    const vetoWindowEndLedger = executableAtLedger + Math.floor(votingDelay / 10);
-    
     // Executable after min_delay
     const executableAtLedger = queueLedger + Math.floor(Number(minDelay) / 10);
+    
+    // Per requirement: Use QueueTime + voting_delay/10 for veto window end
+    const vetoWindowEndLedger = queueLedger + Math.floor(settings.votingDelay / 10);
     
     // Deadline after execution_window
     const executionDeadlineLedger = executableAtLedger + Math.floor(Number(executionWindow) / 10);

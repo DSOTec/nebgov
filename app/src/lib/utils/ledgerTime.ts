@@ -1,4 +1,10 @@
-const LEDGER_CLOSE_TIME_SECONDS = 5.5;
+const parsedLedgerCloseTime = Number(
+  process.env.NEXT_PUBLIC_LEDGER_CLOSE_TIME_SECONDS,
+);
+const LEDGER_CLOSE_TIME_SECONDS =
+  Number.isFinite(parsedLedgerCloseTime) && parsedLedgerCloseTime > 0
+    ? parsedLedgerCloseTime
+    : 5;
 
 export function ledgerToEstimatedDate(
   targetLedger: number,
@@ -51,6 +57,7 @@ export function getProposalTimeInfo(
   endLedger: number,
   currentLedger: number,
   vetoWindowCloseLedger?: number,
+  queueDeadlineLedger?: number,
 ): ProposalTimeInfo | null {
   if (currentLedger === 0) return null;
 
@@ -67,6 +74,14 @@ export function getProposalTimeInfo(
       label: "Voting ends in",
       countdown: formatCountdown(ledgerToEstimatedDate(endLedger, currentLedger)),
       targetLedger: endLedger,
+    };
+  }
+
+  if (state === "Succeeded" && queueDeadlineLedger && currentLedger < queueDeadlineLedger) {
+    return {
+      label: "Queue deadline",
+      countdown: formatCountdown(ledgerToEstimatedDate(queueDeadlineLedger, currentLedger)),
+      targetLedger: queueDeadlineLedger,
     };
   }
 

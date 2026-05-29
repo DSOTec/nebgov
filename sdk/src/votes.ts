@@ -8,6 +8,7 @@ import {
   nativeToScVal,
   scValToNative,
   xdr,
+  hash,
 } from "@stellar/stellar-sdk";
 import {
   GovernorConfig,
@@ -618,14 +619,15 @@ export class VotesClient {
    * @param signature - Ed25519 signature over (owner, delegatee, nonce, expiry)
    */
   async delegateBySig(
+    relayer: Keypair,
     owner: string,
     delegatee: string,
     nonce: bigint,
     expiry: bigint,
     signature: Buffer,
-  ): Promise<void> {
+  ): Promise<string> {
     return this.retry(async () => {
-      const account = await this.server.getAccount(this.contract.contractId());
+      const account = await this.server.getAccount(relayer.publicKey());
 
       const tx = new TransactionBuilder(account, {
         fee: BASE_FEE,
@@ -645,7 +647,12 @@ export class VotesClient {
         .build();
 
       const prepared = await this.server.prepareTransaction(tx);
-      await this.server.sendTransaction(prepared);
+      prepared.sign(relayer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
     }, (e) => this.isRetryableSubmissionError(e));
   }
 
@@ -803,8 +810,10 @@ export class VotesClient {
       networkPassphrase: this.networkPassphrase,
     };
 
+    const domainSeparator = hash(Buffer.from(JSON.stringify(domain), "utf8"));
+
     const message = Buffer.concat([
-      Buffer.from(JSON.stringify(domain), "utf8"),
+      domainSeparator,
       Buffer.from(signer.publicKey()),
       Buffer.from(delegatee),
       Buffer.from(nonce.toString(16).padStart(16, "0"), "hex"),
