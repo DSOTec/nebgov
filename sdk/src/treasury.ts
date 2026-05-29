@@ -298,6 +298,8 @@ export class TreasuryClient {
 
   /**
    * Get current treasury owner addresses from on-chain state.
+   *
+   * @returns Array of Stellar addresses that are treasury owners
    */
   async getOwners(): Promise<string[]> {
     return this.retry(async () => {
@@ -321,7 +323,9 @@ export class TreasuryClient {
   }
 
   /**
-   * Get treasury approval threshold from on-chain state.
+   * Get the number of owner approvals required for a treasury transaction to pass.
+   *
+   * @returns Approval threshold (defaults to 1 on error)
    */
   async getThreshold(): Promise<number> {
     return this.retry(async () => {
@@ -345,6 +349,9 @@ export class TreasuryClient {
 
   /**
    * Check whether an address is currently a treasury owner.
+   *
+   * @param address - Stellar address to check
+   * @returns True if the address is a treasury owner
    */
   async isOwner(address: string): Promise<boolean> {
     return this.retry(async () => {
@@ -372,7 +379,9 @@ export class TreasuryClient {
   }
 
   /**
-   * Get total number of treasury transactions.
+   * Get the total number of treasury transactions processed.
+   *
+   * @returns Total transaction count, or 0n on error
    */
   async getTxCount(): Promise<bigint> {
     return this.retry(async () => {

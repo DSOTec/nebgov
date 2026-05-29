@@ -259,7 +259,10 @@ export class VotesClient {
   }
 
   /**
-   * Get current base voting power (raw tokens) of an address.
+   * Get current base (unweighted) voting power from raw token balance of an address.
+   *
+   * @param account - Stellar address to query
+   * @returns Raw token balance as voting power, or 0n on error
    */
   async getBaseVotes(account: string): Promise<bigint> {
     const result = await this.server.simulateTransaction(
@@ -284,7 +287,11 @@ export class VotesClient {
   }
 
   /**
-   * Get base voting power at a past ledger sequence.
+   * Get base (unweighted) voting power at a past ledger sequence.
+   *
+   * @param account - Stellar address to query
+   * @param ledger - Ledger sequence number to query at
+   * @returns Raw token balance at the specified ledger, or 0n on error
    */
   async getPastBaseVotes(account: string, ledger: number): Promise<bigint> {
     const result = await this.server.simulateTransaction(
@@ -310,7 +317,10 @@ export class VotesClient {
   }
 
   /**
-   * Get current delegatee of an account.
+   * Get the current delegatee for an account.
+   *
+   * @param account - Stellar address to query
+   * @returns The delegatee address, or null if the account has not delegated
    */
   async getDelegatee(account: string): Promise<string | null> {
     return this.retry(async () => {
@@ -337,7 +347,9 @@ export class VotesClient {
   }
 
   /**
-   * Get total supply of the voting token.
+   * Get the total supply of the voting token.
+   *
+   * @returns Total token supply in raw units, or 0n on error
    */
   async getTotalSupply(): Promise<bigint> {
     return this.retry(async () => {
@@ -359,7 +371,10 @@ export class VotesClient {
   }
 
   /**
-   * Get total delegated supply at a past ledger sequence.
+   * Get the total delegated supply at a past ledger sequence.
+   *
+   * @param ledger - Ledger sequence number to query at
+   * @returns Total supply at the specified ledger, or 0n on error
    */
   async getPastTotalSupply(ledger: number): Promise<bigint> {
     return this.retry(async () => {
@@ -657,7 +672,13 @@ export class VotesClient {
   }
 
   /**
-   * Get the current votes contract settings.
+   * Get the current votes contract configuration settings.
+   *
+   * Queries checkpoint retention period, time-weight voting status, and time-weight scale
+   * in parallel from the on-chain contract.
+   *
+   * @returns Current votes settings
+   * @throws {VotesError} If any of the simulated queries fail
    */
   async getVotesSettings(): Promise<VotesSettings> {
     const retentionResult = await this.server.simulateTransaction(
@@ -706,7 +727,11 @@ export class VotesClient {
   }
 
   /**
-   * Enable or disable time-weighted voting (admin only).
+   * Enable or disable time-weighted voting. Admin-only operation.
+   *
+   * @param signer - Keypair of the contract admin
+   * @param enabled - Whether time-weighting should be active
+   * @throws {VotesError} If the transaction fails
    */
   async setTimeWeightEnabled(signer: Keypair, enabled: boolean): Promise<void> {
     const account = await this.server.getAccount(signer.publicKey());
@@ -729,7 +754,11 @@ export class VotesClient {
   }
 
   /**
-   * Set the time-weighting scale (admin only).
+   * Set the time-weighting scale factor. Admin-only operation.
+   *
+   * @param signer - Keypair of the contract admin
+   * @param scale - New time-weight scale value (u32)
+   * @throws {VotesError} If the transaction fails
    */
   async setTimeWeightScale(signer: Keypair, scale: number): Promise<void> {
     const account = await this.server.getAccount(signer.publicKey());
@@ -756,6 +785,9 @@ export class VotesClient {
 
   /**
    * Get the delegator record (balance and start ledger) for an address.
+   *
+   * @param account - Stellar address to query
+   * @returns The delegator record with balance and start ledger, or null if not found
    */
   async getDelegatorRecord(account: string): Promise<DelegatorRecord | null> {
     // Note: This requires the contract to expose a way to read the DelegatorRecord
