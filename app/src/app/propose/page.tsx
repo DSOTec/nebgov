@@ -36,8 +36,9 @@ import { useWallet } from "../../lib/wallet-context";
 
 // Wizard Constants
 const TITLE_MIN = 10;
-const TITLE_MAX = 100;
+const TITLE_MAX = 200;
 const DESC_MIN = 20;
+const DESC_MAX = 10_000;
 const STORAGE_KEY = "nebgov_proposal_draft";
 const DRAFT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 const ACTION_NAME_SIGNAL = "signal";
@@ -88,6 +89,59 @@ function isReasonableIpfsRef(s: string): boolean {
     v.startsWith("https://") ||
     (v.length >= 46 && !v.includes(" ")) // CID check
   );
+}
+
+function isValidStellarAddress(value: string): boolean {
+  return /^[CG][A-Z2-7]{55}$/.test(value.trim());
+}
+
+function actionFieldKey(actionId: string, field: "target" | "fnName"): string {
+  return `action:${actionId}:${field}`;
+}
+
+function validateTitle(value: string): string | null {
+  const text = value.trim();
+  if (!text) return "Title is required.";
+  if (text.length < TITLE_MIN) {
+    return `Title must be at least ${TITLE_MIN} characters.`;
+  }
+  if (text.length > TITLE_MAX) {
+    return `Title must be at most ${TITLE_MAX} characters.`;
+  }
+  return null;
+}
+
+function validateDescription(value: string): string | null {
+  const text = value.trim();
+  if (!text) return "Description is required.";
+  if (text.length < DESC_MIN) {
+    return `Description must be at least ${DESC_MIN} characters.`;
+  }
+  if (text.length > DESC_MAX) {
+    return `Description must be at most ${DESC_MAX.toLocaleString()} characters.`;
+  }
+  return null;
+}
+
+function validateIpfsRef(value: string): string | null {
+  return isReasonableIpfsRef(value)
+    ? null
+    : "Use an ipfs:// URI, an HTTPS URL, or a raw CID.";
+}
+
+function validateActionTarget(value: string): string | null {
+  const text = value.trim();
+  if (!text) return "Action target is required.";
+  if (!isValidStellarAddress(text)) {
+    return "Target must be a valid Stellar contract address.";
+  }
+  return null;
+}
+
+function validateActionFnName(value: string): string | null {
+  const text = value.trim();
+  if (!text) return "Function name is required.";
+  return null;
 }
 
 function explorerTxUrl(txHash: string): string {
@@ -178,6 +232,7 @@ function ProposeWizardInner() {
   const [savedDraftExists, setSavedDraftExists] = useState(false);
   const [savedDraftData, setSavedDraftData] = useState<DraftState | null>(null);
   const [showRestoreBanner, setShowRestoreBanner] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
 
   const [isHashing, setIsHashing] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -200,6 +255,13 @@ function ProposeWizardInner() {
   const [reviewLoading, setReviewLoading] = useState(false);
 
   const reviewDataReady = votes !== null && threshold !== null && canProposeResult !== null && estimate !== null && baseVotes !== null && delegatee !== null;
+  const titleError = validateTitle(draft.title);
+  const descriptionError = validateDescription(draft.description);
+  const ipfsError = validateIpfsRef(draft.ipfsRef);
+  const step1HasErrors = Boolean(titleError || descriptionError || ipfsError || !draft.descriptionHash);
+  const step2HasErrors = draft.actions.some(
+    (action) => validateActionTarget(action.target) !== null || validateActionFnName(action.fnName) !== null,
+  );
 
   // Hydration / Persistence
   useEffect(() => {
@@ -225,6 +287,7 @@ function ProposeWizardInner() {
   const restoreDraft = useCallback(() => {
     if (savedDraftData) {
       setDraft(savedDraftData);
+      setFieldErrors({});
       const q = new URLSearchParams(searchParams.toString());
       q.set("step", String(savedDraftData.currentStep || 1));
       if (savedDraftData.currentStep !== 4) q.delete("id");
@@ -238,6 +301,7 @@ function ProposeWizardInner() {
     setSavedDraftData(null);
     setSavedDraftExists(false);
     setShowRestoreBanner(false);
+    setFieldErrors({});
     setDraft({
       title: "",
       description: "",
@@ -326,6 +390,7 @@ function ProposeWizardInner() {
 
       const { uri, hash } = await response.json();
       setDraft((d) => ({ ...d, ipfsRef: uri, descriptionHash: hash }));
+      syncFieldError("ipfsRef", validateIpfsRef(uri));
     } catch (err) {
       console.error("IPFS upload failed:", err);
       setStepErrors([err instanceof Error ? err.message : "IPFS upload failed"]);
@@ -336,16 +401,12 @@ function ProposeWizardInner() {
 
   function validateStep1(): string[] {
     const err: string[] = [];
-    const t = draft.title.trim();
-    if (t.length < TITLE_MIN || t.length > TITLE_MAX) {
-      err.push(`Title must be ${TITLE_MIN}–${TITLE_MAX} characters.`);
-    }
-    if (draft.description.trim().length < DESC_MIN) {
-      err.push(`Description must be at least ${DESC_MIN} characters.`);
-    }
-    if (!isReasonableIpfsRef(draft.ipfsRef)) {
-      err.push("IPFS reference must be a gateway URL, ipfs:// link, or raw CID.");
-    }
+    const t = validateTitle(draft.title);
+    const d = validateDescription(draft.description);
+    const i = validateIpfsRef(draft.ipfsRef);
+    if (t) err.push(t);
+    if (d) err.push(d);
+    if (i) err.push(i);
     if (!draft.descriptionHash && draft.description.trim()) {
       err.push("Waiting for description hash computation...");
     }
@@ -355,8 +416,14 @@ function ProposeWizardInner() {
   function validateStep2(): string[] {
     const err: string[] = [];
     for (const a of draft.actions) {
-      if (!a.target.trim() || !a.fnName.trim()) {
-        err.push("Each action needs a target and function name.");
+      const targetErr = validateActionTarget(a.target);
+      if (targetErr) {
+        err.push(targetErr);
+        break;
+      }
+      const fnErr = validateActionFnName(a.fnName);
+      if (fnErr) {
+        err.push(fnErr);
         break;
       }
       const hasArgs = a.args.some((r) => r.value.trim() !== "");
@@ -370,15 +437,25 @@ function ProposeWizardInner() {
 
   function validateProposal(): string[] {
     const errors: string[] = [];
-    const title = draft.title.trim();
-    if (!title) errors.push("Title is required.");
-    if (title.length > TITLE_MAX) errors.push(`Title must be under ${TITLE_MAX} characters.`);
-    if (title.length > 0 && title.length < TITLE_MIN) errors.push(`Title must be at least ${TITLE_MIN} characters.`);
-    if (!draft.description.trim()) errors.push("Description is required.");
-    if (draft.description.trim().length > 0 && draft.description.trim().length < DESC_MIN) {
-      errors.push(`Description must be at least ${DESC_MIN} characters.`);
-    }
+    const title = validateTitle(draft.title);
+    const description = validateDescription(draft.description);
+    if (title) errors.push(title);
+    if (description) errors.push(description);
     return errors;
+  }
+
+  function syncFieldError(key: string, next: string | null) {
+    setFieldErrors((prev) => {
+      const current = prev[key];
+      if (!next) {
+        if (!current) return prev;
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      }
+      if (current === next) return prev;
+      return { ...prev, [key]: next };
+    });
   }
 
   async function runReviewLoads() {
@@ -540,6 +617,7 @@ function ProposeWizardInner() {
       );
       sessionStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(STORAGE_KEY);
+      setFieldErrors({});
       setDraft({ title: "", description: "", descriptionHash: "", ipfsRef: "", actions: [], savedAt: 0, currentStep: 1 });
       router.push(`/propose?step=4&id=${proposalId.toString()}`);
     } catch (e: unknown) {
@@ -552,16 +630,23 @@ function ProposeWizardInner() {
   function goNext() {
     setStepErrors([]);
     if (step === 1) {
-      const e = validateStep1();
-      if (e.length) {
-        setStepErrors(e);
+      const nextErrors = validateStep1();
+      if (nextErrors.length) {
+        syncFieldError("title", validateTitle(draft.title));
+        syncFieldError("description", validateDescription(draft.description));
+        syncFieldError("ipfsRef", validateIpfsRef(draft.ipfsRef));
+        setStepErrors(nextErrors);
         return;
       }
     }
     if (step === 2) {
-      const e = validateStep2();
-      if (e.length) {
-        setStepErrors(e);
+      const nextErrors = validateStep2();
+      if (nextErrors.length) {
+        for (const action of draft.actions) {
+          syncFieldError(actionFieldKey(action.id, "target"), validateActionTarget(action.target));
+          syncFieldError(actionFieldKey(action.id, "fnName"), validateActionFnName(action.fnName));
+        }
+        setStepErrors(nextErrors);
         return;
       }
     }
@@ -590,6 +675,7 @@ function ProposeWizardInner() {
         setStepErrors([canProposeResult.reason ?? "Rate limit active."]);
         return;
       }
+      setFieldErrors({});
       void submitProposal();
       return;
     }
@@ -674,18 +760,30 @@ function ProposeWizardInner() {
               Title ({TITLE_MIN}–{TITLE_MAX} characters)
             </label>
             <input
+              name="title"
+              data-testid="proposal-title"
               type="text"
               value={draft.title}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, title: e.target.value }))
-              }
+              onChange={(e) => {
+                const v = e.target.value;
+                setDraft((d) => ({ ...d, title: v }));
+                syncFieldError("title", validateTitle(v));
+              }}
+              onBlur={(e) => syncFieldError("title", validateTitle(e.target.value))}
+              aria-invalid={Boolean(fieldErrors.title)}
+              aria-describedby={fieldErrors.title ? "title-error" : undefined}
               className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500"
               placeholder="Short, specific title"
-              maxLength={TITLE_MAX + 5}
+              maxLength={TITLE_MAX}
             />
             <p className="text-xs text-gray-400 mt-1">
               {draft.title.trim().length} / {TITLE_MAX} (min {TITLE_MIN})
             </p>
+            {fieldErrors.title && (
+              <p id="title-error" className="mt-1 text-xs text-red-600">
+                {fieldErrors.title}
+              </p>
+            )}
           </div>
           <div className="grid md:grid-cols-2 gap-4">
             <div>
@@ -693,14 +791,30 @@ function ProposeWizardInner() {
                 Description (Markdown, min {DESC_MIN} chars)
               </label>
               <textarea
+                name="description"
+                data-testid="proposal-description"
                 value={draft.description}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, description: e.target.value }))
-                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setDraft((d) => ({ ...d, description: v }));
+                  syncFieldError("description", validateDescription(v));
+                }}
+                onBlur={(e) => syncFieldError("description", validateDescription(e.target.value))}
+                aria-invalid={Boolean(fieldErrors.description)}
+                aria-describedby={fieldErrors.description ? "description-error" : undefined}
                 rows={12}
                 className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-indigo-500"
                 placeholder="Full proposal narrative: context, options, risks…"
+                maxLength={DESC_MAX}
               />
+              <p className="text-xs text-gray-400 mt-1">
+                {draft.description.trim().length} / {DESC_MAX.toLocaleString()}
+              </p>
+              {fieldErrors.description && (
+                <p id="description-error" className="mt-1 text-xs text-red-600">
+                  {fieldErrors.description}
+                </p>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 flex items-center justify-between">
@@ -741,17 +855,29 @@ function ProposeWizardInner() {
               </button>
             </label>
             <input
+              name="metadata_uri"
+              data-testid="proposal-metadata-uri"
               type="text"
               value={draft.ipfsRef}
-              onChange={(e) =>
-                setDraft((d) => ({ ...d, ipfsRef: e.target.value }))
-              }
+              onChange={(e) => {
+                const v = e.target.value;
+                setDraft((d) => ({ ...d, ipfsRef: v }));
+                syncFieldError("ipfsRef", validateIpfsRef(v));
+              }}
+              onBlur={(e) => syncFieldError("ipfsRef", validateIpfsRef(e.target.value))}
+              aria-invalid={Boolean(fieldErrors.ipfsRef)}
+              aria-describedby={fieldErrors.ipfsRef ? "ipfs-error" : undefined}
               placeholder="ipfs://… or https://…"
               className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 font-mono"
             />
             <p className="text-xs text-gray-400 mt-1">
               Points to the full proposal metadata. The description above will be hashed and stored on-chain.
             </p>
+            {fieldErrors.ipfsRef && (
+              <p id="ipfs-error" className="mt-1 text-xs text-red-600">
+                {fieldErrors.ipfsRef}
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -817,10 +943,18 @@ function ProposeWizardInner() {
                     <button
                       type="button"
                       onClick={() =>
-                        setDraft((d) => ({
-                          ...d,
-                          actions: d.actions.filter((x) => x.id !== act.id),
-                        }))
+                        {
+                          setFieldErrors((prev) => {
+                            const next = { ...prev };
+                            delete next[actionFieldKey(act.id, "target")];
+                            delete next[actionFieldKey(act.id, "fnName")];
+                            return next;
+                          });
+                          setDraft((d) => ({
+                            ...d,
+                            actions: d.actions.filter((x) => x.id !== act.id),
+                          }));
+                        }
                       }
                       className="text-xs text-red-600 hover:text-red-800 ml-2"
                     >
@@ -832,6 +966,8 @@ function ProposeWizardInner() {
                   <div>
                     <label className="text-xs text-gray-500">Target (C… / G…)</label>
                     <input
+                      name={`action-${act.id}-target`}
+                      data-testid={`action-target-${idx}`}
                       value={act.target}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -841,13 +977,24 @@ function ProposeWizardInner() {
                             x.id === act.id ? { ...x, target: v, simulateOk: null } : x,
                           ),
                         }));
+                        syncFieldError(actionFieldKey(act.id, "target"), validateActionTarget(v));
                       }}
+                      onBlur={(e) => syncFieldError(actionFieldKey(act.id, "target"), validateActionTarget(e.target.value))}
+                      aria-invalid={Boolean(fieldErrors[actionFieldKey(act.id, "target")])}
+                      aria-describedby={fieldErrors[actionFieldKey(act.id, "target")] ? `action-${act.id}-target-error` : undefined}
                       className="w-full mt-0.5 border rounded-lg px-2 py-1.5 text-sm font-mono"
                     />
+                    {fieldErrors[actionFieldKey(act.id, "target")] && (
+                      <p id={`action-${act.id}-target-error`} className="mt-1 text-xs text-red-600">
+                        {fieldErrors[actionFieldKey(act.id, "target")]}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="text-xs text-gray-500">Function name</label>
                     <input
+                      name={`action-${act.id}-fnName`}
+                      data-testid={`action-fn-${idx}`}
                       value={act.fnName}
                       onChange={(e) => {
                         const v = e.target.value;
@@ -857,9 +1004,18 @@ function ProposeWizardInner() {
                             x.id === act.id ? { ...x, fnName: v, simulateOk: null } : x,
                           ),
                         }));
+                        syncFieldError(actionFieldKey(act.id, "fnName"), validateActionFnName(v));
                       }}
+                      onBlur={(e) => syncFieldError(actionFieldKey(act.id, "fnName"), validateActionFnName(e.target.value))}
+                      aria-invalid={Boolean(fieldErrors[actionFieldKey(act.id, "fnName")])}
+                      aria-describedby={fieldErrors[actionFieldKey(act.id, "fnName")] ? `action-${act.id}-fn-error` : undefined}
                       className="w-full mt-0.5 border rounded-lg px-2 py-1.5 text-sm font-mono"
                     />
+                    {fieldErrors[actionFieldKey(act.id, "fnName")] && (
+                      <p id={`action-${act.id}-fn-error`} className="mt-1 text-xs text-red-600">
+                        {fieldErrors[actionFieldKey(act.id, "fnName")]}
+                      </p>
+                    )}
                   </div>
                 </div>
                 <div>
@@ -1196,7 +1352,12 @@ function ProposeWizardInner() {
             )}
             <button
               onClick={goNext}
-              disabled={submitting || (step === 3 && (!reviewDataReady || (votes !== null && threshold !== null && votes < threshold)))}
+              disabled={
+                submitting ||
+                (step === 1 && step1HasErrors) ||
+                (step === 2 && step2HasErrors) ||
+                (step === 3 && (!reviewDataReady || (votes !== null && threshold !== null && votes < threshold)))
+              }
               className="bg-indigo-600 text-white px-8 py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors min-w-[120px]"
             >
               {submitting ? (
