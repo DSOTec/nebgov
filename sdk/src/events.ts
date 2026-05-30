@@ -107,6 +107,8 @@ export interface SubscriptionOptions {
   network: Network;
   rpcUrl?: string;
   intervalMs?: number;
+  /** Maximum polling delay in milliseconds when backoff is active (default: 60000). */
+  pollMaxDelayMs?: number;
   /** Maximum number of retry attempts for RPC calls (default: 3) */
   maxAttempts?: number;
   /** Base delay in milliseconds for exponential backoff (default: 1000) */
@@ -242,6 +244,22 @@ function createTopicSubscription(
   let cursor = 0;
   let initialized = false;
   let stopped = false;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
+  let pollDelayMs = intervalMs;
+  const maxPollDelayMs = opts.pollMaxDelayMs ?? 60_000;
+
+  function stopScheduledPoll() {
+    if (pollTimer !== null) {
+      clearTimeout(pollTimer);
+      pollTimer = null;
+    }
+  }
+
+  function scheduleNextPoll(delayMs: number) {
+    if (stopped) return;
+    stopScheduledPoll();
+    pollTimer = setTimeout(() => void poll(), delayMs);
+  }
 
   async function poll(): Promise<void> {
     if (stopped) return;
@@ -269,17 +287,21 @@ function createTopicSubscription(
       }
 
       cursor = latestLedger + 1;
+      pollDelayMs = intervalMs;
     } catch {
-      // Retry on the next interval.
+      pollDelayMs = Math.min(pollDelayMs * 2, maxPollDelayMs);
     }
+
+    const jitter = 0.2;
+    const factor = (1 - jitter) + Math.random() * jitter * 2;
+    scheduleNextPoll(Math.max(0, Math.round(pollDelayMs * factor)));
   }
 
   void poll();
-  const handle = setInterval(() => void poll(), intervalMs);
 
   return () => {
     stopped = true;
-    clearInterval(handle);
+    stopScheduledPoll();
   };
 }
 

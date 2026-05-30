@@ -23,6 +23,8 @@ export interface StreamEventsOptions {
   reconnectDelayMs?: number;
   /** Polling interval in ms used as fallback when WebSocket is unavailable (default 10000). */
   pollIntervalMs?: number;
+  /** Maximum polling delay in ms when backoff is active (default 60000). */
+  pollMaxDelayMs?: number;
   /** Custom fetch function for polling fallback (default: global fetch). */
   fetchFn?: typeof fetch;
 }
@@ -58,23 +60,40 @@ export function streamEvents(
   let stopped = false;
   let ws: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let pollTimer: ReturnType<typeof setTimeout> | null = null;
   let usingPolling = false;
+  let pollingDelayMs = pollIntervalMs;
+  let lastSeenId: string | null = null;
+  let poll: (() => Promise<void>) | null = null;
+  const maxPollDelayMs = opts.pollMaxDelayMs ?? 60_000;
 
   function stopPolling() {
     if (pollTimer !== null) {
-      clearInterval(pollTimer);
+      clearTimeout(pollTimer);
       pollTimer = null;
     }
+  }
+
+  function schedulePolling(delayMs: number) {
+    if (stopped || !usingPolling || poll === null) return;
+    stopPolling();
+    pollTimer = setTimeout(() => void poll?.(), delayMs);
+  }
+
+  function nextDelayMs(): number {
+    const jitter = 0.2;
+    const minFactor = 1 - jitter;
+    const maxFactor = 1 + jitter;
+    const factor = minFactor + Math.random() * (maxFactor - minFactor);
+    return Math.max(0, Math.round(pollingDelayMs * factor));
   }
 
   function startPolling() {
     if (!fetchFn || usingPolling) return;
     usingPolling = true;
     const url = buildPollUrl(indexerUrl);
-    let lastSeenId: string | null = null;
 
-    async function poll() {
+    poll = async () => {
       if (stopped) return;
       try {
         const res = await fetchFn!(url);
@@ -90,13 +109,15 @@ export function streamEvents(
         if (proposals.length > 0) {
           lastSeenId = String(proposals[0].id);
         }
+        pollingDelayMs = pollIntervalMs;
       } catch {
-        /* polling best-effort */
+        pollingDelayMs = Math.min(pollingDelayMs * 2, maxPollDelayMs);
       }
-    }
+
+      schedulePolling(nextDelayMs());
+    };
 
     void poll();
-    pollTimer = setInterval(() => void poll(), pollIntervalMs);
   }
 
   function matchesFilter(event: IndexerEvent): boolean {
@@ -173,5 +194,6 @@ export function streamEvents(
       ws.close();
       ws = null;
     }
+    poll = null;
   };
 }

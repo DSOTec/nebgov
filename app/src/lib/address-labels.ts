@@ -1,4 +1,9 @@
 const LS_ADDRESS_LABELS = "nebgov_address_labels";
+const ENV_ADDRESS_LABELS = parseEnvLabels();
+
+let cachedCustomLabelsRaw: string | null = null;
+let cachedCustomLabelsMap: Record<string, string> | null = null;
+let storageListenerAttached = false;
 
 export interface AddressLabel {
   address: string;
@@ -38,9 +43,50 @@ function getLabelMap(labels: AddressLabel[]): Record<string, string> {
   return map;
 }
 
+function ensureStorageListener(): void {
+  if (typeof window === "undefined" || storageListenerAttached) return;
+
+  window.addEventListener("storage", (event) => {
+    if (event.key === LS_ADDRESS_LABELS || event.key === null) {
+      cachedCustomLabelsRaw = null;
+      cachedCustomLabelsMap = null;
+    }
+  });
+
+  storageListenerAttached = true;
+}
+
+function readCustomLabelsMap(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+
+  ensureStorageListener();
+
+  try {
+    const stored = localStorage.getItem(LS_ADDRESS_LABELS);
+    if (stored === cachedCustomLabelsRaw && cachedCustomLabelsMap) {
+      return cachedCustomLabelsMap;
+    }
+
+    const data = stored ? (JSON.parse(stored) as AddressLabel[]) : [];
+    cachedCustomLabelsRaw = stored;
+    cachedCustomLabelsMap = getLabelMap(data);
+    return cachedCustomLabelsMap;
+  } catch {
+    cachedCustomLabelsRaw = null;
+    cachedCustomLabelsMap = {};
+    return {};
+  }
+}
+
+function writeCustomLabels(labels: AddressLabel[]): void {
+  cachedCustomLabelsRaw = JSON.stringify(labels);
+  cachedCustomLabelsMap = getLabelMap(labels);
+  localStorage.setItem(LS_ADDRESS_LABELS, cachedCustomLabelsRaw);
+}
+
 export function getAllLabels(): AddressLabels {
   return {
-    envLabels: parseEnvLabels(),
+    envLabels: ENV_ADDRESS_LABELS,
     customLabels: getCustomLabels(),
   };
 }
@@ -52,21 +98,17 @@ export function getAddressLabel(address: string): string | null {
 
 export function getCustomLabels(): Record<string, string> {
   if (typeof window === "undefined") return {};
-  try {
-    const stored = localStorage.getItem(LS_ADDRESS_LABELS);
-    if (!stored) return {};
-    const data = JSON.parse(stored) as AddressLabel[];
-    return getLabelMap(data);
-  } catch {
-    return {};
-  }
+  return readCustomLabelsMap();
 }
 
 export function setCustomLabel(address: string, label: string): void {
   if (typeof window === "undefined") return;
   try {
-    const stored = localStorage.getItem(LS_ADDRESS_LABELS);
-    const labels: AddressLabel[] = stored ? JSON.parse(stored) : [];
+    const labels: AddressLabel[] = (() => {
+      const stored = localStorage.getItem(LS_ADDRESS_LABELS);
+      if (!stored) return [];
+      return JSON.parse(stored) as AddressLabel[];
+    })();
     const existing = labels.findIndex((l) => l.address === address);
     const newLabel: AddressLabel = {
       address,
@@ -78,7 +120,7 @@ export function setCustomLabel(address: string, label: string): void {
     } else {
       labels.push(newLabel);
     }
-    localStorage.setItem(LS_ADDRESS_LABELS, JSON.stringify(labels));
+    writeCustomLabels(labels);
   } catch {
     // ignore
   }
@@ -87,11 +129,13 @@ export function setCustomLabel(address: string, label: string): void {
 export function removeCustomLabel(address: string): void {
   if (typeof window === "undefined") return;
   try {
-    const stored = localStorage.getItem(LS_ADDRESS_LABELS);
-    if (!stored) return;
-    const labels: AddressLabel[] = JSON.parse(stored);
+    const labels: AddressLabel[] = (() => {
+      const stored = localStorage.getItem(LS_ADDRESS_LABELS);
+      if (!stored) return [];
+      return JSON.parse(stored) as AddressLabel[];
+    })();
     const filtered = labels.filter((l) => l.address !== address);
-    localStorage.setItem(LS_ADDRESS_LABELS, JSON.stringify(filtered));
+    writeCustomLabels(filtered);
   } catch {
     // ignore
   }
@@ -122,7 +166,7 @@ export function importCustomLabels(jsonString: string): boolean {
         createdAt: Date.now(),
       }),
     );
-    localStorage.setItem(LS_ADDRESS_LABELS, JSON.stringify(labels));
+    writeCustomLabels(labels);
     return true;
   } catch {
     return false;

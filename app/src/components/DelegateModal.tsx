@@ -72,6 +72,19 @@ export function DelegateModal({
     setDelegatee(prefillAddress ?? "");
   }, [open, prefillAddress]);
 
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const isDelegatingAway =
@@ -181,8 +194,8 @@ export function DelegateModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center sm:p-6">
+      <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl">
         <h2 className="text-lg font-bold text-gray-900 mb-1">
           Delegate Voting Power
         </h2>
@@ -194,14 +207,16 @@ export function DelegateModal({
         {isDelegatingAway && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             You are currently delegating to{" "}
-            <span className="font-mono">{currentDelegatee}</span>. Use
+            <span className="block max-w-full truncate font-mono align-bottom sm:inline">
+              {currentDelegatee}
+            </span>. Use
             undelegation to move power back to yourself.
           </div>
         )}
 
         <form onSubmit={handleDelegate} className="space-y-4">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-gray-500 font-mono">
+            <span className="min-w-0 text-xs text-gray-500 font-mono">
               {publicKey
                 ? `You: ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`
                 : "Not connected"}
