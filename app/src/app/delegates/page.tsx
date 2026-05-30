@@ -114,6 +114,7 @@ function DelegatesPageContent() {
           </p>
         </div>
         <button
+          data-testid="open-delegate-modal"
           onClick={() => {
             setPrefillAddress("");
             setModalOpen(true);
@@ -239,6 +240,7 @@ function DelegatesPageContent() {
                     </td>
                     <td className="py-4 px-4 text-right">
                       <button
+                        data-testid={`delegate-row-button-${index}`}
                         onClick={() => handleDelegateClick(delegate.address)}
                         className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
                       >

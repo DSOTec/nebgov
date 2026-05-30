@@ -30,7 +30,8 @@ import {
   subscriptionOptsFromConfig,
 } from "../lib/nebgov-env";
 
-const POLL_MS = 10_000;
+export const POLL_MS = 10_000;
+const POLL_JITTER_MS = 2_000;
 const VOTING_SOON_LEDGERS = 24;
 const BACKFILL_MAX_LEDGER_WINDOW = 80_000;
 
@@ -177,6 +178,7 @@ export function GovernorNotificationsProvider({
   const prevStatesRef = useRef<Map<string, ProposalState>>(new Map());
   const votingSoonFiredRef = useRef<Set<string>>(new Set());
   const bootstrappedRef = useRef(false);
+  const pollTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const config = readGovernorConfig();
@@ -324,8 +326,18 @@ export function GovernorNotificationsProvider({
       }
     }
 
-    void tick();
-    const pollTimer = window.setInterval(() => void tick(), POLL_MS);
+    async function runPollLoop() {
+      while (!stopped) {
+        await tick();
+        if (stopped) return;
+        const jitter = Math.floor(Math.random() * (POLL_JITTER_MS + 1));
+        await new Promise<void>((resolve) => {
+          pollTimerRef.current = window.setTimeout(() => resolve(), POLL_MS + jitter);
+        });
+      }
+    }
+
+    void runPollLoop();
 
     const indexerUrl = readIndexerUrl();
     const unsubStream = indexerUrl
@@ -364,7 +376,10 @@ export function GovernorNotificationsProvider({
       stopped = true;
       unsubProposals();
       unsubStream?.();
-      window.clearInterval(pollTimer);
+      if (pollTimerRef.current !== null) {
+        window.clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
+      }
     };
   }, [isConnected, publicKey]);
 

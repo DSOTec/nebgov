@@ -1,0 +1,40 @@
+name: SDK Integration
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration-tests:
+    name: SDK Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      TESTNET_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY || secrets.FUTURENET_SECRET_KEY }}
+      TESTNET_RPC_URL: ${{ secrets.TESTNET_RPC_URL }}
+      GOVERNOR_ADDRESS: ${{ secrets.GOVERNOR_ADDRESS }}
+      TIMELOCK_ADDRESS: ${{ secrets.TIMELOCK_ADDRESS }}
+      TOKEN_VOTES_ADDRESS: ${{ secrets.TOKEN_VOTES_ADDRESS }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run SDK integration tests
+        run: pnpm --filter @nebgov/sdk test:integration
