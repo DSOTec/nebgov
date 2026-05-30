@@ -99,6 +99,29 @@ export interface ProposalVotes {
   votesAbstain: bigint;
 }
 
+/** An individual vote cast by a voter. */
+export interface ProposalVote {
+  voter: string;
+  support: VoteSupport;
+  weight: bigint;
+  reason?: string;
+}
+
+/** Options for querying individual proposal votes with pagination. */
+export interface GetProposalVotesOptions {
+  proposalId: bigint;
+  page?: number;
+  pageSize?: number;
+}
+
+/** A paginated page of individual proposal votes. */
+export interface ProposalVotesPage {
+  votes: ProposalVote[];
+  total: number;
+  hasMore: boolean;
+  nextPage: number | null;
+}
+
 export interface GovernorConfig {
   /** Contract address of the governor */
   governorAddress: string;
