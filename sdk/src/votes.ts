@@ -196,6 +196,39 @@ export class VotesClient {
   }
 
   /**
+   * Get the current nonce for an account (replay protection for delegate_by_sig).
+   *
+   * Returns 0n for addresses that have never used delegate_by_sig, and increments
+   * with each successful delegate_by_sig call.
+   *
+   * @param address - Stellar address to query.
+   * @returns The current nonce, or 0n if the address has never delegated by sig.
+   */
+  async getNonce(address: string): Promise<bigint> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount(address)),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_nonce",
+              nativeToScVal(address, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw)) : 0n;
+    });
+  }
+
+  /**
    * Get the current voting power of an address.
    *
    * @param account Stellar address to query.
