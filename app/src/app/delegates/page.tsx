@@ -6,6 +6,7 @@ import { VotesClient, type TopDelegate, type Network } from "@nebgov/sdk";
 import { useWallet } from "../../lib/wallet-context";
 import { DelegateModal } from "../../components/DelegateModal";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { PageErrorBoundary } from "../../components/PageErrorBoundary";
 
 function DelegateSkeleton() {
   return (
@@ -40,7 +41,7 @@ function formatVotes(votes: bigint): string {
   return num.toLocaleString();
 }
 
-export default function DelegatesPage() {
+function DelegatesPageContent() {
   const [modalOpen, setModalOpen] = useState(false);
   const [prefillAddress, setPrefillAddress] = useState<string>("");
   const { publicKey } = useWallet();
@@ -267,5 +268,13 @@ export default function DelegatesPage() {
         currentDelegatee={currentDelegatee}
       />
     </div>
+  );
+}
+
+export default function DelegatesPage() {
+  return (
+    <PageErrorBoundary pageName="Delegates">
+      <DelegatesPageContent />
+    </PageErrorBoundary>
   );
 }

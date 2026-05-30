@@ -4,7 +4,7 @@
  * Proposals list page — the main landing page.
  */
 
-import { useState, useEffect, useMemo, Suspense } from "react";
+import { useState, useEffect, useMemo, Suspense, type CSSProperties } from "react";
 import Link from "next/link";
 import { useSearchParams, useRouter } from "next/navigation";
 import { GovernorClient, ProposalState, Network } from "@nebgov/sdk";
@@ -157,11 +157,7 @@ function ProposalsPageInner() {
           const response = await fetch(url.toString());
           if (response.ok) {
             const data = await response.json();
-            if (append) {
-              setProposals((prev) => [...prev, ...data.proposals]);
-            } else {
-              setProposals(data.proposals);
-            }
+            setProposals(data.proposals);
             setNextCursor(data.nextCursor);
             setHasMore(data.hasMore || false);
             return;
@@ -213,11 +209,7 @@ function ProposalsPageInner() {
           endLedger: 0,
         }));
 
-      if (append) {
-        setProposals((prev) => [...prev, ...validProposals]);
-      } else {
-        setProposals(validProposals);
-      }
+      setProposals(validProposals);
 
       if (validProposals.length > 0) {
         setNextCursor(Number(validProposals[validProposals.length - 1].id));
@@ -401,6 +393,12 @@ function ProposalsPageInner() {
               <Link
                 key={p.id.toString()}
                 href={`/proposal/${p.id}`}
+                style={
+                  {
+                    contentVisibility: "auto",
+                    containIntrinsicSize: "180px",
+                  } as CSSProperties
+                }
                 className="block bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition-all"
               >
                 <div className="flex items-start justify-between">

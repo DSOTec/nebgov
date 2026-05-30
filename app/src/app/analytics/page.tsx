@@ -20,12 +20,13 @@ import { useTheme } from "../../hooks/useTheme";
 import { useEffect, useMemo, useState } from "react";
 import { Network, VotesClient } from "@nebgov/sdk";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { PageErrorBoundary } from "../../components/PageErrorBoundary";
 
 const COLORS = ["#60a5fa", "#34d399", "#f97316", "#f87171", "#a78bfa"];
 
 type TimeRange = "7d" | "30d" | "all";
 
-export default function AnalyticsPage() {
+function AnalyticsPageContent() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
@@ -543,5 +544,13 @@ export default function AnalyticsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function AnalyticsPage() {
+  return (
+    <PageErrorBoundary pageName="Analytics">
+      <AnalyticsPageContent />
+    </PageErrorBoundary>
   );
 }
