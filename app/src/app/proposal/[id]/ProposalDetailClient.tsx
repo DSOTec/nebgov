@@ -618,12 +618,15 @@ export default function ProposalDetailClient({ params }: Props) {
         ) : null}
       </div>
 
-      <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
+      <h1 className="break-words text-2xl font-bold text-gray-900 dark:text-white mb-2">
         {proposal.description}
       </h1>
 
       <p className="text-sm text-gray-500 mb-6">
-        Proposed by <span className="font-mono">{proposal.proposer}</span>
+        Proposed by{" "}
+        <span className="block max-w-full truncate font-mono align-bottom sm:inline sm:max-w-none sm:overflow-visible sm:whitespace-normal">
+          {proposal.proposer}
+        </span>
       </p>
 
       {/* Veto Window Status - shown when proposal is Queued */}
@@ -720,11 +723,11 @@ export default function ProposalDetailClient({ params }: Props) {
             content...
           </div>
         ) : metadata ? (
-          <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
+          <div className="prose prose-sm max-w-none overflow-x-auto break-words whitespace-pre-wrap text-gray-800 dark:text-gray-200">
             {metadata}
           </div>
         ) : (
-          <p className="text-gray-400 italic py-4">
+          <p className="break-words whitespace-pre-wrap text-gray-400 italic py-4">
             {fetchError ? "Content unavailable" : proposal.description}
           </p>
         )}
@@ -1267,7 +1270,7 @@ export default function ProposalDetailClient({ params }: Props) {
                 >
                   <div className="flex items-center justify-between gap-4">
                     <div className="flex items-center gap-3">
-                      <span className="font-mono text-sm">
+                      <span className="block max-w-[11rem] truncate font-mono text-sm sm:max-w-none sm:overflow-visible sm:whitespace-nowrap">
                         {vote.voter.slice(0, 6)}...{vote.voter.slice(-4)}
                       </span>
                       <span

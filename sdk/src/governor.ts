@@ -20,6 +20,9 @@ import {
   ProposalSimulationResult,
   ProposalState,
   ProposalVotes,
+  ProposalVote,
+  ProposalVotesPage,
+  GetProposalVotesOptions,
   VoteSupport,
   VoteType,
   Network,
@@ -30,6 +33,7 @@ import {
 } from "./types";
 
 import { TimelockClient } from "./timelock";
+
 
 /** Options for uploading proposal metadata to IPFS. */
 export interface MetadataUploadOptions {
@@ -59,6 +63,7 @@ export interface MetadataUploadOptions {
 
 import { GovernorError, GovernorErrorCode } from "./errors";
 import { hexToBytes32, withRetry } from "./utils";
+import { Logger } from "./logger";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -123,6 +128,7 @@ export class GovernorClient {
   private readonly server: SorobanRpc.Server;
   private readonly contract: Contract;
   private readonly networkPassphrase: string;
+  private readonly log: Logger;
 
   constructor(config: GovernorConfig) {
     this.config = config;
@@ -130,6 +136,7 @@ export class GovernorClient {
     this.server = new SorobanRpc.Server(rpcUrl, { allowHttp: false });
     this.contract = new Contract(config.governorAddress);
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
+    this.log = new Logger(config.debug ?? false);
   }
 
   private async retry<T>(
@@ -141,7 +148,7 @@ export class GovernorClient {
       baseDelayMs: this.config.baseDelayMs ?? 1000,
       retryOn,
       onRetry: (attempt, error) => {
-        console.debug(`[GovernorClient] Retry attempt ${attempt} due to error:`, error);
+        this.log.debug(`[GovernorClient] Retry attempt ${attempt} due to error:`, error);
       },
     });
   }
@@ -1310,6 +1317,144 @@ export class GovernorClient {
   }
 
   /**
+   * Get individual votes cast for a proposal, with pagination.
+   *
+   * Queries VoteCast events from the contract and returns them page by page.
+   * Use {@link streamProposalVotes} to iterate over all votes without managing pages.
+   *
+   * @param options - Query options including proposalId, page, and pageSize
+   * @returns A paginated page of individual votes
+   */
+  async getIndividualVotes(
+    options: GetProposalVotesOptions,
+  ): Promise<ProposalVotesPage> {
+    const proposalId = options.proposalId;
+    const page = Math.max(0, options.page ?? 0);
+    const pageSize = Math.min(options.pageSize ?? 100, 500);
+    const contractId = this.contract.contractId();
+
+    const voteCastTopic = [
+      xdr.ScVal.scvSymbol("VoteCast").toXDR("base64"),
+    ];
+    const voteCastWithReasonTopic = [
+      xdr.ScVal.scvSymbol("VoteCastWithReason").toXDR("base64"),
+      nativeToScVal(proposalId, { type: "u64" }).toXDR("base64"),
+    ];
+
+    const latest = await this.getLatestLedger();
+    let cursor = 1;
+    const allVotes: ProposalVote[] = [];
+
+    while (cursor <= latest) {
+      const response = await this.server.getEvents({
+        startLedger: cursor,
+        filters: [
+          {
+            type: "contract",
+            contractIds: [contractId],
+            topics: [voteCastTopic],
+          },
+          {
+            type: "contract",
+            contractIds: [contractId],
+            topics: [voteCastWithReasonTopic],
+          },
+        ],
+        limit: 100,
+      });
+
+      const events = response.events ?? [];
+      if (events.length === 0) break;
+
+      let maxLedger = cursor;
+      for (const event of events) {
+        if (event.ledger > maxLedger) maxLedger = event.ledger;
+
+        try {
+          const topic0 = event.topic?.[0]
+            ? scValToNative(event.topic[0])
+            : "";
+
+          if (topic0 === "VoteCast") {
+            const value = scValToNative(event.value) as Record<string, unknown>;
+            if (BigInt(value.proposal_id as number) !== proposalId) continue;
+            const voter = String(value.voter ?? "");
+            const support = Number(value.support ?? 0);
+            const weight = toBigInt(value.weight);
+            allVotes.push({
+              voter,
+              support:
+                support === 0
+                  ? VoteSupport.Against
+                  : support === 1
+                    ? VoteSupport.For
+                    : VoteSupport.Abstain,
+              weight,
+            });
+          } else if (topic0 === "VoteCastWithReason") {
+            const value = scValToNative(event.value) as any;
+            const support = Number(value[0] ?? 0);
+            const weight = toBigInt(value[1] ?? 0);
+            const reason = String(value[2] ?? "");
+            const voter = event.topic?.[2]
+              ? String(scValToNative(event.topic[2]))
+              : "";
+            allVotes.push({
+              voter,
+              support:
+                support === 0
+                  ? VoteSupport.Against
+                  : support === 1
+                    ? VoteSupport.For
+                    : VoteSupport.Abstain,
+              weight,
+              reason: reason || undefined,
+            });
+          }
+        } catch {
+          // skip malformed event
+        }
+      }
+
+      if (allVotes.length >= (page + 1) * pageSize) break;
+      cursor = maxLedger + 1;
+    }
+
+    const total = allVotes.length;
+    const start = page * pageSize;
+    const votes = allVotes.slice(start, start + pageSize);
+    const hasMore = start + pageSize < total;
+    const nextPage = hasMore ? page + 1 : null;
+
+    return { votes, total, hasMore, nextPage };
+  }
+
+  /**
+   * Stream all votes for a proposal as an async generator.
+   *
+   * Automatically paginates through all individual votes, yielding them
+   * one by one. Useful for frontends that want to render votes incrementally.
+   *
+   * @param proposalId - The proposal ID to stream votes for
+   * @param pageSize - Number of votes per page (default: 100, max: 500)
+   */
+  async *streamProposalVotes(
+    proposalId: bigint,
+    pageSize: number = 100,
+  ): AsyncGenerator<ProposalVote> {
+    let page = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const result = await this.getIndividualVotes({ proposalId, page, pageSize });
+      for (const vote of result.votes) {
+        yield vote;
+      }
+      hasMore = result.hasMore;
+      page++;
+    }
+  }
+
+  /**
    * Get the quorum required for a specific proposal.
    *
    * Quorum is calculated dynamically based on total supply at the proposal's start ledger
@@ -1507,7 +1652,7 @@ export class GovernorClient {
             .slice(0, limit);
         }
       } catch (e) {
-        console.warn("Indexer query failed, falling back to event scan:", e);
+        this.log.warn("Indexer query failed, falling back to event scan:", e);
       }
     }
 
@@ -1651,7 +1796,7 @@ export class GovernorClient {
     
     if (!url) {
       // No indexer configured, fall back to on-chain query
-      console.warn("No indexer URL configured, falling back to on-chain queries");
+      this.log.warn("No indexer URL configured, falling back to on-chain queries");
       return null;
     }
 
@@ -1668,7 +1813,7 @@ export class GovernorClient {
       
       return await response.json();
     } catch (error) {
-      console.warn(`Indexer query failed for proposal ${proposalId}:`, error);
+      this.log.warn(`Indexer query failed for proposal ${proposalId}:`, error);
       return null;
     }
   }
@@ -2406,6 +2551,19 @@ export class GovernorClient {
     }
 
     return results;
+  }
+
+  /**
+   * Backwards-compatible plural alias for batch proposal fetching.
+   *
+   * The issue tracker refers to `getProposals(ids[])`; this method keeps that
+   * surface available while reusing the existing batching implementation.
+   */
+  async getProposals(
+    proposalIds: bigint[],
+    concurrency = 10,
+  ): Promise<Array<{ id: bigint; proposal?: Proposal; error?: Error }>> {
+    return this.getProposalsBatch(proposalIds, concurrency);
   }
 
   /**

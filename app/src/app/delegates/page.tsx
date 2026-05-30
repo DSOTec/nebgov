@@ -6,6 +6,7 @@ import { VotesClient, type TopDelegate, type Network } from "@nebgov/sdk";
 import { useWallet } from "../../lib/wallet-context";
 import { DelegateModal } from "../../components/DelegateModal";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { PageErrorBoundary } from "../../components/PageErrorBoundary";
 
 function DelegateSkeleton() {
   return (
@@ -40,7 +41,7 @@ function formatVotes(votes: bigint): string {
   return num.toLocaleString();
 }
 
-export default function DelegatesPage() {
+function DelegatesPageContent() {
   const [modalOpen, setModalOpen] = useState(false);
   const [prefillAddress, setPrefillAddress] = useState<string>("");
   const { publicKey } = useWallet();
@@ -113,6 +114,7 @@ export default function DelegatesPage() {
           </p>
         </div>
         <button
+          data-testid="open-delegate-modal"
           onClick={() => {
             setPrefillAddress("");
             setModalOpen(true);
@@ -238,6 +240,7 @@ export default function DelegatesPage() {
                     </td>
                     <td className="py-4 px-4 text-right">
                       <button
+                        data-testid={`delegate-row-button-${index}`}
                         onClick={() => handleDelegateClick(delegate.address)}
                         className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
                       >
@@ -265,5 +268,13 @@ export default function DelegatesPage() {
         currentDelegatee={currentDelegatee}
       />
     </div>
+  );
+}
+
+export default function DelegatesPage() {
+  return (
+    <PageErrorBoundary pageName="Delegates">
+      <DelegatesPageContent />
+    </PageErrorBoundary>
   );
 }

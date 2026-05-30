@@ -72,6 +72,19 @@ export function DelegateModal({
     setDelegatee(prefillAddress ?? "");
   }, [open, prefillAddress]);
 
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [open, onClose]);
+
   if (!open) return null;
 
   const isDelegatingAway =
@@ -181,12 +194,19 @@ export function DelegateModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
-      <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-        <h2 className="text-lg font-bold text-gray-900 mb-1">
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center sm:p-6"
+      data-testid="delegate-modal"
+    >
+      <div
+        className="w-full max-w-md rounded-2xl bg-white p-6 shadow-xl"
+        role="dialog"
+        aria-modal="true"
+      >
+        <h2 className="mb-1 text-lg font-bold text-gray-900">
           Delegate Voting Power
         </h2>
-        <p className="text-sm text-gray-500 mb-4">
+        <p className="mb-4 text-sm text-gray-500">
           Delegate to yourself to activate your voting power, or choose another
           address.
         </p>
@@ -194,23 +214,26 @@ export function DelegateModal({
         {isDelegatingAway && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             You are currently delegating to{" "}
-            <span className="font-mono">{currentDelegatee}</span>. Use
-            undelegation to move power back to yourself.
+            <span className="block max-w-full truncate font-mono align-bottom sm:inline">
+              {currentDelegatee}
+            </span>
+            . Use undelegation to move power back to yourself.
           </div>
         )}
 
         <form onSubmit={handleDelegate} className="space-y-4">
           <div className="flex items-center justify-between gap-3">
-            <span className="text-xs text-gray-500 font-mono">
+            <span className="min-w-0 font-mono text-xs text-gray-500">
               {publicKey
                 ? `You: ${publicKey.slice(0, 4)}...${publicKey.slice(-4)}`
                 : "Not connected"}
             </span>
             <button
               type="button"
+              data-testid="delegate-to-self-button"
               disabled={!publicKey}
               onClick={() => publicKey && setDelegatee(publicKey)}
-              className="text-xs px-3 py-1.5 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700 hover:bg-gray-50 disabled:opacity-50"
             >
               Delegate to myself
             </button>
@@ -219,24 +242,27 @@ export function DelegateModal({
           <input
             type="text"
             placeholder="Stellar address (G...)"
+            data-testid="delegatee-input"
             value={delegatee}
             onChange={(e) => setDelegatee(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
             required
           />
 
           <div className="flex gap-3">
             <button
               type="button"
+              data-testid="delegate-cancel-button"
               onClick={onClose}
-              className="flex-1 border border-gray-200 text-gray-600 py-2 rounded-lg text-sm hover:bg-gray-50"
+              className="flex-1 rounded-lg border border-gray-200 py-2 text-sm text-gray-600 hover:bg-gray-50"
             >
               Cancel
             </button>
             <button
               type="submit"
+              data-testid="delegate-submit-button"
               disabled={submitting}
-              className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+              className="flex-1 rounded-lg bg-indigo-600 py-2 text-sm font-medium text-white hover:bg-indigo-700 disabled:opacity-50"
             >
               {submitting ? "Delegating..." : "Delegate"}
             </button>
@@ -245,6 +271,7 @@ export function DelegateModal({
           {isDelegatingAway && (
             <button
               type="button"
+              data-testid="undelegate-button"
               onClick={() => void handleUndelegate()}
               disabled={submitting}
               className="w-full rounded-lg border border-amber-200 bg-amber-50 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
@@ -253,19 +280,20 @@ export function DelegateModal({
             </button>
           )}
 
-          <div className="border-t border-gray-200 pt-4 mt-4">
-            <p className="text-xs text-gray-500 mb-2">
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <p className="mb-2 text-xs text-gray-500">
               Or delegate without paying gas
             </p>
             <button
               type="button"
+              data-testid="delegate-by-sig-button"
               onClick={() => void handleDelegateBySig()}
               disabled={submitting || !delegatee.trim()}
-              className="w-full bg-green-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+              className="w-full rounded-lg bg-green-600 py-2 text-sm font-medium text-white hover:bg-green-700 disabled:opacity-50"
             >
               {submitting ? "Signing..." : "Delegate without paying gas"}
             </button>
-            <p className="text-xs text-gray-400 mt-1">
+            <p className="mt-1 text-xs text-gray-400">
               Sign off-chain, relayer submits transaction
             </p>
           </div>
