@@ -238,16 +238,16 @@ export function VotingModal({
   }
 
   return (
-    <div 
-      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-4 sm:items-center sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="voting-modal-title"
       aria-describedby="voting-modal-description"
     >
-      <div 
+      <div
         id="voting-modal"
-        className="bg-white dark:bg-gray-800 rounded-2xl p-6 w-full max-w-lg shadow-xl"
+        className="w-full max-w-lg rounded-2xl bg-white p-6 shadow-xl dark:bg-gray-800"
         tabIndex={-1}
       >
         <div className="flex items-start justify-between mb-3">
@@ -268,7 +268,12 @@ export function VotingModal({
         <div className="bg-gray-50 dark:bg-gray-900 border border-gray-100 dark:border-gray-700 rounded-lg p-3 mb-4">
           <p className="text-sm text-gray-600 dark:text-gray-300">Delegation</p>
           {resolvedDelegatee ? (
-            <p className="text-sm text-gray-700 dark:text-gray-200 mt-1">Delegated to <span className="font-mono">{resolvedDelegatee}</span></p>
+            <p className="mt-1 text-sm text-gray-700 dark:text-gray-200">
+              Delegated to{" "}
+              <span className="block max-w-full truncate font-mono align-bottom sm:inline">
+                {resolvedDelegatee}
+              </span>
+            </p>
           ) : (
             <div className="mt-2 flex items-center gap-3">
               <p className="text-sm text-red-600">You have not delegated voting power yet.</p>

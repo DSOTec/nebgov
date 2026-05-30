@@ -16,12 +16,12 @@ export function VoteBar({ votesFor, votesAgainst, votesAbstain }: Props) {
 
   return (
     <div className="space-y-2">
-      <div className="flex h-2 rounded-full overflow-hidden bg-gray-100">
-        <div className="bg-emerald-500" style={{ width: `${pctFor}%` }} />
-        <div className="bg-rose-500" style={{ width: `${pctAgainst}%` }} />
-        <div className="bg-slate-400" style={{ width: `${pctAbstain}%` }} />
+      <div className="flex h-2 w-full overflow-hidden rounded-full bg-gray-100">
+        <div className="min-w-0 shrink-0 bg-emerald-500" style={{ width: `${pctFor}%` }} />
+        <div className="min-w-0 shrink-0 bg-rose-500" style={{ width: `${pctAgainst}%` }} />
+        <div className="min-w-0 shrink-0 bg-slate-400" style={{ width: `${pctAbstain}%` }} />
       </div>
-      <div className="grid grid-cols-3 gap-2 text-sm">
+      <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-3">
         <div>
           <span className="text-gray-500">For: </span>
           <span className="font-medium text-emerald-600">{fmt(votesFor)}</span>
