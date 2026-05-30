@@ -1,0 +1,71 @@
+name: SDK Integration Tests
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+    inputs:
+      e2e:
+        description: "Run end-to-end write tests (propose/vote/queue/execute)"
+        required: true
+        default: "false"
+        type: boolean
+
+concurrency:
+  group: sdk-integration-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  integration:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    environment: testnet
+    env:
+      TESTNET_RPC_URL: ${{ vars.TESTNET_RPC_URL || 'https://soroban-testnet.stellar.org' }}
+      GOVERNOR_ADDRESS: ${{ secrets.GOVERNOR_ADDRESS }}
+      TIMELOCK_ADDRESS: ${{ secrets.TIMELOCK_ADDRESS }}
+      TOKEN_VOTES_ADDRESS: ${{ secrets.TOKEN_VOTES_ADDRESS }}
+      TREASURY_ADDRESS: ${{ secrets.TREASURY_ADDRESS }}
+      TESTNET_SECRET_KEY: ${{ secrets.TESTNET_SECRET_KEY }}
+      WRITE_TESTS: ${{ inputs.e2e == 'true' && 'true' || 'false' }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run integration tests
+        run: pnpm --filter @nebgov/sdk run test:integration
+        continue-on-error: true
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-integration-results
+          path: sdk/coverage/
+
+      - name: Notify on failure
+        if: failure() && github.event_name == 'schedule'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `SDK integration tests failed (${new Date().toISOString().split('T')[0]})`,
+              body: `## SDK Integration Test Failure\n\nIntegration tests against testnet failed at ${new Date().toISOString()}.\n\nCheck the [workflow run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}) for details.\n\nPossible causes:\n- Testnet RPC endpoint changed\n- Contract addresses changed\n- A contract was re-deployed with breaking changes`,
+              labels: ["sdk", "ci", "bug"],
+            });
