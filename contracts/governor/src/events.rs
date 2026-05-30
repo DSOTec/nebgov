@@ -13,6 +13,8 @@ pub const PROPOSAL_CANCELLED_TOPIC: &str = "ProposalCancelled";
 pub const PROPOSAL_EXPIRED_TOPIC: &str = "ProposalExpired";
 pub const GOVERNOR_UPGRADED_TOPIC: &str = "GovernorUpgraded";
 pub const CONFIG_UPDATED_TOPIC: &str = "ConfigUpdated";
+pub const GUARDIAN_SET_TOPIC: &str = "GuardianSet";
+pub const GUARDIAN_CANCELLED_TOPIC: &str = "GuardianCancelled";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -220,6 +222,42 @@ pub fn emit_config_updated(
         ConfigUpdatedEvent {
             old_settings: old_settings.clone(),
             new_settings: new_settings.clone(),
+        },
+    );
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct GuardianSetEvent {
+    pub old_guardian: Address,
+    pub new_guardian: Address,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct GuardianCancelledEvent {
+    pub proposal_id: u64,
+    pub guardian: Address,
+    pub reason: String,
+}
+
+pub fn emit_guardian_set(env: &Env, old_guardian: &Address, new_guardian: &Address) {
+    env.events().publish(
+        (Symbol::new(env, GUARDIAN_SET_TOPIC),),
+        GuardianSetEvent {
+            old_guardian: old_guardian.clone(),
+            new_guardian: new_guardian.clone(),
+        },
+    );
+}
+
+pub fn emit_guardian_cancelled(env: &Env, proposal_id: u64, guardian: &Address, reason: String) {
+    env.events().publish(
+        (Symbol::new(env, GUARDIAN_CANCELLED_TOPIC), guardian.clone()),
+        GuardianCancelledEvent {
+            proposal_id,
+            guardian: guardian.clone(),
+            reason,
         },
     );
 }

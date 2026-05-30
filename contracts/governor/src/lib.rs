@@ -604,7 +604,7 @@ impl GovernorContract {
         // Validate metadata URI is non-empty (#445).
         // A proposal with no content URI has no verifiable off-chain description,
         // making it indistinguishable from a governance-cycle-wasting no-op.
-        if metadata_uri.len() == 0 {
+        if metadata_uri.is_empty() {
             env.panic_with_error(GovernorError::EmptyMetadataUri);
         }
 
@@ -2243,6 +2243,91 @@ impl GovernorContract {
         proposal.op_ids
     }
 
+    // ============================================================================
+    // Guardian Role — Emergency Veto Circuit Breaker (Issue #464)
+    // ============================================================================
+
+    /// Update the guardian address (admin-gated emergency key rotation).
+    ///
+    /// The guardian is the privileged address that can cancel any proposal
+    /// before execution as an emergency circuit breaker. This function lets
+    /// the admin rotate the guardian key directly — without waiting for a
+    /// governance vote — so it can be replaced immediately if compromised.
+    pub fn set_guardian(env: Env, admin: Address, new_guardian: Address) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::UnauthorizedPause));
+        if admin != stored_admin {
+            env.panic_with_error(GovernorError::UnauthorizedPause);
+        }
+        let old_guardian: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardian)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::GuardianNotSet));
+        env.storage()
+            .instance()
+            .set(&DataKey::Guardian, &new_guardian);
+        events::emit_guardian_set(&env, &old_guardian, &new_guardian);
+    }
+
+    /// Emergency cancel a proposal at any pre-execution state.
+    ///
+    /// This is the guardian's true circuit breaker. Unlike `cancel()` which
+    /// only covers Active proposals, and `cancel_queued()` which enforces a
+    /// veto window, this function allows the guardian to veto a proposal
+    /// regardless of its current state — provided it has not yet been executed
+    /// or already cancelled.
+    ///
+    /// If the proposal is queued in the timelock, all associated operations
+    /// are also cancelled so the on-chain execution chain is fully broken.
+    ///
+    /// The `reason` string is emitted in the `GuardianCancelled` event to
+    /// create a permanent on-chain audit trail for the emergency action.
+    pub fn guardian_cancel(env: Env, proposal_id: u64, reason: String) {
+        let guardian: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Guardian)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::GuardianNotSet));
+        guardian.require_auth();
+
+        let proposal = Self::must_get_proposal(&env, proposal_id);
+
+        if proposal.executed {
+            env.panic_with_error(GovernorError::ProposalAlreadyExecuted);
+        }
+        if proposal.cancelled {
+            env.panic_with_error(GovernorError::UnauthorizedCancel);
+        }
+
+        let mut proposal_mut = proposal;
+        proposal_mut.cancelled = true;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal_mut);
+        Self::extend_proposal_ttl(&env, proposal_id, &proposal_mut);
+
+        if proposal_mut.queued {
+            let timelock_addr: Address = env
+                .storage()
+                .instance()
+                .get(&DataKey::Timelock)
+                .unwrap_or_else(|| env.panic_with_error(GovernorError::TimelockNotSet));
+            let timelock = TimelockClient::new(&env, &timelock_addr);
+            let gov_addr = env.current_contract_address();
+            for i in 0..proposal_mut.op_ids.len() {
+                let op_id = proposal_mut.op_ids.get(i).unwrap();
+                timelock.cancel(&gov_addr, &op_id);
+            }
+        }
+
+        events::emit_guardian_cancelled(&env, proposal_id, &guardian, reason);
+    }
+
     /// Get a proposal by ID.
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         Self::must_get_proposal(&env, proposal_id)
@@ -2257,6 +2342,22 @@ mod test {
         testutils::{Address as _, Events, Ledger as _},
         Bytes, Env, Symbol, TryIntoVal,
     };
+
+    /// Minimal mock timelock for unit tests — returns a non-zero execution window
+    /// so that `initialize()` passes the `ExecutionWindowZero` guard.
+    #[contract]
+    pub struct MockTimelockContract;
+
+    #[contractimpl]
+    impl MockTimelockContract {
+        pub fn execution_window(_env: Env) -> u64 {
+            86_400
+        }
+
+        pub fn min_delay(_env: Env) -> u64 {
+            1
+        }
+    }
 
     /// Mock votes contract that returns a high vote count for any address,
     /// allowing propose() to pass the threshold check in unit tests.
@@ -2329,7 +2430,7 @@ mod test {
 
         let admin = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -2349,6 +2450,9 @@ mod test {
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
 
+        // Advance past voting_delay so proposal is Active
+        env.ledger().with_mut(|li| li.sequence_number += 101);
+
         let reason = String::from_str(&env, "I support this because it improves governance");
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
 
@@ -2365,7 +2469,7 @@ mod test {
 
         let admin = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -2413,7 +2517,7 @@ mod test {
 
         let admin = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter1 = Address::generate(&env);
         let voter2 = Address::generate(&env);
@@ -2433,6 +2537,9 @@ mod test {
         );
 
         let proposal_id = propose_dummy(&env, &client, &proposer);
+
+        // Advance past voting_delay so proposal is Active
+        env.ledger().with_mut(|li| li.sequence_number += 101);
 
         let reason1 = String::from_str(&env, "I agree with this proposal");
         let reason2 = String::from_str(&env, "I disagree with this proposal");
@@ -2456,7 +2563,7 @@ mod test {
         let client = GovernorContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -2515,7 +2622,7 @@ mod test {
         let client = GovernorContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer1 = Address::generate(&env);
         let proposer2 = Address::generate(&env);
         let proposer3 = Address::generate(&env);
@@ -2591,7 +2698,7 @@ mod test {
         let admin = Address::generate(&env);
         let proposer = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
 
         // Set threshold to 100
         let guardian = Address::generate(&env);
@@ -2661,7 +2768,7 @@ mod test {
         let admin = Address::generate(&env);
         let proposer = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
 
         let guardian = Address::generate(&env);
         client.initialize(
@@ -2722,7 +2829,7 @@ mod test {
         let admin = Address::generate(&env);
         let proposer = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
 
         let guardian = Address::generate(&env);
         client.initialize(
@@ -2782,7 +2889,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
 
         client.initialize(
@@ -2816,7 +2923,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
 
         client.initialize(
@@ -2851,7 +2958,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
 
         client.initialize(
@@ -2888,7 +2995,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
 
         client.initialize(
@@ -2921,7 +3028,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -2957,7 +3064,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -2996,7 +3103,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -3045,7 +3152,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -3089,7 +3196,7 @@ mod test {
 
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -3157,7 +3264,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
 
         // 10% static quorum: supply=10_000_000, so static = 1_000_000.
@@ -3223,7 +3330,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -3273,7 +3380,7 @@ mod test {
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
 
@@ -3309,15 +3416,26 @@ mod test {
         // to prevent expiration mid-lifecycle.
         let env = Env::default();
         env.mock_all_auths();
+        // Allow instance TTLs large enough to survive the 259,200-ledger voting period.
+        env.ledger().with_mut(|li| li.max_entry_ttl = 4_000_000);
         let contract_id = env.register(GovernorContract, ());
         let client = GovernorContractClient::new(&env, &contract_id);
 
         let admin = Address::generate(&env);
         let guardian = Address::generate(&env);
         let votes_token_id = env.register(MockVotesContract, ());
-        let timelock = Address::generate(&env);
+        let timelock = env.register(MockTimelockContract, ());
         let proposer = Address::generate(&env);
         let voter = Address::generate(&env);
+
+        // extend_ttl(threshold, extend_to) only acts when current_ttl <= threshold,
+        // so extend_ttl(N, N) means "ensure TTL >= N". Without this the contract
+        // instance archives when we jump to mid_voting_period.
+        for cid in [&contract_id, &votes_token_id, &timelock] {
+            env.as_contract(cid, || {
+                env.storage().instance().extend_ttl(4_000_000, 4_000_000);
+            });
+        }
 
         // Initialize with long voting period: 30 days ≈ 259,200 ledgers (at 10 sec blocks)
         let long_voting_period = 259_200u32;
@@ -3329,8 +3447,8 @@ mod test {
             &timelock,
             &voting_delay,
             &long_voting_period,
-            &50,
-            &1000,
+            &9, // 9% quorum: 900,000 of 10,000,000 total supply, met by the 1,000,000 mock votes
+            &0,
             &guardian,
             &VoteType::Extended,
             &120_960, // grace period

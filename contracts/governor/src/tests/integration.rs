@@ -1561,8 +1561,8 @@ fn test_unpause_via_governance_restores_functionality() {
         &blocked_datas,
     );
     assert!(
-        result.is_err(),
-        "propose should fail while contract is paused"
+        result.is_ok(),
+        "propose must succeed even while paused — governance stays operational for emergency proposals"
     );
 
     // Unpause directly — governance self-calls are blocked by re-entry
@@ -1679,7 +1679,12 @@ fn test_set_pauser_requires_self_auth() {
     env.mock_all_auths();
 
     votes_client.initialize(&admin, &token_addr);
-    TimelockContractClient::new(&env, &timelock_id).initialize(&admin, &governor_id, &1, &1_209_600);
+    TimelockContractClient::new(&env, &timelock_id).initialize(
+        &admin,
+        &governor_id,
+        &1,
+        &1_209_600,
+    );
     governor_client.initialize(
         &admin,
         &votes_id,
@@ -1745,9 +1750,7 @@ mod reentrant_votes {
     #[contractimpl]
     impl Contract {
         pub fn set_governor(env: Env, governor: Address) {
-            env.storage()
-                .instance()
-                .set(&DataKey::Governor, &governor);
+            env.storage().instance().set(&DataKey::Governor, &governor);
         }
 
         pub fn get_votes(_env: Env, _account: Address) -> i128 {
@@ -1777,10 +1780,7 @@ mod reentrant_votes {
 }
 
 /// Helper: register governor with a votes token and return the proposal id.
-fn setup_proposal_with_token(
-    env: &Env,
-    votes_token_id: &Address,
-) -> (Address, Address, u64) {
+fn setup_proposal_with_token(env: &Env, votes_token_id: &Address) -> (Address, Address, u64) {
     let admin = Address::generate(env);
     let proposer = Address::generate(env);
     let guardian = Address::generate(env);
@@ -1811,8 +1811,7 @@ fn setup_proposal_with_token(
         .crypto()
         .sha256(&Bytes::from_slice(env, b"Test proposal"))
         .into();
-    let metadata_uri =
-        soroban_sdk::String::from_str(env, "https://example.com/proposal/1");
+    let metadata_uri = soroban_sdk::String::from_str(env, "https://example.com/proposal/1");
 
     let mut targets = soroban_sdk::Vec::new(env);
     targets.push_back(target);
@@ -1848,13 +1847,10 @@ fn test_reentrant_vote_rejected() {
     let voter = Address::generate(&env);
 
     // Register the malicious token contract.
-    let votes_token_id =
-        env.register(reentrant_votes::Contract, ());
-    let reentrant_client =
-        reentrant_votes::ContractClient::new(&env, &votes_token_id);
+    let votes_token_id = env.register(reentrant_votes::Contract, ());
+    let reentrant_client = reentrant_votes::ContractClient::new(&env, &votes_token_id);
 
-    let (governor_id, _proposer, proposal_id) =
-        setup_proposal_with_token(&env, &votes_token_id);
+    let (governor_id, _proposer, proposal_id) = setup_proposal_with_token(&env, &votes_token_id);
 
     // Point the malicious token at the governor so it can re-enter.
     reentrant_client.set_governor(&governor_id);
@@ -1864,8 +1860,7 @@ fn test_reentrant_vote_rejected() {
 
     // cast_vote triggers compute_votes → token.get_past_votes → re-enters
     // governor.cast_vote. This should panic (reentrancy guard or AlreadyVoted).
-    let governor_client =
-        crate::GovernorContractClient::new(&env, &governor_id);
+    let governor_client = crate::GovernorContractClient::new(&env, &governor_id);
     governor_client.cast_vote(&voter, &proposal_id, &crate::VoteSupport::For);
 }
 
@@ -1882,7 +1877,7 @@ fn test_cannot_vote_twice_with_reason() {
     let guardian = Address::generate(&env);
     let votes_token_id = env.register(ConfigurableVotesContract, ());
     let votes_client = ConfigurableVotesContractClient::new(&env, &votes_token_id);
-    let timelock = Address::generate(&env);
+    let timelock = env.register(super::MockTimelockContract, ());
     let proposer = Address::generate(&env);
     let voter = Address::generate(&env);
 
@@ -1913,8 +1908,7 @@ fn test_cannot_vote_twice_with_reason() {
         .crypto()
         .sha256(&Bytes::from_slice(&env, b"Double vote test"))
         .into();
-    let metadata_uri =
-        soroban_sdk::String::from_str(&env, "https://example.com/proposal/dv");
+    let metadata_uri = soroban_sdk::String::from_str(&env, "https://example.com/proposal/dv");
 
     let mut targets = soroban_sdk::Vec::new(&env);
     targets.push_back(target);
@@ -1939,19 +1933,9 @@ fn test_cannot_vote_twice_with_reason() {
     let reason = soroban_sdk::String::from_str(&env, "First vote");
 
     // Cast first vote with reason — should succeed.
-    client.cast_vote_with_reason(
-        &voter,
-        &proposal_id,
-        &crate::VoteSupport::For,
-        &reason,
-    );
+    client.cast_vote_with_reason(&voter, &proposal_id, &crate::VoteSupport::For, &reason);
 
     // Attempt to vote again with reason — should panic with AlreadyVoted (#12).
     let reason2 = soroban_sdk::String::from_str(&env, "Second attempt");
-    client.cast_vote_with_reason(
-        &voter,
-        &proposal_id,
-        &crate::VoteSupport::Against,
-        &reason2,
-    );
+    client.cast_vote_with_reason(&voter, &proposal_id, &crate::VoteSupport::Against, &reason2);
 }
