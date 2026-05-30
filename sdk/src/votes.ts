@@ -227,6 +227,40 @@ export class VotesClient {
   }
 
   /**
+   * Get voting power for multiple addresses in parallel.
+   *
+   * This keeps higher-level analytics code from issuing vote lookups one by
+   * one, which cuts page-load latency on delegate-heavy datasets.
+   */
+  async getVotingPowers(
+    accounts: string[],
+    concurrency = 10,
+  ): Promise<Array<{ account: string; votingPower: bigint }>> {
+    const results: Array<{ account: string; votingPower: bigint }> = [];
+
+    for (let i = 0; i < accounts.length; i += concurrency) {
+      const chunk = accounts.slice(i, i + concurrency);
+      const settled = await Promise.allSettled(
+        chunk.map(async (account) => ({
+          account,
+          votingPower: await this.getVotes(account),
+        })),
+      );
+
+      for (let j = 0; j < chunk.length; j++) {
+        const outcome = settled[j];
+        if (outcome.status === "fulfilled") {
+          results.push(outcome.value);
+        } else {
+          results.push({ account: chunk[j], votingPower: 0n });
+        }
+      }
+    }
+
+    return results;
+  }
+
+  /**
    * Get voting power of an address at a past ledger sequence.
    *
    * @param account Stellar address to query.
@@ -284,6 +318,37 @@ export class VotesClient {
     const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
       .result?.retval;
     return raw ? BigInt(scValToNative(raw)) : 0n;
+  }
+
+  /**
+   * Get base votes for multiple addresses in parallel.
+   */
+  async getBaseVotesBatch(
+    accounts: string[],
+    concurrency = 10,
+  ): Promise<Array<{ account: string; baseVotes: bigint }>> {
+    const results: Array<{ account: string; baseVotes: bigint }> = [];
+
+    for (let i = 0; i < accounts.length; i += concurrency) {
+      const chunk = accounts.slice(i, i + concurrency);
+      const settled = await Promise.allSettled(
+        chunk.map(async (account) => ({
+          account,
+          baseVotes: await this.getBaseVotes(account),
+        })),
+      );
+
+      for (let j = 0; j < chunk.length; j++) {
+        const outcome = settled[j];
+        if (outcome.status === "fulfilled") {
+          results.push(outcome.value);
+        } else {
+          results.push({ account: chunk[j], baseVotes: 0n });
+        }
+      }
+    }
+
+    return results;
   }
 
   /**
@@ -467,20 +532,21 @@ export class VotesClient {
 
     // Query current voting power for each unique delegate
     const delegateAddresses = Array.from(byDelegate.keys());
-    const powerEntries = await Promise.all(
-      delegateAddresses.map(async (addr) => {
-        const [votingPower, baseVotes] = await Promise.all([
-          this.getVotes(addr),
-          this.getBaseVotes(addr),
-        ]);
-        return {
-          address: addr,
-          votingPower,
-          baseVotes,
-          delegatorCount: byDelegate.get(addr)!.size,
-        };
-      }),
+    const [votingPowers, baseVotes] = await Promise.all([
+      this.getVotingPowers(delegateAddresses),
+      this.getBaseVotesBatch(delegateAddresses),
+    ]);
+
+    const baseVotesMap = new Map(
+      baseVotes.map((entry) => [entry.account, entry.baseVotes]),
     );
+
+    const powerEntries = delegateAddresses.map((address, index) => ({
+      address,
+      votingPower: votingPowers[index]?.votingPower ?? 0n,
+      baseVotes: baseVotesMap.get(address) ?? 0n,
+      delegatorCount: byDelegate.get(address)!.size,
+    }));
 
     const delegates = powerEntries
       .filter((d) => d.votingPower > 0n)
@@ -537,8 +603,8 @@ export class VotesClient {
       byDelegate.get(delegatee)!.add(delegator);
     }
 
-    const powers = await Promise.all(
-      Array.from(byDelegate.keys()).map((addr) => this.getVotes(addr)),
+    const powers = (await this.getVotingPowers(Array.from(byDelegate.keys()))).map(
+      (entry) => entry.votingPower,
     );
 
     const activePowers = powers.filter((p) => p > 0n);
@@ -575,12 +641,14 @@ export class VotesClient {
 
     if (delegators.length === 0) return [];
 
-    const results = await Promise.all(
-      delegators.map(async (delegator) => ({
-        delegator,
-        power: await this.getVotes(delegator),
-      })),
+    const votingPowers = await this.getVotingPowers(delegators);
+    const powerMap = new Map(
+      votingPowers.map((entry) => [entry.account, entry.votingPower]),
     );
+    const results = delegators.map((delegator) => ({
+      delegator,
+      power: powerMap.get(delegator) ?? 0n,
+    }));
 
     return results
       .filter((d) => d.power > 0n)
@@ -603,17 +671,13 @@ export class VotesClient {
     const totalSupply = await this.getTotalSupply();
     if (totalSupply === 0n) return [];
 
-    const delegates = await Promise.all(
-      addresses.map(async (address) => {
-        const votes = await this.getVotes(address);
-        return {
-          address,
-          votes,
-          percentOfSupply:
-            totalSupply > 0n ? Number((votes * 10000n) / totalSupply) / 100 : 0,
-        };
-      }),
-    );
+    const votingPowers = await this.getVotingPowers(addresses);
+    const delegates = votingPowers.map(({ account, votingPower }) => ({
+      address: account,
+      votes: votingPower,
+      percentOfSupply:
+        totalSupply > 0n ? Number((votingPower * 10000n) / totalSupply) / 100 : 0,
+    }));
 
     return delegates
       .filter((d) => d.votes > 0n)
