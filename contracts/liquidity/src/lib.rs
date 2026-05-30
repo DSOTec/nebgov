@@ -156,7 +156,9 @@ impl LiquidityContract {
         pool.reserve_a += deposit_a;
         pool.reserve_b += deposit_b;
         pool.total_lp_supply += lp_tokens;
-        env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Pool(na, nb), &pool);
 
         let position_key = Self::position_key(provider.clone(), na, nb);
         let mut position: LPPosition = env
@@ -226,7 +228,9 @@ impl LiquidityContract {
         pool.total_lp_supply -= lp_tokens;
         position.lp_tokens -= lp_tokens;
 
-        env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Pool(na, nb), &pool);
         env.storage().persistent().set(&position_key, &position);
 
         // Amounts mapped back to the caller's requested outcome order.
@@ -309,10 +313,17 @@ impl LiquidityContract {
 
         env.events().publish(
             (soroban_sdk::Symbol::new(&env, "Swap"), na, nb),
-            (trader.clone(), amount_in, amount_out_with_fee, trading_a_to_b),
+            (
+                trader.clone(),
+                amount_in,
+                amount_out_with_fee,
+                trading_a_to_b,
+            ),
         );
 
-        env.storage().persistent().set(&DataKey::Pool(na, nb), &pool);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Pool(na, nb), &pool);
 
         // Move the real tokens: pull what the trader sends in, send out what
         // they receive. Uses the caller's outcome ids directly.
@@ -469,8 +480,8 @@ mod tests {
             .add_liquidity(&provider, &outcome_a, &outcome_b, &amount_a, &amount_b);
 
         assert!(lp_tokens > 0);
-        let pool = LiquidityContractClient::new(&env, &contract_id)
-            .get_pool(&outcome_a, &outcome_b);
+        let pool =
+            LiquidityContractClient::new(&env, &contract_id).get_pool(&outcome_a, &outcome_b);
         assert_eq!(pool.reserve_a, amount_a);
         assert_eq!(pool.reserve_b, amount_b);
     }
@@ -500,7 +511,8 @@ mod tests {
         let amount_b: i128 = 200_000;
 
         let client = LiquidityContractClient::new(&env, &contract_id);
-        let lp_tokens = client.add_liquidity(&provider, &outcome_a, &outcome_b, &amount_a, &amount_b);
+        let lp_tokens =
+            client.add_liquidity(&provider, &outcome_a, &outcome_b, &amount_a, &amount_b);
 
         let (returned_a, returned_b) =
             client.remove_liquidity(&provider, &outcome_a, &outcome_b, &lp_tokens);
@@ -610,7 +622,9 @@ mod tests {
         client.initialize(&governor);
 
         let admin = Address::generate(&env);
-        let token_a = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let token_a = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
         let token_b = env.register_stellar_asset_contract_v2(admin).address();
 
         client.set_outcome_token(&governor, &1u32, &token_a);

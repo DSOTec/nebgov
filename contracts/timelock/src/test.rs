@@ -1029,10 +1029,22 @@ fn test_can_reschedule_pending_operation() {
     let salt = Bytes::from_slice(&env, b"pending_salt");
 
     let id1 = client.schedule(
-        &governor, &target, &data, &fn_name, &100u64, &Bytes::new(&env), &salt,
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &100u64,
+        &Bytes::new(&env),
+        &salt,
     );
     let id2 = client.schedule(
-        &governor, &target, &data, &fn_name, &100u64, &Bytes::new(&env), &salt,
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &100u64,
+        &Bytes::new(&env),
+        &salt,
     );
     assert_eq!(id1, id2);
 }
@@ -1053,7 +1065,10 @@ fn test_update_delay_enforces_minimum() {
     let too_short = client.try_update_delay(&admin, &0u64);
     assert!(too_short.is_err(), "delay of 0 should be rejected");
     let below_min = client.try_update_delay(&admin, &100u64);
-    assert!(below_min.is_err(), "delay below MIN_DELAY should be rejected");
+    assert!(
+        below_min.is_err(),
+        "delay below MIN_DELAY should be rejected"
+    );
 
     // A delay at/above the minimum is accepted.
     client.update_delay(&admin, &172_800u64);
@@ -1074,11 +1089,17 @@ fn test_update_execution_window_bounds() {
 
     // Too small — operations could expire before they can run.
     let too_small = client.try_update_execution_window(&admin, &10u64);
-    assert!(too_small.is_err(), "tiny execution window should be rejected");
+    assert!(
+        too_small.is_err(),
+        "tiny execution window should be rejected"
+    );
 
     // Too large — beyond the protocol-defined maximum.
     let too_large = client.try_update_execution_window(&admin, &99_999_999_999u64);
-    assert!(too_large.is_err(), "huge execution window should be rejected");
+    assert!(
+        too_large.is_err(),
+        "huge execution window should be rejected"
+    );
 
     // A value within bounds is accepted.
     client.update_execution_window(&admin, &604_800u64);
