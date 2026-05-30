@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState, useEffect, useRef } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent } from "react";
 import { usePathname } from "next/navigation";
 import { useWallet } from "../lib/wallet-context";
 import {
@@ -57,6 +58,8 @@ export function NavBar() {
   const [scrolled, setScrolled] = useState(false);
   const [unread, setUnread] = useState(0);
   const drawerRef = useRef<HTMLDivElement>(null);
+  const walletButtonRef = useRef<HTMLButtonElement>(null);
+  const walletMenuRef = useRef<HTMLDivElement>(null);
   const { theme, setTheme } = useTheme();
 
   const toggleTheme = () => setTheme(theme === "dark" ? "light" : "dark");
@@ -91,12 +94,80 @@ export function NavBar() {
 
   useEffect(() => {
     if (!isWalletMenuOpen) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setIsWalletMenuOpen(false);
-    };
-    window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
+
+    const frame = window.requestAnimationFrame(() => {
+      const items = walletMenuRef.current?.querySelectorAll<HTMLElement>(
+        '[role="menuitem"]',
+      );
+      items?.[0]?.focus();
+    });
+
+    return () => window.cancelAnimationFrame(frame);
   }, [isWalletMenuOpen]);
+
+  const closeWalletMenu = () => {
+    setIsWalletMenuOpen(false);
+    window.requestAnimationFrame(() => walletButtonRef.current?.focus());
+  };
+
+  const getWalletMenuItems = () =>
+    Array.from(
+      walletMenuRef.current?.querySelectorAll<HTMLElement>('[role="menuitem"]') ??
+        [],
+    );
+
+  const moveWalletMenuFocus = (delta: number) => {
+    const items = getWalletMenuItems();
+    if (items.length === 0) return;
+
+    const activeIndex = items.findIndex((item) => item === document.activeElement);
+    const nextIndex =
+      activeIndex === -1
+        ? 0
+        : (activeIndex + delta + items.length) % items.length;
+    items[nextIndex]?.focus();
+  };
+
+  const handleWalletMenuKeyDown = (
+    e: ReactKeyboardEvent<HTMLDivElement>,
+  ) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeWalletMenu();
+      return;
+    }
+
+    if (e.key === "Tab") {
+      e.preventDefault();
+      moveWalletMenuFocus(e.shiftKey ? -1 : 1);
+      return;
+    }
+
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      moveWalletMenuFocus(1);
+      return;
+    }
+
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      moveWalletMenuFocus(-1);
+      return;
+    }
+
+    if (e.key === "Home") {
+      e.preventDefault();
+      const items = getWalletMenuItems();
+      items[0]?.focus();
+      return;
+    }
+
+    if (e.key === "End") {
+      e.preventDefault();
+      const items = getWalletMenuItems();
+      items.at(-1)?.focus();
+    }
+  };
 
   const copyAddress = async () => {
     if (!publicKey) return;
@@ -109,13 +180,13 @@ export function NavBar() {
     } catch {
       toast.error("Failed to copy address.");
     } finally {
-      setIsWalletMenuOpen(false);
+      closeWalletMenu();
     }
   };
 
   const handleDisconnect = () => {
     disconnect();
-    setIsWalletMenuOpen(false);
+    closeWalletMenu();
     setIsMenuOpen(false);
   };
 
@@ -206,6 +277,7 @@ export function NavBar() {
             {isConnected ? (
               <div className="relative" ref={drawerRef}>
                 <button
+                  ref={walletButtonRef}
                   onClick={() => setIsWalletMenuOpen((v) => !v)}
                   aria-expanded={isWalletMenuOpen}
                   aria-haspopup="menu"
@@ -244,12 +316,15 @@ export function NavBar() {
                   <>
                     <div
                       className="fixed inset-0 z-[199] pointer-events-auto"
-                      onClick={() => setIsWalletMenuOpen(false)}
+                      onClick={closeWalletMenu}
                       aria-hidden
                     />
 
                     <div
+                      ref={walletMenuRef}
                       role="menu"
+                      aria-label="Wallet actions"
+                      onKeyDown={handleWalletMenuKeyDown}
                       className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-gray-100 py-2 z-[200] overflow-hidden"
                     >
                       <div className="px-4 py-3 border-b border-gray-50 mb-1">
@@ -265,6 +340,7 @@ export function NavBar() {
                       </div>
 
                       <button
+                        type="button"
                         role="menuitem"
                         onClick={copyAddress}
                         className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
@@ -285,6 +361,7 @@ export function NavBar() {
                       <div className="h-px bg-gray-100 my-1" aria-hidden />
 
                       <button
+                        type="button"
                         role="menuitem"
                         onClick={handleDisconnect}
                         className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50 transition-colors"

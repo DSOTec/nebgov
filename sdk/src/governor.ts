@@ -2409,6 +2409,19 @@ export class GovernorClient {
   }
 
   /**
+   * Backwards-compatible plural alias for batch proposal fetching.
+   *
+   * The issue tracker refers to `getProposals(ids[])`; this method keeps that
+   * surface available while reusing the existing batching implementation.
+   */
+  async getProposals(
+    proposalIds: bigint[],
+    concurrency = 10,
+  ): Promise<Array<{ id: bigint; proposal?: Proposal; error?: Error }>> {
+    return this.getProposalsBatch(proposalIds, concurrency);
+  }
+
+  /**
    * Fetch state + votes for multiple proposals in parallel.
    *
    * Useful for the proposals list page — replaces sequential fetching with a
