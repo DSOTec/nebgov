@@ -1,6 +1,7 @@
 import { SorobanRpc, scValToNative, xdr } from "@stellar/stellar-sdk";
 import { GovernorSettings, Network, VoteType } from "./types";
 import { withRetry } from "./utils";
+import { Logger } from "./logger";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -297,8 +298,9 @@ export async function fetchEvents(
   contractId: string,
   topicFilter: xdr.ScVal[],
   startLedger: number,
-  opts: { maxAttempts?: number; baseDelayMs?: number } = {}
+  opts: { maxAttempts?: number; baseDelayMs?: number; debug?: boolean } = {}
 ): Promise<{ events: SorobanEvent[]; latestLedger: number }> {
+  const log = new Logger(opts.debug ?? false);
   return withRetry(async () => {
     const response = await server.getEvents({
       startLedger,
@@ -320,7 +322,7 @@ export async function fetchEvents(
     maxAttempts: opts.maxAttempts ?? 3,
     baseDelayMs: opts.baseDelayMs ?? 1000,
     onRetry: (attempt, error) => {
-      console.debug(`[fetchEvents] Retry attempt ${attempt} due to error:`, error);
+      log.debug(`[fetchEvents] Retry attempt ${attempt} due to error:`, error);
     }
   });
 }
