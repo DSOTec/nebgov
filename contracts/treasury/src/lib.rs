@@ -18,6 +18,12 @@ pub enum TreasuryError {
     DailyLimitExceeded = 2,
     /// Token address is not on the approved token list.
     TokenNotApproved = 3,
+    /// Contract is paused.
+    ContractPaused = 4,
+    /// Unauthorized to pause/unpause.
+    UnauthorizedPause = 5,
+    /// Pauser not set.
+    PauserNotSet = 6,
 }
 
 /// A treasury transaction proposal.
@@ -97,6 +103,10 @@ pub enum DataKey {
     IsSlashed(Address),
     SlashingHistory(Address),
     PendingOwner,
+    /// Whether the contract is currently paused.
+    IsPaused,
+    /// Address authorized to pause/unpause the contract.
+    Pauser,
 }
 
 #[contractclient(name = "TreasuryClient")]
@@ -144,11 +154,17 @@ impl TreasuryContract {
         env.storage()
             .instance()
             .set(&DataKey::DayWindowStart, &env.ledger().timestamp());
+
+        // Initialize pause state (not paused by default)
+        env.storage().instance().set(&DataKey::IsPaused, &false);
+        // Set governor as initial pauser
+        env.storage().instance().set(&DataKey::Pauser, &governor);
     }
 
     /// Propose a new owner (governor) for the treasury.
     /// Current governor must call this.
     pub fn propose_owner(env: Env, new_owner: Address) {
+        Self::require_not_paused(&env);
         let governor: Address = env
             .storage()
             .instance()
@@ -165,6 +181,7 @@ impl TreasuryContract {
     /// Accept ownership of the treasury.
     /// New owner must call this to finalize the transfer.
     pub fn accept_ownership(env: Env) {
+        Self::require_not_paused(&env);
         let pending: Address = env
             .storage()
             .instance()
@@ -185,6 +202,77 @@ impl TreasuryContract {
             .expect("not initialized")
     }
 
+    /// Pause the contract, disabling all treasury operations.
+    /// Only the pauser role can call this function.
+    pub fn pause(env: Env, caller: Address) {
+        caller.require_auth();
+        let pauser: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pauser)
+            .unwrap_or_else(|| env.panic_with_error(TreasuryError::PauserNotSet));
+        if caller != pauser {
+            env.panic_with_error(TreasuryError::UnauthorizedPause);
+        }
+        env.storage().instance().set(&DataKey::IsPaused, &true);
+        env.events()
+            .publish((Symbol::new(&env, "TreasuryPaused"),), ());
+    }
+
+    /// Unpause the contract to resume normal operations.
+    /// Callable by the designated pauser address (same as pause()).
+    pub fn unpause(env: Env, caller: Address) {
+        caller.require_auth();
+        let pauser: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pauser)
+            .unwrap_or_else(|| env.panic_with_error(TreasuryError::PauserNotSet));
+        if caller != pauser {
+            env.panic_with_error(TreasuryError::UnauthorizedPause);
+        }
+        env.storage().instance().set(&DataKey::IsPaused, &false);
+        env.events()
+            .publish((Symbol::new(&env, "TreasuryUnpaused"),), ());
+    }
+
+    /// Check if the contract is currently paused.
+    pub fn is_paused(env: Env) -> bool {
+        env.storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false)
+    }
+
+    /// Get the current pauser address.
+    pub fn pauser(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Pauser)
+            .unwrap_or_else(|| env.panic_with_error(TreasuryError::PauserNotSet))
+    }
+
+    /// Update the pauser address (governance-gated).
+    pub fn set_pauser(env: Env, new_pauser: Address) {
+        Self::require_not_paused(&env);
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized");
+        governor.require_auth();
+        let old_pauser: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Pauser)
+            .unwrap_or_else(|| env.panic_with_error(TreasuryError::PauserNotSet));
+        env.storage().instance().set(&DataKey::Pauser, &new_pauser);
+        env.events().publish(
+            (Symbol::new(&env, "PauserChanged"),),
+            (old_pauser, new_pauser),
+        );
+    }
+
     /// Configure a per-token spending cap for batch transfers.
     pub fn set_spending_cap(
         env: Env,
@@ -193,6 +281,7 @@ impl TreasuryContract {
         max_amount: i128,
         period_ledgers: u32,
     ) {
+        Self::require_not_paused(&env);
         caller.require_auth();
         let governor: Address = env
             .storage()
@@ -220,6 +309,7 @@ impl TreasuryContract {
 
     /// Add a token to the approved token list (governor only).
     pub fn add_approved_token(env: Env, caller: Address, token: Address) {
+        Self::require_not_paused(&env);
         caller.require_auth();
         let governor: Address = env
             .storage()
@@ -243,12 +333,12 @@ impl TreasuryContract {
         env.storage()
             .instance()
             .set(&DataKey::ApprovedTokens, &tokens);
-        env.events()
-            .publish((symbol_short!("tok_add"),), token);
+        env.events().publish((symbol_short!("tok_add"),), token);
     }
 
     /// Remove a token from the approved token list (governor only).
     pub fn remove_approved_token(env: Env, caller: Address, token: Address) {
+        Self::require_not_paused(&env);
         caller.require_auth();
         let governor: Address = env
             .storage()
@@ -268,8 +358,7 @@ impl TreasuryContract {
                 env.storage()
                     .instance()
                     .set(&DataKey::ApprovedTokens, &tokens);
-                env.events()
-                    .publish((symbol_short!("tok_rm"),), token);
+                env.events().publish((symbol_short!("tok_rm"),), token);
                 return;
             }
         }
@@ -311,6 +400,7 @@ impl TreasuryContract {
         fn_name: Symbol,
         data: Bytes,
     ) -> u64 {
+        Self::require_not_paused(&env);
         proposer.require_auth();
         Self::submit_internal(env, proposer, target, fn_name, data, 0)
     }
@@ -323,6 +413,7 @@ impl TreasuryContract {
         data: Bytes,
         reserved_amount: i128,
     ) -> u64 {
+        Self::require_not_paused(&env);
         Self::require_not_executing(&env);
         Self::require_owner(&env, &proposer);
 
@@ -379,6 +470,7 @@ impl TreasuryContract {
         data: Bytes,
         amount: i128,
     ) -> u64 {
+        Self::require_not_paused(&env);
         proposer.require_auth();
         Self::require_owner(&env, &proposer);
 
@@ -447,6 +539,7 @@ impl TreasuryContract {
 
     /// Approve a pending transaction. Executes automatically when threshold reached.
     pub fn approve(env: Env, approver: Address, tx_id: u64) {
+        Self::require_not_paused(&env);
         Self::require_not_executing(&env);
         approver.require_auth();
         Self::require_owner(&env, &approver);
@@ -500,6 +593,7 @@ impl TreasuryContract {
     /// Cancel a pending transaction. Owner or governor only.
     /// If the proposal was submitted via submit_with_limit(), credits back the reserved amount to the daily accumulator.
     pub fn cancel(env: Env, caller: Address, tx_id: u64) {
+        Self::require_not_paused(&env);
         Self::require_not_executing(&env);
         caller.require_auth();
         let governor: Address = env
@@ -516,7 +610,7 @@ impl TreasuryContract {
             .get(&DataKey::Tx(tx_id))
             .expect("tx not found");
         assert!(!tx.executed && !tx.cancelled, "invalid state");
-        
+
         // If this proposal reserved budget, credit it back to the accumulator.
         if tx.reserved_amount > 0 {
             let current_daily_spent: i128 = env
@@ -531,7 +625,7 @@ impl TreasuryContract {
                 .instance()
                 .set(&DataKey::DailySpent, &credited_amount);
         }
-        
+
         tx.cancelled = true;
         env.storage().persistent().set(&DataKey::Tx(tx_id), &tx);
         env.events().publish((symbol_short!("cancel"),), tx_id);
@@ -569,6 +663,7 @@ impl TreasuryContract {
         token: Address,
         recipients: Vec<BatchRecipient>,
     ) -> Bytes {
+        Self::require_not_paused(&env);
         caller.require_auth();
 
         // Only the governor may issue batch disbursements.
@@ -651,7 +746,6 @@ impl TreasuryContract {
             (op_hash.clone(), recipients.len() as u32, total_amount),
         );
 
-
         op_hash
     }
 
@@ -672,6 +766,7 @@ impl TreasuryContract {
     /// Slash (remove) a signer for malicious behavior.
     /// Only the governor may call this.
     pub fn slash_signer(env: Env, caller: Address, signer: Address, reason: Symbol) {
+        Self::require_not_paused(&env);
         caller.require_auth();
 
         let governor: Address = env
@@ -736,6 +831,7 @@ impl TreasuryContract {
     /// Restore a slashed signer.
     /// Only the governor may call this.
     pub fn unslash_signer(env: Env, caller: Address, signer: Address) {
+        Self::require_not_paused(&env);
         caller.require_auth();
 
         let governor: Address = env
@@ -823,6 +919,17 @@ impl TreasuryContract {
             .get(&DataKey::IsExecuting)
             .unwrap_or(false);
         assert!(!is_executing, "reentrant execution blocked");
+    }
+
+    fn require_not_paused(env: &Env) {
+        let is_paused: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::IsPaused)
+            .unwrap_or(false);
+        if is_paused {
+            env.panic_with_error(TreasuryError::ContractPaused);
+        }
     }
 
     fn require_not_expired(env: &Env, tx: &TxProposal) {
@@ -1159,7 +1266,13 @@ mod tests {
 
         // Submit a proposal at the limit.
         let data = Bytes::new(&env);
-        let proposal_id = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &max_amount);
+        let proposal_id = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &max_amount,
+        );
         assert_eq!(proposal_id, 1);
     }
 
@@ -1200,7 +1313,13 @@ mod tests {
         });
 
         let data = Bytes::new(&env);
-        let proposal_id = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &proposed_amount);
+        let proposal_id = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposed_amount,
+        );
         assert_eq!(proposal_id, 1);
     }
 
@@ -1247,15 +1366,33 @@ mod tests {
         let data = Bytes::new(&env);
 
         // First proposal: 800 (daily total = 800)
-        let id1 = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &proposal_amount);
+        let id1 = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposal_amount,
+        );
         assert_eq!(id1, 1);
 
         // Second proposal: 800 (daily total = 1600)
-        let id2 = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &proposal_amount);
+        let id2 = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposal_amount,
+        );
         assert_eq!(id2, 2);
 
         // Third proposal: 800 (daily total = 2400)
-        let id3 = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &proposal_amount);
+        let id3 = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposal_amount,
+        );
         assert_eq!(id3, 3);
 
         // Verify accumulator is at 2400.
@@ -1325,7 +1462,13 @@ mod tests {
             .with_mut(|l| l.timestamp = initial_time + 86401);
 
         // Now submit: window has reset, so accumulator is 0, and 1 token should fit.
-        let proposal_id = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &test_amount);
+        let proposal_id = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &test_amount,
+        );
         let proposal_count_after = client.tx_count();
 
         assert_eq!(proposal_count_after, proposal_count_before + 1);
@@ -1373,7 +1516,13 @@ mod tests {
         let tx_count_before = client.tx_count();
 
         // This must panic.
-        client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &proposed_amount);
+        client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposed_amount,
+        );
 
         // Verify state is unchanged.
         let tx_count_after = client.tx_count();
@@ -1468,7 +1617,8 @@ mod tests {
             env.storage().instance().set(&DataKey::DailySpent, &0i128);
         });
 
-        let id = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &0i128);
+        let id =
+            client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &0i128);
         assert_eq!(id, 1);
 
         // Verify accumulator is still 0.
@@ -1519,7 +1669,8 @@ mod tests {
         });
 
         // First transfer at the limit succeeds.
-        let id1 = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &limit);
+        let id1 =
+            client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &limit);
         assert_eq!(id1, 1);
 
         // Accumulator is now at `limit`.
@@ -1574,7 +1725,8 @@ mod tests {
         });
 
         // Submit a transfer of 50 — accumulator is i128::MAX - 50, which is valid.
-        let id = client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &50i128);
+        let id =
+            client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &50i128);
         assert_eq!(id, 1);
 
         let daily_spent: i128 = env.as_contract(&treasury_id, || {
