@@ -165,6 +165,14 @@
                     },
                     {
                       "key": {
+                        "symbol": "veto_threshold_numerator"
+                      },
+                      "val": {
+                        "u32": 0
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "vote_type"
                       },
                       "val": {
@@ -496,6 +504,18 @@
                         },
                         "val": {
                           "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "VetoThresholdNumerator"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 0
                         }
                       },
                       {

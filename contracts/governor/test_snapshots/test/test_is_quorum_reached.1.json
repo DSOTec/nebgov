@@ -1038,6 +1038,17 @@
                     },
                     {
                       "key": {
+                        "symbol": "veto_weight"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 0
+                        }
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "votes_abstain"
                       },
                       "val": {
@@ -1241,6 +1252,17 @@
                     },
                     {
                       "key": {
+                        "symbol": "veto_weight"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 0
+                        }
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "votes_abstain"
                       },
                       "val": {
@@ -1440,6 +1462,17 @@
                             "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA4BV5"
                           }
                         ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "symbol": "veto_weight"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 0
+                        }
                       }
                     },
                     {
@@ -2295,6 +2328,18 @@
                         },
                         "val": {
                           "bool": false
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
+                              "symbol": "VetoThresholdNumerator"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 0
                         }
                       },
                       {

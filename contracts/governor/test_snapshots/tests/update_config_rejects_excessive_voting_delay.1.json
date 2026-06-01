@@ -347,6 +347,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "VetoThresholdNumerator"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "u32": 0
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "VoteType"
                             }
                           ]

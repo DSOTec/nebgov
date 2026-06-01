@@ -15,6 +15,7 @@ pub const GOVERNOR_UPGRADED_TOPIC: &str = "GovernorUpgraded";
 pub const CONFIG_UPDATED_TOPIC: &str = "ConfigUpdated";
 pub const GUARDIAN_SET_TOPIC: &str = "GuardianSet";
 pub const GUARDIAN_CANCELLED_TOPIC: &str = "GuardianCancelled";
+pub const VETO_CAST_TOPIC: &str = "VetoCast";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -277,6 +278,25 @@ pub fn emit_unpaused(env: &Env) {
         (Symbol::new(env, UNPAUSED_TOPIC),),
         UnpauseEvent {
             ledger: env.ledger().sequence(),
+        },
+    );
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct VetoCastEvent {
+    pub proposal_id: u64,
+    pub voter: Address,
+    pub weight: i128,
+}
+
+pub fn emit_veto_cast(env: &Env, proposal_id: u64, voter: &Address, weight: i128) {
+    env.events().publish(
+        (Symbol::new(env, VETO_CAST_TOPIC), voter.clone()),
+        VetoCastEvent {
+            proposal_id,
+            voter: voter.clone(),
+            weight,
         },
     );
 }

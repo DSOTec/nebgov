@@ -2,6 +2,8 @@ mod governance_cancel;
 mod guardian;
 mod integration;
 mod load_tests;
+mod transitions;
+mod veto;
 
 // ── upgrade auth tests ────────────────────────────────────────────────────────
 // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires
@@ -88,6 +90,7 @@ fn settings_with_defaults(_env: &Env, guardian: Address) -> GovernorSettings {
         proposal_cooldown: 100,
         max_proposals_per_period: 5,
         proposal_period_duration: 10_000,
+        veto_threshold_numerator: 0,
     }
 }
 
@@ -187,6 +190,7 @@ fn update_config_rejects_caller_that_is_not_the_contract_address() {
         proposal_cooldown: 100,
         max_proposals_per_period: 5,
         proposal_period_duration: 10_000,
+        veto_threshold_numerator: 0,
     };
 
     env.mock_auths(&[MockAuth {
@@ -247,6 +251,7 @@ fn update_config_succeeds_with_contract_self_auth() {
         proposal_cooldown: 100,
         max_proposals_per_period: 5,
         proposal_period_duration: 10_000,
+        veto_threshold_numerator: 0,
     };
 
     client.update_config(&new_settings);

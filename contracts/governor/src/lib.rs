@@ -49,6 +49,7 @@ pub enum GovernorError {
     ExecutionWindowZero = 29,
     TooManyCalldataEntries = 30,
     VotingEnded = 31,
+    VetoThresholdNotMet = 32,
 }
 
 /// Cross-contract interface for the Timelock contract.
@@ -173,6 +174,8 @@ pub struct Proposal {
     ///
     /// One op-id per (target, fn_name, calldata) tuple.
     pub op_ids: Vec<Bytes>,
+    /// Total veto weight accumulated during the timelock delay window.
+    pub veto_weight: i128,
 }
 
 /// Placeholder type for future storage migration data.
@@ -215,6 +218,8 @@ pub struct GovernorSettings {
     pub max_proposals_per_period: u32,
     /// Period duration in ledgers for proposal rate limiting.
     pub proposal_period_duration: u32,
+    /// Veto threshold as a percentage of total supply (0-100). 0 disables token-holder veto.
+    pub veto_threshold_numerator: u32,
 }
 
 /// Estimated resource cost for executing a proposal.
@@ -318,6 +323,12 @@ pub enum DataKey {
     MaxProposalsPerPeriod,
     /// Period duration in ledgers for proposal rate limiting.
     ProposalPeriodDuration,
+    /// Veto threshold as a percentage of total supply (0-100).
+    VetoThresholdNumerator,
+    /// Whether an address has vetoed a proposal.
+    VetoVotes(u64, Address),
+    /// Total veto weight for a proposal.
+    ProposalVetoWeight(u64),
 }
 
 #[contract]
@@ -498,6 +509,10 @@ impl GovernorContract {
         env.storage().instance().set(&DataKey::IsPaused, &false);
         // Set admin as initial pauser
         env.storage().instance().set(&DataKey::Pauser, &admin);
+        // Initialize veto threshold (0 = disabled by default)
+        env.storage()
+            .instance()
+            .set(&DataKey::VetoThresholdNumerator, &0u32);
     }
 
     /// Override security settings after initialization (admin-only, before any proposals).
@@ -704,6 +719,7 @@ impl GovernorContract {
             cancelled: false,
             queued: false,
             op_ids: Vec::new(&env),
+            veto_weight: 0,
         };
 
         env.storage()
@@ -1268,6 +1284,128 @@ impl GovernorContract {
         events::emit_proposal_cancelled(&env, proposal_id, &env.current_contract_address());
     }
 
+    /// Cast a veto vote on a queued proposal during the timelock delay window.
+    ///
+    /// Token holders can veto proposals that have passed voting but are still
+    /// in the timelock queue. If total veto weight exceeds the configured threshold,
+    /// the proposal is cancelled and its timelock operations are revoked.
+    ///
+    /// Uses the same voting power snapshot as the original vote (proposal.start_ledger)
+    /// to prevent token transfers from manipulating veto outcomes.
+    pub fn cast_veto(env: Env, voter: Address, proposal_id: u64) {
+        voter.require_auth();
+
+        // Verify proposal is in Queued state
+        let proposal = Self::must_get_proposal(&env, proposal_id);
+        if !proposal.queued || proposal.cancelled || proposal.executed {
+            env.panic_with_error(GovernorError::ProposalNotQueued);
+        }
+
+        // Clone needed fields before moving proposal
+        let start_ledger = proposal.start_ledger;
+
+        // Check veto window: from queue_time to queue_time + timelock_delay
+        let queue_time: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::QueueTime(proposal_id))
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotQueued));
+
+        let timelock_addr: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Timelock)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::TimelockNotSet));
+        let timelock = TimelockClient::new(&env, &timelock_addr);
+        let delay = timelock.min_delay();
+
+        let current_ledger = env.ledger().sequence();
+        let veto_window_end_ledger = queue_time + ((delay / 10) as u32); // ~1 ledger per 10 sec
+
+        if current_ledger >= veto_window_end_ledger {
+            env.panic_with_error(GovernorError::VetoWindowClosed);
+        }
+
+        // Prevent double-veto
+        let has_vetoed: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::VetoVotes(proposal_id, voter.clone()))
+            .unwrap_or(false);
+        if has_vetoed {
+            env.panic_with_error(GovernorError::AlreadyVoted);
+        }
+
+        // Get voter's power at the proposal's snapshot (same as original vote)
+        let veto_power = Self::compute_votes(&env, &voter, &start_ledger);
+        if veto_power <= 0 {
+            env.panic_with_error(GovernorError::ZeroVotingPower);
+        }
+
+        // Record veto
+        env.storage()
+            .persistent()
+            .set(&DataKey::VetoVotes(proposal_id, voter.clone()), &true);
+
+        // Update total veto weight
+        let current_veto_weight: i128 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::ProposalVetoWeight(proposal_id))
+            .unwrap_or(0);
+        let new_veto_weight = current_veto_weight.saturating_add(veto_power);
+        env.storage()
+            .persistent()
+            .set(&DataKey::ProposalVetoWeight(proposal_id), &new_veto_weight);
+
+        // Update proposal's veto_weight field
+        let mut proposal_mut = proposal;
+        proposal_mut.veto_weight = new_veto_weight;
+        env.storage()
+            .persistent()
+            .set(&DataKey::Proposal(proposal_id), &proposal_mut);
+
+        // Check if veto threshold is met
+        let veto_threshold_numerator: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VetoThresholdNumerator)
+            .unwrap_or(0); // Default 0 = veto disabled
+
+        if veto_threshold_numerator > 0 {
+            let strategy: VotingStrategy = env
+                .storage()
+                .instance()
+                .get(&DataKey::VotingStrategy)
+                .unwrap_or(VotingStrategy::Single);
+            let total_supply = Self::compute_quorum_supply(&env, &start_ledger, &strategy);
+            let veto_threshold = total_supply
+                .checked_mul(veto_threshold_numerator as i128)
+                .unwrap_or_else(|| env.panic_with_error(GovernorError::ArithmeticOverflow))
+                / 100;
+
+            if new_veto_weight >= veto_threshold {
+                // Threshold met: cancel the proposal
+                proposal_mut.cancelled = true;
+                env.storage()
+                    .persistent()
+                    .set(&DataKey::Proposal(proposal_id), &proposal_mut);
+
+                // Cancel timelock operations
+                let gov_addr = env.current_contract_address();
+                for i in 0..proposal_mut.op_ids.len() {
+                    let op_id = proposal_mut.op_ids.get(i).unwrap();
+                    timelock.cancel(&gov_addr, &op_id);
+                }
+
+                events::emit_proposal_cancelled(&env, proposal_id, &voter);
+            }
+        }
+
+        events::emit_veto_cast(&env, proposal_id, &voter, veto_power);
+        Self::extend_proposal_ttl(&env, proposal_id, &proposal_mut);
+    }
+
     /// Cancel a queued proposal during the veto window.
     ///
     /// Only the guardian can cancel a queued proposal, and only within the veto
@@ -1615,6 +1753,11 @@ impl GovernorContract {
                 .instance()
                 .get(&DataKey::ProposalPeriodDuration)
                 .unwrap_or(10_000),
+            veto_threshold_numerator: env
+                .storage()
+                .instance()
+                .get(&DataKey::VetoThresholdNumerator)
+                .unwrap_or(0),
         }
     }
 
@@ -2207,6 +2350,35 @@ impl GovernorContract {
         env.events().publish(
             (Symbol::new(&env, "PauserChanged"),),
             (old_pauser, new_pauser),
+        );
+    }
+
+    /// Set the veto threshold as a percentage of total supply (0-100).
+    ///
+    /// A value of 0 disables the token-holder veto mechanism.
+    /// Example: 10 means 10% of total supply must veto to cancel a proposal.
+    ///
+    /// This function is governance-gated (must be called via an executed proposal).
+    pub fn set_veto_threshold(env: Env, threshold: u32) {
+        env.current_contract_address().require_auth();
+
+        if threshold > 100 {
+            env.panic_with_error(GovernorError::ArithmeticOverflow);
+        }
+
+        let old_threshold: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::VetoThresholdNumerator)
+            .unwrap_or(0);
+
+        env.storage()
+            .instance()
+            .set(&DataKey::VetoThresholdNumerator, &threshold);
+
+        env.events().publish(
+            (Symbol::new(&env, "VetoThresholdChanged"),),
+            (old_threshold, threshold),
         );
     }
 
