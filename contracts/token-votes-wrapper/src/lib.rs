@@ -1,8 +1,28 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Vec,
+    contract, contracterror, contractimpl, contracttype, panic_with_error, symbol_short, token,
+    Address, BytesN, Env, Vec,
 };
+
+/// Errors emitted by the token-votes-wrapper contract.
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[repr(u32)]
+pub enum WrapperError {
+    /// The supplied amount is zero or negative.
+    InvalidAmount = 1,
+    /// The caller does not have enough deposited balance.
+    InsufficientBalance = 2,
+    /// Withdrawal is locked because tokens are used in an active proposal.
+    WithdrawalLocked = 3,
+    /// The contract has not been initialized.
+    NotInitialized = 4,
+    /// The contract has already been initialized.
+    AlreadyInitialized = 5,
+    /// Caller is not authorized for this action.
+    Unauthorized = 6,
+}
 
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
@@ -164,7 +184,9 @@ impl TokenVotesWrapperContract {
     /// Automatically self-delegates if the depositor has no delegatee set.
     pub fn deposit(env: Env, from: Address, amount: i128) {
         from.require_auth();
-        assert!(amount > 0, "amount must be positive");
+        if amount <= 0 {
+            panic_with_error!(&env, WrapperError::InvalidAmount);
+        }
 
         let underlying: Address = env
             .storage()
@@ -208,7 +230,9 @@ impl TokenVotesWrapperContract {
     /// Reverts if the caller is locked (has voting power in an active proposal).
     pub fn withdraw(env: Env, from: Address, amount: i128) {
         from.require_auth();
-        assert!(amount > 0, "amount must be positive");
+        if amount <= 0 {
+            panic_with_error!(&env, WrapperError::InvalidAmount);
+        }
 
         // Check withdrawal lock
         let locked_until: u32 = env
@@ -216,10 +240,9 @@ impl TokenVotesWrapperContract {
             .persistent()
             .get(&DataKey::LockedUntil(from.clone()))
             .unwrap_or(0);
-        assert!(
-            env.ledger().sequence() > locked_until,
-            "withdrawal locked: tokens used in active proposal"
-        );
+        if env.ledger().sequence() <= locked_until {
+            panic_with_error!(&env, WrapperError::WithdrawalLocked);
+        }
 
         let delegatee: Address = env
             .storage()
@@ -228,7 +251,9 @@ impl TokenVotesWrapperContract {
             .unwrap_or(from.clone());
 
         let current_balance = Self::get_depositor_balance_internal(&env, from.clone());
-        assert!(amount <= current_balance, "InsufficientBalance");
+        if amount > current_balance {
+            panic_with_error!(&env, WrapperError::InsufficientBalance);
+        }
         Self::set_depositor_balance(&env, from.clone(), current_balance - amount);
 
         Self::move_voting_power(&env, Some(&delegatee), None, amount);
@@ -523,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "InsufficientBalance")]
+    #[should_panic(expected = "Error(Contract, #2)")]
     fn test_withdraw_rejects_overdraw_from_shared_delegatee() {
         let env = Env::default();
         env.mock_all_auths();
@@ -553,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "withdrawal locked")]
+    #[should_panic(expected = "Error(Contract, #3)")]
     fn test_withdraw_locked() {
         let env = Env::default();
         env.mock_all_auths();
@@ -575,5 +600,66 @@ mod tests {
 
         // Should panic
         wrapper.withdraw(&user, &500_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_deposit_zero_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+
+        let sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_addr = sac.address();
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&user, &1000_i128);
+
+        let wrapper_id = env.register(TokenVotesWrapperContract, ());
+        let wrapper = TokenVotesWrapperContractClient::new(&env, &wrapper_id);
+        wrapper.initialize(&admin, &token_addr);
+
+        wrapper.deposit(&user, &0_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_deposit_negative_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+
+        let sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_addr = sac.address();
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&user, &1000_i128);
+
+        let wrapper_id = env.register(TokenVotesWrapperContract, ());
+        let wrapper = TokenVotesWrapperContractClient::new(&env, &wrapper_id);
+        wrapper.initialize(&admin, &token_addr);
+
+        wrapper.deposit(&user, &-50_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #1)")]
+    fn test_withdraw_zero_rejected() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let user = Address::generate(&env);
+
+        let sac = env.register_stellar_asset_contract_v2(admin.clone());
+        let token_addr = sac.address();
+        soroban_sdk::token::StellarAssetClient::new(&env, &token_addr).mint(&user, &1000_i128);
+
+        let wrapper_id = env.register(TokenVotesWrapperContract, ());
+        let wrapper = TokenVotesWrapperContractClient::new(&env, &wrapper_id);
+        wrapper.initialize(&admin, &token_addr);
+        wrapper.deposit(&user, &500_i128);
+
+        wrapper.withdraw(&user, &0_i128);
     }
 }
