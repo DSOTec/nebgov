@@ -264,6 +264,138 @@ fn test_governor_proposal_executes_liquidity_fee_update() {
     assert_eq!(updated_pool.fee_bps, 75);
 }
 // ============================================================================
+// TESTS FOR RATIO ENFORCEMENT IN ADD_LIQUIDITY (Issue #588)
+// ============================================================================
+
+#[test]
+#[should_panic(expected = "imbalanced deposit")]
+fn test_add_liquidity_rejects_amount_b_below_ratio() {
+    // Pool has a 1:2 ratio (A:B). A subsequent deposit providing too little B
+    // must be rejected so the pool price cannot be manipulated downward.
+    let (env, contract_id, _, provider, _) = setup_liquidity();
+    let client = LiquidityContractClient::new(&env, &contract_id);
+    let provider2 = Address::generate(&env);
+
+    client.add_liquidity(&provider, &0, &1, &10_000, &20_000); // ratio 1:2
+    // required_b = 1_000 * 20_000 / 10_000 = 2_000; providing only 1_000 must panic
+    client.add_liquidity(&provider2, &0, &1, &1_000, &1_000);
+}
+
+#[test]
+fn test_add_liquidity_excess_amount_b_only_credits_required() {
+    // When amount_b exceeds what the reserve ratio requires, only the
+    // proportionally correct required_b is credited to pool reserves.
+    // This prevents reserve_b inflation while allowing a caller-supplied
+    // slippage buffer (excess is silently trimmed).
+    let (env, contract_id, _, provider, _) = setup_liquidity();
+    let client = LiquidityContractClient::new(&env, &contract_id);
+    let provider2 = Address::generate(&env);
+
+    client.add_liquidity(&provider, &0, &1, &10_000, &20_000); // ratio 1:2
+
+    // Provider2 declares amount_b = 99_990 (far above required 2_000 for 1_000 A).
+    // Only required_b = 1_000 * 20_000 / 10_000 = 2_000 should be credited.
+    client.add_liquidity(&provider2, &0, &1, &1_000, &99_990);
+
+    let pool = client.get_pool(&0, &1);
+    assert_eq!(pool.reserve_a, 11_000);
+    assert_eq!(pool.reserve_b, 22_000); // 20_000 + 2_000, not 20_000 + 99_990
+    // Ratio 1:2 preserved
+    assert_eq!(pool.reserve_b / pool.reserve_a, 2);
+}
+
+#[test]
+fn test_add_liquidity_proportional_second_deposit_exact() {
+    // A deposit providing exactly the proportional amount_b passes and
+    // maintains the pool ratio without any rounding drift.
+    let (env, contract_id, _, provider, _) = setup_liquidity();
+    let client = LiquidityContractClient::new(&env, &contract_id);
+    let provider2 = Address::generate(&env);
+
+    client.add_liquidity(&provider, &0, &1, &10_000, &20_000); // ratio 1:2
+    client.add_liquidity(&provider2, &0, &1, &5_000, &10_000); // exact: 5000*2=10000
+
+    let pool = client.get_pool(&0, &1);
+    assert_eq!(pool.reserve_a, 15_000);
+    assert_eq!(pool.reserve_b, 30_000);
+    assert_eq!(pool.reserve_b / pool.reserve_a, 2);
+}
+
+#[test]
+fn test_add_liquidity_lp_tokens_minted_correctly_for_second_deposit() {
+    // LP tokens for a second deposit must be proportional to amount_a only,
+    // ensuring both providers hold fair shares of the pool.
+    let (env, contract_id, _, provider, _) = setup_liquidity();
+    let client = LiquidityContractClient::new(&env, &contract_id);
+    let provider2 = Address::generate(&env);
+
+    let lp1 = client.add_liquidity(&provider, &0, &1, &10_000, &20_000);
+    assert_eq!(lp1, 10_000);
+
+    // 5_000 A is 50% of reserve_a=10_000 → should mint 5_000 LP tokens
+    let lp2 = client.add_liquidity(&provider2, &0, &1, &5_000, &10_000);
+    assert_eq!(lp2, 5_000);
+
+    let pool = client.get_pool(&0, &1);
+    assert_eq!(pool.total_lp_supply, 15_000);
+    assert_eq!(client.get_lp_position(&provider, &0, &1), 10_000);
+    assert_eq!(client.get_lp_position(&provider2, &0, &1), 5_000);
+}
+
+#[test]
+fn test_add_liquidity_first_deposit_accepts_any_ratio() {
+    // The first deposit (total_lp_supply == 0) sets the initial price and must
+    // not be subject to any ratio check.
+    let (env, contract_id, _, provider, _) = setup_liquidity();
+    let client = LiquidityContractClient::new(&env, &contract_id);
+
+    let lp = client.add_liquidity(&provider, &0, &1, &1_000, &99_000);
+    assert_eq!(lp, 1_000);
+    let pool = client.get_pool(&0, &1);
+    assert_eq!(pool.reserve_a, 1_000);
+    assert_eq!(pool.reserve_b, 99_000);
+}
+
+#[test]
+fn test_add_liquidity_poc_attack_prevented() {
+    // Reproduction of the PoC from issue #588:
+    //   Alice seeds the pool at ratio 1:2.
+    //   Bob calls add_liquidity with proportional amount_a but a massive amount_b.
+    //
+    // Before the fix, Bob's deposit inflated reserve_b, corrupting the pool price
+    // and letting Alice extract far more B than she deposited.
+    //
+    // After the fix, only required_b is credited for Bob's deposit, the pool
+    // ratio stays at 1:2, and Alice's withdrawal recovers exactly what she put in.
+    let (env, contract_id, _, alice, _) = setup_liquidity();
+    let client = LiquidityContractClient::new(&env, &contract_id);
+    let bob = Address::generate(&env);
+
+    // Alice: 10_000 A + 20_000 B → 10_000 LP, ratio 1:2
+    client.add_liquidity(&alice, &0, &1, &10_000, &20_000);
+
+    // Bob: 1_000 A + 100_000 B (attack: amount_b far exceeds the 1:2 ratio).
+    // required_b = 1_000 * 20_000 / 10_000 = 2_000 → only 2_000 B credited.
+    client.add_liquidity(&bob, &0, &1, &1_000, &100_000);
+
+    let pool = client.get_pool(&0, &1);
+    // Pool must reflect only the proportional deposit, not the inflated one
+    assert_eq!(pool.reserve_a, 11_000);
+    assert_eq!(pool.reserve_b, 22_000); // 20_000 + 2_000, not 20_000 + 100_000
+    assert_eq!(pool.reserve_b / pool.reserve_a, 2); // ratio intact
+
+    // Bob holds 1_000 LP tokens (1_000 * 10_000 / 10_000 = 1_000)
+    assert_eq!(client.get_lp_position(&bob, &0, &1), 1_000);
+
+    // Alice removes her 10_000 LP and must recover approximately what she put in
+    let (alice_a, alice_b) = client.remove_liquidity(&alice, &0, &1, &10_000);
+    // 10_000/11_000 of reserve_a=11_000 = 10_000 A
+    // 10_000/11_000 of reserve_b=22_000 = 20_000 B
+    assert_eq!(alice_a, 10_000);
+    assert_eq!(alice_b, 20_000);
+}
+
+// ============================================================================
 // SECURITY TESTS FOR REMOVE_LIQUIDITY GUARDS (Issue #471)
 // ============================================================================
 

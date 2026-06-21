@@ -54,6 +54,8 @@ pub enum LiquidityError {
     InvalidAmount = 1,
     /// Caller does not have sufficient LP shares for this operation.
     InsufficientShares = 2,
+    /// Subsequent deposit does not maintain the pool's current reserve ratio.
+    ImbalancedDeposit = 3,
 }
 
 #[contract]
@@ -100,14 +102,27 @@ impl LiquidityContract {
 
         let pool_key = Self::pool_key(outcome_a, outcome_b);
         let mut pool = Self::get_pool_or_default(&env, outcome_a, outcome_b);
-        let lp_tokens = if pool.total_lp_supply == 0 {
-            amount_a
+
+        // For subsequent deposits, enforce the current reserve ratio so that
+        // callers cannot shift the pool price by providing an arbitrary amount_b.
+        // `required_b` is the exact amount_b that keeps reserve_b/reserve_a constant.
+        // `amount_b` acts as a caller-supplied maximum (slippage guard): if the pool
+        // has moved so that required_b exceeds amount_b, the call is rejected.
+        // Only `required_b` is credited to the pool regardless of how large amount_b is,
+        // preventing value extraction through inflated reserve_b contributions.
+        let (lp_tokens, deposit_b) = if pool.total_lp_supply == 0 {
+            (amount_a, amount_b)
         } else {
-            (amount_a * pool.total_lp_supply) / pool.reserve_a
+            let required_b = (amount_a * pool.reserve_b) / pool.reserve_a;
+            if amount_b < required_b {
+                panic!("imbalanced deposit: amount_b below required ratio");
+            }
+            let lp = (amount_a * pool.total_lp_supply) / pool.reserve_a;
+            (lp, required_b)
         };
 
         pool.reserve_a += amount_a;
-        pool.reserve_b += amount_b;
+        pool.reserve_b += deposit_b;
         pool.total_lp_supply += lp_tokens;
         env.storage().persistent().set(&pool_key, &pool);
 
