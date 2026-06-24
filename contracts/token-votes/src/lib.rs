@@ -135,8 +135,10 @@ impl TokenVotesContract {
         new_record.balance = balance;
 
         if balance > record.balance {
-            // Balance increased: average in the new tokens at current ledger
             let added = balance - record.balance;
+            // When record.balance == 0 (first delegation), this simplifies to:
+            //   total_weighted_start = balance * current_ledger
+            //   start_ledger = current_ledger  (correct for new delegators)
             let total_weighted_start =
                 (record.balance * record.start_ledger as i128) + (added * current_ledger as i128);
             new_record.start_ledger = if balance > 0 {
@@ -144,8 +146,6 @@ impl TokenVotesContract {
             } else {
                 current_ledger
             };
-        } else if record.balance == 0 && balance > 0 {
-            new_record.start_ledger = current_ledger;
         }
         // If balance decreased or stayed same, record.start_ledger is preserved.
 
@@ -1786,6 +1786,30 @@ mod tests {
         client.delegate_by_sig(&owner, &delegatee2, &1u64, &9999u64, &dummy_sig);
         assert_eq!(client.get_votes(&delegatee1), 0);
         assert_eq!(client.get_votes(&delegatee2), 300);
+    }
+
+    #[test]
+    fn test_new_delegator_start_ledger_is_current_ledger() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+
+        sac_client.mint(&delegator, &100i128);
+
+        env.ledger().with_mut(|l| l.sequence_number = 42);
+
+        client.delegate(&delegator, &delegatee);
+
+        let record = client.get_delegator_record(&delegator);
+        assert_eq!(record.start_ledger, 42);
+        assert_eq!(record.balance, 100);
     }
 
 }
