@@ -1,4 +1,5 @@
 #![no_std]
+#![allow(clippy::too_many_arguments)]
 
 //! Protocol-owned liquidity management for NebGov markets.
 //!
@@ -18,6 +19,7 @@
 //! - traders must authorize `swap`
 //! - only the configured governor may call `update_pool_fee`
 
+use soroban_sdk::token::TokenClient;
 use soroban_sdk::{contract, contractimpl, contracterror, contracttype, Address, Env};
 
 const MIN_LIQUIDITY: i128 = 1_000;
@@ -44,6 +46,7 @@ enum DataKey {
     Governor,
     Pool(u32, u32),
     Position(Address, u32, u32),
+    PoolTokens(u32, u32),
 }
 
 /// Liquidity contract error codes.
@@ -81,6 +84,23 @@ impl LiquidityContract {
             .expect("not initialized")
     }
 
+    /// Register a new pool's token addresses. Must be called once before adding liquidity.
+    pub fn create_pool(
+        env: Env,
+        caller: Address,
+        outcome_a: u32,
+        outcome_b: u32,
+        token_a: Address,
+        token_b: Address,
+    ) {
+        caller.require_auth();
+        let tokens_key = DataKey::PoolTokens(outcome_a, outcome_b);
+        if env.storage().persistent().has(&tokens_key) {
+            panic!("pool already exists");
+        }
+        env.storage().persistent().set(&tokens_key, &(token_a, token_b));
+    }
+
     /// Add liquidity to a pool and mint LP shares.
     ///
     /// Returns `(lp_tokens, deposit_b)`. `deposit_b` is the amount of B actually
@@ -105,6 +125,11 @@ impl LiquidityContract {
         if amount_a < MIN_LIQUIDITY {
             panic!("below minimum liquidity");
         }
+
+        // Checks & Reads
+        let tokens_key = DataKey::PoolTokens(outcome_a, outcome_b);
+        let stored_tokens: Option<(Address, Address)> = env.storage().persistent().get(&tokens_key);
+        let (token_a, token_b) = stored_tokens.expect("pool not registered");
 
         let pool_key = Self::pool_key(outcome_a, outcome_b);
         let mut pool = Self::get_pool_or_default(&env, outcome_a, outcome_b);
@@ -136,18 +161,13 @@ impl LiquidityContract {
             (lp, required_b)
         };
 
+        // Effects
         pool.reserve_a += amount_a;
         pool.reserve_b += deposit_b;
         pool.total_lp_supply += lp_tokens;
-        env.storage().persistent().set(&pool_key, &pool);
-
-        let position_key = Self::position_key(provider.clone(), outcome_a, outcome_b);
-        let mut position: LPPosition = env
-            .storage()
-            .persistent()
-            .get(&position_key)
-            .unwrap_or(LPPosition { lp_tokens: 0 });
         position.lp_tokens += lp_tokens;
+
+        env.storage().persistent().set(&pool_key, &pool);
         env.storage().persistent().set(&position_key, &position);
 
         (lp_tokens, deposit_b)
@@ -174,6 +194,7 @@ impl LiquidityContract {
             panic!("insufficient shares");
         }
 
+        // Checks & Reads
         let pool_key = Self::pool_key(outcome_a, outcome_b);
         let mut pool: Pool = env
             .storage()
@@ -188,9 +209,14 @@ impl LiquidityContract {
             .get(&position_key)
             .expect("no LP position");
 
+        let tokens_key = DataKey::PoolTokens(outcome_a, outcome_b);
+        let stored_tokens: Option<(Address, Address)> = env.storage().persistent().get(&tokens_key);
+        let (token_a, token_b) = stored_tokens.expect("pool tokens not found");
+
         let amount_a = (lp_tokens * pool.reserve_a) / pool.total_lp_supply;
         let amount_b = (lp_tokens * pool.reserve_b) / pool.total_lp_supply;
 
+        // Effects
         pool.reserve_a -= amount_a;
         pool.reserve_b -= amount_b;
         pool.total_lp_supply -= lp_tokens;
@@ -198,6 +224,10 @@ impl LiquidityContract {
 
         env.storage().persistent().set(&pool_key, &pool);
         env.storage().persistent().set(&position_key, &position);
+
+        // Interactions
+        TokenClient::new(&env, &token_a).transfer(&env.current_contract_address(), &provider, &amount_a);
+        TokenClient::new(&env, &token_b).transfer(&env.current_contract_address(), &provider, &amount_b);
 
         (amount_a, amount_b)
     }
@@ -217,12 +247,17 @@ impl LiquidityContract {
             panic!("amount_in must be positive");
         }
 
+        // Checks & Reads
         let pool_key = Self::pool_key(outcome_in, outcome_out);
         let mut pool: Pool = env
             .storage()
             .persistent()
             .get(&pool_key)
             .expect("pool not found");
+
+        let tokens_key = DataKey::PoolTokens(outcome_in, outcome_out);
+        let stored_tokens: Option<(Address, Address)> = env.storage().persistent().get(&tokens_key);
+        let (token_in, token_out) = stored_tokens.expect("pool tokens not found");
 
         let amount_out = (amount_in * pool.reserve_b) / (pool.reserve_a + amount_in);
         let fee = (amount_out * pool.fee_bps as i128) / 10_000;
@@ -232,9 +267,14 @@ impl LiquidityContract {
             panic!("slippage exceeded");
         }
 
+        // Effects
         pool.reserve_a += amount_in;
         pool.reserve_b -= amount_out_with_fee;
         env.storage().persistent().set(&pool_key, &pool);
+
+        // Interactions
+        TokenClient::new(&env, &token_in).transfer(&trader, &env.current_contract_address(), &amount_in);
+        TokenClient::new(&env, &token_out).transfer(&env.current_contract_address(), &trader, &amount_out_with_fee);
 
         amount_out_with_fee
     }
