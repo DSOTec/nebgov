@@ -1,4 +1,4 @@
-use super::{LiquidityContract, LiquidityContractClient};
+use super::{LiquidityContract, LiquidityContractClient, LiquidityError};
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contractimpl, contracttype,
@@ -770,4 +770,12 @@ fn test_remove_liquidity_state_unchanged_on_insufficient_shares_guard() {
     assert_eq!(pool_after.reserve_a, initial_pool.reserve_a);
     assert_eq!(pool_after.reserve_b, initial_pool.reserve_b);
     assert_eq!(pool_after.total_lp_supply, initial_pool.total_lp_supply);
+}
+
+#[test]
+fn test_liquidity_error_codes_snapshot() {
+    // Snapshot: each LiquidityError variant maps to a stable u32.
+    assert_eq!(LiquidityError::InvalidAmount as u32, 1);
+    assert_eq!(LiquidityError::InsufficientShares as u32, 2);
+    assert_eq!(LiquidityError::ImbalancedDeposit as u32, 3);
 }

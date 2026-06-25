@@ -2226,6 +2226,58 @@ impl GovernorContract {
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
         Self::must_get_proposal(&env, proposal_id)
     }
+
+    // ============================================================================
+    // Execution Gas Estimation (Issue #715)
+    // ============================================================================
+
+    /// Base CPU instructions per action.
+    const BASE_CPU_PER_ACTION: u64 = 25_000;
+    /// CPU instructions per byte of calldata.
+    const CPU_PER_CALLDATA_BYTE: u64 = 10;
+    /// Fixed base CPU cost for gas estimation overhead.
+    const BASE_CPU_FIXED: u64 = 50_000;
+    /// Base memory bytes per action.
+    const BASE_MEM_PER_ACTION: u64 = 5_000;
+    /// Memory bytes per calldata byte.
+    const MEM_PER_CALLDATA_BYTE: u64 = 2;
+    /// Fixed base memory cost.
+    const BASE_MEM_FIXED: u64 = 10_000;
+    /// Stroops per CPU instruction for fee estimation.
+    const STROOPS_PER_CPU_INSN: i128 = 100;
+    /// Stroops per memory byte for fee estimation.
+    const STROOPS_PER_MEM_BYTE: i128 = 10;
+
+    /// Estimate the gas/resources required to execute a queued proposal.
+    ///
+    /// Returns an [`ExecutionGasEstimate`] with estimated CPU instructions,
+    /// memory bytes, and fee in stroops based on the number of actions and
+    /// total calldata size.
+    pub fn estimate_execution_gas(env: Env, proposal_id: u64) -> ExecutionGasEstimate {
+        let proposal = Self::must_get_proposal(&env, proposal_id);
+        let action_count = proposal.targets.len() as u32;
+        let mut calldata_bytes: u32 = 0;
+        for i in 0..proposal.calldatas.len() {
+            calldata_bytes += proposal.calldatas.get(i).unwrap().len();
+        }
+        let estimated_cpu_insns =
+            Self::BASE_CPU_FIXED + (action_count as u64) * Self::BASE_CPU_PER_ACTION
+                + (calldata_bytes as u64) * Self::CPU_PER_CALLDATA_BYTE;
+        let estimated_mem_bytes =
+            Self::BASE_MEM_FIXED + (action_count as u64) * Self::BASE_MEM_PER_ACTION
+                + (calldata_bytes as u64) * Self::MEM_PER_CALLDATA_BYTE;
+        let estimated_fee_stroops =
+            (estimated_cpu_insns as i128) * Self::STROOPS_PER_CPU_INSN
+                + (estimated_mem_bytes as i128) * Self::STROOPS_PER_MEM_BYTE;
+        ExecutionGasEstimate {
+            proposal_id,
+            action_count,
+            calldata_bytes,
+            estimated_cpu_insns,
+            estimated_mem_bytes,
+            estimated_fee_stroops,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3458,6 +3510,43 @@ mod test {
             !flag_set,
             "ProposalExpiredEmitted flag must not be set for a succeeded proposal"
         );
+    }
+
+    #[test]
+    fn test_governor_error_codes_snapshot() {
+        // Snapshot: each GovernorError variant maps to a stable u32.
+        // If this test fails due to renumbering, update SDK error maps too.
+        assert_eq!(GovernorError::UnauthorizedCancel as u32, 1);
+        assert_eq!(GovernorError::InvalidSupport as u32, 2);
+        assert_eq!(GovernorError::ProposalExpired as u32, 3);
+        assert_eq!(GovernorError::CalldataTooLarge as u32, 4);
+        assert_eq!(GovernorError::InvalidCalldata as u32, 5);
+        assert_eq!(GovernorError::ProposalRateLimited as u32, 6);
+        assert_eq!(GovernorError::ContractPaused as u32, 7);
+        assert_eq!(GovernorError::UnauthorizedPause as u32, 8);
+        assert_eq!(GovernorError::InvalidVectorLengths as u32, 9);
+        assert_eq!(GovernorError::NoTargets as u32, 10);
+        assert_eq!(GovernorError::ProposalThresholdNotMet as u32, 11);
+        assert_eq!(GovernorError::AlreadyVoted as u32, 12);
+        assert_eq!(GovernorError::ZeroVotingPower as u32, 13);
+        assert_eq!(GovernorError::ProposalNotSucceeded as u32, 14);
+        assert_eq!(GovernorError::ProposalNotQueued as u32, 15);
+        assert_eq!(GovernorError::ProposalAlreadyExecuted as u32, 16);
+        assert_eq!(GovernorError::MissingOpIds as u32, 17);
+        assert_eq!(GovernorError::UnauthorizedGuardian as u32, 18);
+        assert_eq!(GovernorError::VetoWindowClosed as u32, 19);
+        assert_eq!(GovernorError::ProposalNotFound as u32, 20);
+        assert_eq!(GovernorError::TimelockNotSet as u32, 21);
+        assert_eq!(GovernorError::GuardianNotSet as u32, 22);
+        assert_eq!(GovernorError::TooManyTokens as u32, 23);
+        assert_eq!(GovernorError::EmptyMetadataUri as u32, 24);
+        assert_eq!(GovernorError::VotesTokenNotSet as u32, 25);
+        assert_eq!(GovernorError::PauserNotSet as u32, 26);
+        assert_eq!(GovernorError::ArithmeticOverflow as u32, 27);
+        assert_eq!(GovernorError::VotePeriodTooShort as u32, 28);
+        assert_eq!(GovernorError::ExecutionWindowZero as u32, 29);
+        assert_eq!(GovernorError::TooManyCalldataEntries as u32, 30);
+        assert_eq!(GovernorError::ProposalNotActive as u32, 31);
     }
 }
 
