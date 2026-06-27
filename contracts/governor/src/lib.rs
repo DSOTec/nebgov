@@ -1224,14 +1224,15 @@ impl GovernorContract {
     /// Performs a full queued-state preflight for every proposal before
     /// executing any of them, avoiding partial completion in malformed batches.
     pub fn execute_batch(env: Env, proposal_ids: Vec<u64>) {
-        assert!(!proposal_ids.is_empty(), "empty batch");
+        if proposal_ids.is_empty() {
+            env.panic_with_error(GovernorError::NoTargets);
+        }
 
         for i in 0..proposal_ids.len() {
             let proposal_id = proposal_ids.get(i).expect("proposal missing");
-            assert!(
-                Self::state(env.clone(), proposal_id) == ProposalState::Queued,
-                "proposal not queued"
-            );
+            if Self::state(env.clone(), proposal_id) != ProposalState::Queued {
+                env.panic_with_error(GovernorError::ProposalNotQueued);
+            }
         }
 
         for i in 0..proposal_ids.len() {
