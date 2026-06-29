@@ -103,6 +103,103 @@ reason = "Suppressed: [reason] — [date] — [author]"
 | `app/`                       | Next.js governance dashboard            |
 | `docs/`                      | Architecture docs and ADRs              |
 
+## Smart Contract Contributions
+
+NebGov's contracts are written in Rust targeting the Soroban VM. Contract changes carry higher risk than frontend or SDK changes because they affect immutable on-chain state. Follow the requirements below for any PR that touches `contracts/`.
+
+### Toolchain Setup
+
+```bash
+# Rust stable toolchain
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+rustup target add wasm32-unknown-unknown
+
+# Soroban / Stellar CLI (pin to the version used by CI)
+cargo install --locked stellar-cli
+
+# Verify installation
+stellar --version
+cargo build --target wasm32-unknown-unknown --release
+```
+
+### Building Contracts
+
+```bash
+# Build all contracts to WASM
+stellar contract build
+
+# Build a single contract
+cd contracts/governor && cargo build --release --target wasm32-unknown-unknown
+
+# Optimized release build (used for deployment)
+stellar contract build --profile release
+```
+
+### Running Tests
+
+All three test layers are required before submitting a contract PR:
+
+```bash
+# Unit and integration tests for all contracts
+cargo test --workspace
+
+# Test a single contract in isolation
+cargo test -p sorogov-governor
+
+# Run a specific test by name
+cargo test -p sorogov-liquidity test_swap_reverse_direction_finds_pool -- --nocapture
+```
+
+Every new function must have at least one unit test. Cross-contract interactions require an integration test in the contract's `integration_tests.rs` or `tests.rs` module. Tests that involve the full governance lifecycle (propose → vote → queue → execute) should live in integration test files.
+
+### Code Style for Contracts
+
+**Authorization**: Every function that mutates state on behalf of a caller must call `caller.require_auth()` as the very first statement. Never rely on the caller parameter alone to infer identity.
+
+**Events**: Emit a structured event for every meaningful state transition. Use the helpers in `events.rs` and follow the existing naming pattern (`emit_<action>`).
+
+**Errors**: Use the contract's typed error enum (e.g., `LiquidityError`, `GovernorError`) and `env.panic_with_error(...)`. Never use bare `panic!()` strings for user-facing error paths — reserve those for programming errors caught in development.
+
+**Arithmetic**: Use `checked_add` / `checked_mul` (or the contract's own helpers) wherever overflow is possible. Document the invariant if you deliberately use unchecked arithmetic.
+
+**No `unsafe` code**: The `#![no_std]` environment does not allow `unsafe`. Any dependency that requires it must be justified in the PR description.
+
+### Security Checklist for Contract PRs
+
+Before requesting review, verify:
+
+- [ ] `require_auth()` called for every privileged entry point
+- [ ] State mutations happen before external calls (checks-effects-interactions)
+- [ ] All arithmetic uses overflow-safe operations
+- [ ] Events emitted for every state change
+- [ ] No new persistent storage keys that can conflict with existing keys
+- [ ] Tests cover the happy path, at least one error path, and any edge cases mentioned in the issue
+- [ ] `cargo scout-audit` passes locally (see [Security Scanning](#security-scanning) below)
+
+### Security Review Process
+
+All contract changes require a security sign-off from a maintainer before merge. Add the label `needs-security-review` to your PR. Changes to access control logic, arithmetic, or storage layout receive mandatory dual review.
+
+### Testing on Futurenet Before Mainnet
+
+Deploy to Futurenet and run a smoke test before opening a mainnet-targeted PR:
+
+```bash
+stellar contract deploy \
+  --wasm target/wasm32v1-none/release/sorogov_governor.wasm \
+  --network futurenet \
+  --source <SECRET_KEY>
+```
+
+Record the deployed address and verify the initialization flow end-to-end using `stellar contract invoke`.
+
+### Architecture Docs
+
+- [docs/architecture.md](./docs/architecture.md) — contract interaction diagram and storage layout
+- [docs/security.md](./docs/security.md) — known threat model and mitigations
+
+---
+
 ## How to Contribute
 
 ### 1. Find an issue

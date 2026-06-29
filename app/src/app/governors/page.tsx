@@ -19,6 +19,7 @@ import {
   type Network,
 } from "@nebgov/sdk";
 import { ExternalLink, Loader2 } from "lucide-react";
+import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 
 interface GovernorCardData {
   id: bigint;
@@ -59,8 +60,8 @@ function formatAddress(address: string): string {
   return `${address.slice(0, 6)}...${address.slice(-6)}`;
 }
 
-function formatVotes(votes: bigint): string {
-  const value = Number(votes) / 1e7;
+function formatVotes(votes: bigint, divisor: number): string {
+  const value = Number(votes) / divisor;
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(2)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(2)}K`;
   return value.toLocaleString();
@@ -81,6 +82,7 @@ function GovernorSkeleton() {
 }
 
 export default function GovernorsPage() {
+  const { divisor } = useGovernorConfig();
   const [governors, setGovernors] = useState<GovernorCardData[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -302,7 +304,7 @@ export default function GovernorsPage() {
                 <div className="mt-6 grid gap-4 sm:grid-cols-3">
                   <div className="rounded-2xl bg-gray-50 p-4">
                     <p className="text-xs uppercase tracking-wide text-gray-400">Total delegates</p>
-                    <p className="mt-2 text-lg font-semibold text-gray-900">{formatVotes(governor.totalDelegates)}</p>
+                    <p className="mt-2 text-lg font-semibold text-gray-900">{formatVotes(governor.totalDelegates, divisor)}</p>
                   </div>
                   <div className="rounded-2xl bg-gray-50 p-4">
                     <p className="text-xs uppercase tracking-wide text-gray-400">Timelock</p>

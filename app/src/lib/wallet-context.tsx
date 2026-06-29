@@ -81,6 +81,18 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const connect = useCallback(async () => {
+    // E2E test mock — skip the Freighter modal and inject directly
+    if (typeof window !== "undefined") {
+      const mock = (window as unknown as Record<string, unknown>).__E2E_MOCK_WALLET__ as
+        | { publicKey: string; address: string }
+        | undefined;
+      if (mock) {
+        setPublicKey(mock.publicKey);
+        setAddress(mock.address);
+        return;
+      }
+    }
+
     const kit = kitRef.current;
     if (!kit) return;
 

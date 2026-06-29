@@ -5,6 +5,7 @@ import { Keypair } from "@stellar/stellar-sdk";
 import toast from "react-hot-toast";
 import { GovernorClient, VoteSupport, VoteType, computeQuadraticWeight, type Network } from "@nebgov/sdk";
 import { useWallet } from "../lib/wallet-context";
+import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 
 interface Props {
   open?: boolean;
@@ -78,6 +79,7 @@ export function VotingModal({
   governorClient,
 }: Props) {
   const { isConnected, connect, publicKey } = useWallet();
+  const { divisor } = useGovernorConfig();
   const resolvedOpen = open ?? isOpen ?? false;
   const resolvedProposalId = typeof proposalId === "bigint" ? proposalId : BigInt(proposalId);
   const resolvedDelegatee = delegatee ?? publicKey ?? null;
@@ -189,7 +191,7 @@ export function VotingModal({
     }
   })();
   const estimatedFeeXlm =
-    estimatedFeeStroops !== null ? Number(estimatedFeeStroops) / 1e7 : null;
+    estimatedFeeStroops !== null ? Number(estimatedFeeStroops) / divisor : null;
 
   async function handleConfirm() {
     if (support === null) {

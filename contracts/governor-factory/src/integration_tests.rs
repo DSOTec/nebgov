@@ -426,8 +426,8 @@ fn test_factory_emits_deployment_event() {
     assert_eq!(last_event.0, factory_id);
     assert_eq!(
         last_event.1.len(),
-        5,
-        "deployment event should include id and contract addresses"
+        2,
+        "GovernorDeployed topics should be (topic_symbol, deployer)"
     );
 }
 

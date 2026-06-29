@@ -1,4 +1,7 @@
+"use client";
+
 import { VoteSupport } from "@nebgov/sdk";
+import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 
 interface Props {
   support: VoteSupport;
@@ -19,13 +22,15 @@ const SUPPORT_COLORS: Record<VoteSupport, string> = {
 };
 
 export function VoteReceipt({ support, weight, reason }: Props) {
+  const { divisor } = useGovernorConfig();
+
   return (
     <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4">
       <p className="text-emerald-800 font-medium">
         Your vote (<span className={SUPPORT_COLORS[support]}>{SUPPORT_LABELS[support]}</span>) has been recorded.
       </p>
       <p className="text-sm text-emerald-700 mt-1">
-        Voting power: {(Number(weight) / 1e7).toLocaleString()} NEB
+        Voting power: {(Number(weight) / divisor).toLocaleString()} NEB
       </p>
       {reason && (
         <p className="text-sm text-emerald-700 mt-1 italic">&quot;{reason}&quot;</p>

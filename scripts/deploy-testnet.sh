@@ -113,6 +113,13 @@ for wasm in sorogov_token_votes sorogov_timelock sorogov_governor sorogov_treasu
   [[ -f "$WASM_DIR/${wasm}.wasm" ]] || fail "Expected WASM not found: $WASM_DIR/${wasm}.wasm"
 done
 
+# ---- Optimise WASM binaries -----------------------------------------
+command -v wasm-opt >/dev/null 2>&1 || fail "wasm-opt not found. Install: npm i -g binaryen"
+for wasm in "$WASM_DIR"/*.wasm; do
+  wasm-opt -Oz "$wasm" -o "$wasm"
+  ok "Optimized $(basename "$wasm")"
+done
+
 # ---- Deploy helper --------------------------------------------------
 # deploy_contract <WASM_FILE> <ENV_KEY>
 #   Deploys a contract and persists its address under ENV_KEY.

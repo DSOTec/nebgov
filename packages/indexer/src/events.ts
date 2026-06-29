@@ -30,6 +30,11 @@ const TOPIC_MAP: Record<string, string> = {
   DelegateChanged: "DelegateChanged",
   ConfigUpdated: "ConfigUpdated",
   GovernorUpgraded: "GovernorUpgraded",
+  // Liquidity contract events (#602)
+  LiquidityAdded: "LiquidityAdded",
+  LiquidityRemoved: "LiquidityRemoved",
+  Swap: "Swap",
+  PoolFeeUpdated: "PoolFeeUpdated",
 };
 
 export interface IndexerConfig {
@@ -37,6 +42,7 @@ export interface IndexerConfig {
   governorAddress: string;
   wrapperAddress?: string;
   treasuryAddress?: string;
+  liquidityAddress?: string;
   pollIntervalMs: number;
 }
 
@@ -64,6 +70,7 @@ export async function processEvents(
     const contractIds = [config.governorAddress].filter(Boolean);
     if (config.wrapperAddress) contractIds.push(config.wrapperAddress);
     if (config.treasuryAddress) contractIds.push(config.treasuryAddress);
+    if (config.liquidityAddress) contractIds.push(config.liquidityAddress);
 
     const response = await server.getEvents({
       startLedger,
@@ -95,6 +102,11 @@ export async function processEvents(
         config.treasuryAddress &&
         contractId === config.treasuryAddress
       );
+      const isLiquidity = !!(
+        contractId &&
+        config.liquidityAddress &&
+        contractId === config.liquidityAddress
+      );
 
       try {
         if (isTreasury) {
@@ -117,6 +129,23 @@ export async function processEvents(
               break;
             case "DelegateChanged":
               await handleDelegateChanged(event, topics);
+              break;
+            default:
+              break;
+          }
+        } else if (isLiquidity) {
+          switch (eventType) {
+            case "LiquidityAdded":
+              await handleLiquidityAdded(event, topics);
+              break;
+            case "LiquidityRemoved":
+              await handleLiquidityRemoved(event, topics);
+              break;
+            case "Swap":
+              await handleSwap(event, topics);
+              break;
+            case "PoolFeeUpdated":
+              await handlePoolFeeUpdated(event, topics);
               break;
             default:
               break;
@@ -169,17 +198,29 @@ async function handleProposalCreated(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
 ): Promise<void> {
-  const proposer = topics[1] as string;
-  const data = scValToNative(event.value) as unknown[];
-  const [id, description, , , , startLedger, endLedger] = data as [
-    bigint,
-    string,
-    unknown,
-    unknown,
-    unknown,
-    number,
-    number,
-  ];
+  const raw = scValToNative(event.value);
+  let id: bigint;
+  let proposer: string;
+  let description: string;
+  let startLedger: number;
+  let endLedger: number;
+
+  if (Array.isArray(raw)) {
+    // Legacy tuple format from raw env.events().publish()
+    id = raw[0] as bigint;
+    proposer = topics[1] as string;
+    description = String(raw[1] ?? "");
+    startLedger = raw[5] as number;
+    endLedger = raw[6] as number;
+  } else {
+    // Struct format from emit_proposal_created()
+    const data = raw as Record<string, unknown>;
+    id = data.proposal_id as bigint;
+    proposer = String(data.proposer ?? "");
+    description = String(data.description ?? "");
+    startLedger = Number(data.start_ledger);
+    endLedger = Number(data.end_ledger);
+  }
 
   invalidatePattern("proposals:");
   await pool.query(
@@ -515,5 +556,103 @@ async function handleProposalCancelled(
   broadcast({
     type: "proposal_cancelled",
     data: { proposal_id: proposalId, cancelled_at_ledger: cancelledAtLedger, caller },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Liquidity event handlers (#602)
+// ---------------------------------------------------------------------------
+
+async function handleLiquidityAdded(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const provider = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeA = Number(data.outcome_a);
+  const outcomeB = Number(data.outcome_b);
+  const amountA = String(data.amount_a as bigint);
+  const amountB = String(data.amount_b as bigint);
+  const lpTokens = String(data.lp_tokens_minted as bigint);
+
+  await pool.query(
+    `INSERT INTO liquidity_events
+       (event_type, provider, outcome_a, outcome_b, amount_a, amount_b, lp_tokens, ledger)
+     VALUES ('add', $1, $2, $3, $4, $5, $6, $7)`,
+    [provider, outcomeA, outcomeB, amountA, amountB, lpTokens, event.ledger],
+  );
+  broadcast({
+    type: "liquidity_added",
+    data: { provider, outcome_a: outcomeA, outcome_b: outcomeB, amount_a: amountA, amount_b: amountB, lp_tokens: lpTokens, ledger: event.ledger },
+  });
+}
+
+async function handleLiquidityRemoved(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const provider = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeA = Number(data.outcome_a);
+  const outcomeB = Number(data.outcome_b);
+  const amountA = String(data.amount_a as bigint);
+  const amountB = String(data.amount_b as bigint);
+  const lpTokens = String(data.lp_tokens_burned as bigint);
+
+  await pool.query(
+    `INSERT INTO liquidity_events
+       (event_type, provider, outcome_a, outcome_b, amount_a, amount_b, lp_tokens, ledger)
+     VALUES ('remove', $1, $2, $3, $4, $5, $6, $7)`,
+    [provider, outcomeA, outcomeB, amountA, amountB, lpTokens, event.ledger],
+  );
+  broadcast({
+    type: "liquidity_removed",
+    data: { provider, outcome_a: outcomeA, outcome_b: outcomeB, amount_a: amountA, amount_b: amountB, lp_tokens: lpTokens, ledger: event.ledger },
+  });
+}
+
+async function handleSwap(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const trader = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeIn = Number(data.outcome_in);
+  const outcomeOut = Number(data.outcome_out);
+  const amountIn = String(data.amount_in as bigint);
+  const amountOut = String(data.amount_out as bigint);
+  const fee = String(data.fee as bigint);
+
+  await pool.query(
+    `INSERT INTO swap_events
+       (trader, outcome_in, outcome_out, amount_in, amount_out, fee, ledger)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [trader, outcomeIn, outcomeOut, amountIn, amountOut, fee, event.ledger],
+  );
+  broadcast({
+    type: "swap",
+    data: { trader, outcome_in: outcomeIn, outcome_out: outcomeOut, amount_in: amountIn, amount_out: amountOut, fee, ledger: event.ledger },
+  });
+}
+
+async function handlePoolFeeUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeA = Number(data.outcome_a);
+  const outcomeB = Number(data.outcome_b);
+  const oldFeeBps = Number(data.old_fee_bps);
+  const newFeeBps = Number(data.new_fee_bps);
+
+  await pool.query(
+    `INSERT INTO pool_fee_updates
+       (outcome_a, outcome_b, old_fee_bps, new_fee_bps, ledger)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [outcomeA, outcomeB, oldFeeBps, newFeeBps, event.ledger],
+  );
+  broadcast({
+    type: "pool_fee_updated",
+    data: { outcome_a: outcomeA, outcome_b: outcomeB, old_fee_bps: oldFeeBps, new_fee_bps: newFeeBps, ledger: event.ledger },
   });
 }

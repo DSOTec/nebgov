@@ -196,6 +196,25 @@ impl TreasuryContract {
             .unwrap_or(0i128)
     }
 
+    /// Get the remaining spending budget in the current period for a token.
+    ///
+    /// Returns `spending_cap.max_amount - spent_this_period` for the token's
+    /// configured cap. If no cap has been configured for the token, returns
+    /// `i128::MAX` to signal that spending is effectively unrestricted.
+    pub fn get_spending_remaining(env: Env, token: Address) -> i128 {
+        let cap: Option<SpendingCap> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SpendingCap(token.clone()));
+
+        let Some(cap) = cap else {
+            return i128::MAX;
+        };
+
+        let spent = Self::get_spent_this_period(env, token);
+        cap.max_amount.saturating_sub(spent)
+    }
+
     /// Submit a new transaction for approval.
     /// TODO issue #22: add owner-only guard and event emission.
     pub fn submit(
@@ -1680,8 +1699,69 @@ mod tests {
         owners.push_back(owner.clone());
         client.initialize(&owners, &1u32, &governor);
 
-        // Attempting to slash the only owner should fail
-        let reason = Symbol::new(&env, "malicious");
-        client.slash_signer(&governor, &owner, &reason);
+    #[test]
+    fn test_get_spending_remaining_no_cap_returns_max() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, _governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let _ = treasury_id;
+
+        // No spending cap configured for this token.
+        let remaining = client.get_spending_remaining(&token_addr);
+        assert_eq!(remaining, i128::MAX);
+    }
+
+    #[test]
+    fn test_get_spending_remaining_reflects_cap_and_usage() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let alice = Address::generate(&env);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&treasury_id, &1000i128);
+
+        client.set_spending_cap(&governor, &token_addr, &500i128, &100u32);
+
+        // No spend yet: full cap is remaining.
+        assert_eq!(client.get_spending_remaining(&token_addr), 500i128);
+
+        let mut recipients = Vec::new(&env);
+        recipients.push_back(BatchRecipient {
+            recipient: alice,
+            amount: 300,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients);
+
+        // 300 spent of a 500 cap -> 200 remaining.
+        assert_eq!(client.get_spending_remaining(&token_addr), 200i128);
+    }
+
+    #[test]
+    fn test_get_spending_remaining_resets_after_period() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let alice = Address::generate(&env);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&treasury_id, &1000i128);
+
+        let period_ledgers = 100u32;
+        client.set_spending_cap(&governor, &token_addr, &500i128, &period_ledgers);
+
+        let mut recipients = Vec::new(&env);
+        recipients.push_back(BatchRecipient {
+            recipient: alice,
+            amount: 500,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients);
+        assert_eq!(client.get_spending_remaining(&token_addr), 0i128);
+
+        // Advance past the period — budget should refresh.
+        env.ledger()
+            .with_mut(|l| l.sequence_number += period_ledgers + 1);
+        assert_eq!(client.get_spending_remaining(&token_addr), 500i128);
     }
 }

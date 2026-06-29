@@ -6,6 +6,7 @@ import { VotesClient, type TopDelegate, type Network } from "@nebgov/sdk";
 import { useWallet } from "../../lib/wallet-context";
 import { DelegateModal } from "../../components/DelegateModal";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 
 function DelegateSkeleton() {
   return (
@@ -36,8 +37,8 @@ function formatAddress(address: string): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
 }
 
-function formatVotes(votes: bigint): string {
-  const num = Number(votes) / 1e7;
+function formatVotes(votes: bigint, divisor: number): string {
+  const num = Number(votes) / divisor;
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
   if (num >= 1_000) return `${(num / 1_000).toFixed(2)}K`;
   return num.toLocaleString();
@@ -46,6 +47,7 @@ function formatVotes(votes: bigint): string {
 const PAGE_SIZE = 20;
 
 export default function DelegatesPage() {
+  const { divisor } = useGovernorConfig();
   const [delegates, setDelegates] = useState<TopDelegate[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -163,7 +165,7 @@ export default function DelegatesPage() {
           <div className="flex justify-between items-center mb-2">
             <span className="text-sm text-gray-600">Total Delegated</span>
             <span className="text-sm font-medium text-gray-900">
-              {formatVotes(totalDelegated)} / {formatVotes(totalSupply)} (
+              {formatVotes(totalDelegated, divisor)} / {formatVotes(totalSupply, divisor)} (
               {delegatedPercent.toFixed(1)}%)
             </span>
           </div>
@@ -260,7 +262,7 @@ export default function DelegatesPage() {
                       </div>
                     </td>
                     <td className="py-4 px-4 text-sm font-medium text-gray-900">
-                      {formatVotes(delegate.votingPower)}
+                      {formatVotes(delegate.votingPower, divisor)}
                     </td>
                     <td className="py-4 px-4 text-sm text-gray-600">
                       {delegate.delegatorCount.toLocaleString()}

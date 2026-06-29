@@ -19,6 +19,7 @@ export { FactoryClient } from "./factory";
 export type { GovernorEntry, DeploySettings } from "./factory";
 export { TimelockClient } from "./timelock";
 export { TreasuryClient } from "./treasury";
+export { LiquidityClient } from "./liquidity";
 export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
 export {

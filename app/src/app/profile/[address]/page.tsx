@@ -19,6 +19,8 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { useGovernorConfig } from "@/hooks/useGovernorConfig";
+} from "recharts";
 import { isValidStellarAddress, formatVotingPower } from "../../../lib/utils";
 
 interface VotingRecord {
@@ -60,6 +62,7 @@ function Skeleton({ className }: { className?: string }) {
 function VoterProfilePageContent() {
   const params = useParams();
   const address = params.address as string;
+  const { divisor } = useGovernorConfig();
 
   const [data, setData] = useState<ProfileData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -199,7 +202,7 @@ function VoterProfilePageContent() {
           points.map(async (ledger) => ({
             ledger,
             votingPower:
-              Number(await votesClient.getPastVotes(address, ledger)) / 1e7,
+              Number(await votesClient.getPastVotes(address, ledger)) / divisor,
           })),
         );
 

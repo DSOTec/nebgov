@@ -41,6 +41,7 @@ import { CountdownTimer } from "../../components/CountdownTimer";
 const TITLE_MIN = 10;
 const TITLE_MAX = 100;
 const DESC_MIN = 20;
+const DESC_MAX = 10000;
 const STORAGE_KEY = "nebgov_proposal_draft";
 const DRAFT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -379,8 +380,9 @@ function ProposeWizardInner() {
     if (t.length < TITLE_MIN || t.length > TITLE_MAX) {
       err.push(`Title must be ${TITLE_MIN}–${TITLE_MAX} characters.`);
     }
-    if (draft.description.trim().length < DESC_MIN) {
-      err.push(`Description must be at least ${DESC_MIN} characters.`);
+    const d = draft.description.trim();
+    if (d.length < DESC_MIN || d.length > DESC_MAX) {
+      err.push(`Description must be ${DESC_MIN}–${DESC_MAX} characters.`);
     }
     if (!isReasonableIpfsRef(draft.ipfsRef)) {
       err.push(
@@ -821,17 +823,47 @@ function ProposeWizardInner() {
           <div className="grid md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Description (Markdown, min {DESC_MIN} chars)
+                Description (Markdown, {DESC_MIN}–{DESC_MAX} chars)
               </label>
               <textarea
                 value={draft.description}
                 onChange={(e) =>
-                  setDraft((d) => ({ ...d, description: e.target.value }))
+                  setDraft((d) => ({ ...d, description: e.target.value.slice(0, DESC_MAX) }))
                 }
                 rows={12}
+                maxLength={DESC_MAX}
                 className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-indigo-500"
                 placeholder="Full proposal narrative: context, options, risks…"
               />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {draft.description.trim().length} / {DESC_MAX} (min {DESC_MIN})
+              </p>
+              {draft.description.trim() && (
+                <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                  {isHashing ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Computing content hash…
+                    </span>
+                  ) : draft.descriptionHash ? (
+                    <>
+                      <span className="font-mono truncate max-w-[280px]">
+                        Content hash: 0x{draft.descriptionHash}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(`0x${draft.descriptionHash}`);
+                          toast.success("Hash copied");
+                        }}
+                        className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 shrink-0"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 flex items-center justify-between">

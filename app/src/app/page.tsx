@@ -15,6 +15,7 @@ import { useDebounce } from "../hooks/useDebounce";
 import { getErrorMessage, reportFrontendError } from "../lib/frontend-error";
 import { ProposalStateBadge } from "../components/ProposalStateBadge";
 import { CountdownTimer } from "../components/CountdownTimer";
+import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 
 
 interface ProposalSummary {
@@ -55,6 +56,7 @@ const PROPOSALS_PER_PAGE = 10;
 function ProposalsPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { divisor } = useGovernorConfig();
 
   const search = searchParams.get("q") ?? "";
   const stateFilter = (searchParams.get("state") ?? "all") as
@@ -442,11 +444,11 @@ function ProposalsPageInner() {
                       </h2>
                       <div className="mt-3 flex items-center gap-4 text-sm text-gray-500">
                         <span>
-                          For: {(Number(p.votesFor) / 1e7).toLocaleString()}
+                          For: {(Number(p.votesFor) / divisor).toLocaleString()}
                         </span>
                         <span>
                           Against:{" "}
-                          {(Number(p.votesAgainst) / 1e7).toLocaleString()}
+                          {(Number(p.votesAgainst) / divisor).toLocaleString()}
                         </span>
                         {participationPct !== null && (
                           <span

@@ -44,7 +44,13 @@ jest.mock("@stellar/stellar-sdk", () => {
   };
 });
 
-const VALID_DESC_HASH = "0".repeat(64);
+// Helper to compute SHA-256 hash synchronously for tests
+function computeHashSync(text: string): string {
+  const crypto = require("crypto");
+  return crypto.createHash("sha256").update(text, "utf8").digest("hex");
+}
+
+const VALID_DESC_HASH = computeHashSync("Title");
 
 describe("SDK Retry Logic", () => {
   let client: GovernorClient;

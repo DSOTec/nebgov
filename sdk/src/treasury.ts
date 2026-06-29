@@ -299,21 +299,40 @@ export class TreasuryClient {
   /**
    * Get the remaining spending budget for a token in the current period.
    *
-   * Returns the difference between the spending cap's maxAmount and what has
-   * been spent so far in the current period. If no cap is set, returns null.
-   * If spending has exceeded the cap, returns 0n.
+   * Calls the on-chain `get_spending_remaining` read function, which returns
+   * `spending_cap.max_amount - spent_this_period` for the token's configured
+   * cap. If no cap has been configured for the token, the contract returns
+   * `i128::MAX`, which this method surfaces as `null` to signal "unrestricted".
    *
    * @param token - Strkey address of the token to check
    * @returns Remaining budget in the current period, or null if no cap is set
    */
   async getSpendingRemaining(token: string): Promise<bigint | null> {
     return this.retry(async () => {
-      const cap = await this.getSpendingCap(token);
-      if (!cap) return null;
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_spending_remaining",
+              nativeToScVal(token, { type: "address" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
 
-      const spent = await this.getSpentThisPeriod(token);
-      const remaining = cap.maxAmount - spent;
-      return remaining > 0n ? remaining : 0n;
+      if (SorobanRpc.Api.isSimulationError(result)) return null;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return null;
+
+      const remaining = BigInt(scValToNative(raw) as number | bigint | string);
+      // i128::MAX is the contract's sentinel for "no cap configured".
+      const I128_MAX = (1n << 127n) - 1n;
+      return remaining === I128_MAX ? null : remaining;
     });
   }
 
