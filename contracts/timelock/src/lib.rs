@@ -454,7 +454,12 @@ impl TimelockContract {
     pub fn update_delay(env: Env, caller: Address, new_delay: u64) {
         caller.require_auth();
         assert!(caller == Self::admin(env.clone()), "only admin");
+        let old_delay: u64 = env.storage().instance().get(&DataKey::MinDelay).unwrap_or(86400);
         env.storage().instance().set(&DataKey::MinDelay, &new_delay);
+        env.events().publish(
+            (symbol_short!("upd_dly"),),
+            (old_delay, new_delay),
+        );
     }
 
     /// Update the execution window. Only admin.

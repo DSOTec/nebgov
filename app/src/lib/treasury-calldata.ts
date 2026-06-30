@@ -41,17 +41,15 @@ export function calldataArgRowToScVal(row: CalldataArgRow): xdr.ScVal {
   }
 }
 
-/** Soroban-style payload: symbol + args, encoded as XDR of an ScVec (function name first). */
+/** Soroban calldata args bytes only — fn_name is passed as a separate Symbol to the contract. */
 export function encodeCallableCalldata(
   functionName: string,
   rows: CalldataArgRow[]
 ): Uint8Array {
-  const fn = functionName.trim();
-  if (!fn) throw new Error("Function name is required.");
-
-  const head = nativeToScVal(fn, { type: "symbol" });
-  const tail = rows.filter((r) => r.value.trim() !== "").map(calldataArgRowToScVal);
-  return Uint8Array.from(xdr.ScVal.scvVec([head, ...tail]).toXDR());
+  if (!functionName.trim()) throw new Error("Function name is required.");
+  const vals = rows.filter((r) => r.value.trim() !== "").map(calldataArgRowToScVal);
+  if (vals.length === 0) return new Uint8Array(0);
+  return Uint8Array.from(xdr.ScVal.scvVec(vals).toXDR());
 }
 
 /** Governor `calldatas` entries: argument vector XDR only (function name is its own field). */
@@ -96,26 +94,35 @@ function formatNativeArg(v: unknown): string {
 }
 
 /** One-line label for a pending treasury operation (for the list). */
-export function labelPendingTx(target: string, dataHex: string): string {
+export function labelPendingTx(target: string, dataHex: string, fnName?: string): string {
   const clean = dataHex.trim().replace(/^0x/i, "");
-  if (!clean || clean.length < 2) {
+  const fn = fnName?.trim() ?? "";
+
+  if (!fn && (!clean || clean.length < 2)) {
     return `Custom action · ${shortAddr(target)}`;
   }
-  try {
-    const buf = Buffer.from(clean, "hex");
-    const sc = xdr.ScVal.fromXDR(buf);
-    const nat = scValToNative(sc);
-    if (Array.isArray(nat) && nat.length > 0) {
-      const fn = String(nat[0]);
-      const args = nat.slice(1).map(formatNativeArg);
-      const human =
-        fn === "transfer" && args.length >= 2
-          ? `Transfer ${args[1]} to ${shortAddr(args[0])}` // (recipient, amount)
-          : `${fn}(${args.join(", ")})`;
-      return `${human} · ${shortAddr(target)}`;
+
+  let args: string[] = [];
+  if (clean && clean.length >= 2) {
+    try {
+      const buf = Buffer.from(clean, "hex");
+      const sc = xdr.ScVal.fromXDR(buf);
+      const nat = scValToNative(sc);
+      if (Array.isArray(nat)) {
+        args = nat.map(formatNativeArg);
+      }
+    } catch {
+      /* fall through */
     }
-  } catch {
-    /* fall through */
   }
+
+  if (fn) {
+    const human =
+      fn === "transfer" && args.length >= 2
+        ? `Transfer ${args[1]} to ${shortAddr(args[0])}`
+        : `${fn}(${args.join(", ")})`;
+    return `${human} · ${shortAddr(target)}`;
+  }
+
   return `Custom calldata · ${shortAddr(target)}`;
 }

@@ -13,6 +13,7 @@ const DEFAULT_POLL_INTERVAL_MS = 10_000;
 const TOPICS = {
   proposalCreated: "ProposalCreated",
   voteCast: "VoteCast",
+  voteCastWithReason: "VoteCastWithReason",
   proposalQueued: "ProposalQueued",
   proposalExecuted: "ProposalExecuted",
   proposalCancelled: "ProposalCancelled",
@@ -37,6 +38,8 @@ export interface ProposalCreatedEventData {
   proposalId: bigint;
   proposer: string;
   description: string;
+  descriptionHash: string;
+  metadataUri: string;
   targets: unknown[];
   fnNames: unknown[];
   calldatas: unknown[];
@@ -49,6 +52,14 @@ export interface VoteCastEventData {
   voter: string;
   support: number;
   weight: bigint;
+}
+
+export interface VoteCastWithReasonEventData {
+  proposalId: bigint;
+  voter: string;
+  support: number;
+  weight: bigint;
+  reason: string;
 }
 
 export interface ProposalQueuedEventData {
@@ -341,6 +352,8 @@ export function parseProposalCreatedEvent(
     proposalId,
     proposer: String(event.value.proposer ?? ""),
     description: String(event.value.description ?? ""),
+    descriptionHash: String(event.value.description_hash ?? ""),
+    metadataUri: String(event.value.metadata_uri ?? ""),
     targets: Array.isArray(event.value.targets) ? event.value.targets : [],
     fnNames: Array.isArray(event.value.fn_names) ? event.value.fn_names : [],
     calldatas: Array.isArray(event.value.calldatas) ? event.value.calldatas : [],
@@ -381,6 +394,26 @@ export function parseVoteCastEvent(event: SorobanEvent): VoteCastEventData | nul
     voter: String(event.value.voter ?? ""),
     support,
     weight,
+  };
+}
+
+export function parseVoteCastWithReasonEvent(
+  event: SorobanEvent
+): VoteCastWithReasonEventData | null {
+  if (event.topic[0] !== TOPICS.voteCastWithReason || !isRecord(event.value)) return null;
+
+  const proposalId = toBigInt(event.value.proposal_id);
+  const support = toNumber(event.value.support);
+  const weight = toBigInt(event.value.weight);
+
+  if (proposalId === null || support === null || weight === null) return null;
+
+  return {
+    proposalId,
+    voter: String(event.value.voter ?? ""),
+    support,
+    weight,
+    reason: String(event.value.reason ?? ""),
   };
 }
 
@@ -506,6 +539,21 @@ export function subscribeToVotes(
     callback,
     opts,
     (event) => parseVoteCastEvent(event)?.proposalId === proposalId
+  );
+}
+
+export function subscribeToVoteCastWithReason(
+  governorAddress: string,
+  proposalId: bigint,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(
+    governorAddress,
+    TOPICS.voteCastWithReason,
+    callback,
+    opts,
+    (event) => parseVoteCastWithReasonEvent(event)?.proposalId === proposalId
   );
 }
 

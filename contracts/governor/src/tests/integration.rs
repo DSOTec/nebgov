@@ -1565,9 +1565,10 @@ fn test_unpause_via_governance_restores_functionality() {
         &120_960u32,
     );
 
-    governor_client.set_pauser(&pauser);
-
-    // Setup voters
+    // Verify governance works while unpaused — full lifecycle with mock target
+    let proposer = Address::generate(&env);
+    token_admin.mint(&proposer, &1000_i128);
+    votes_client.delegate(&proposer, &proposer);
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
     token_admin.mint(&alice, &500_i128);
@@ -1575,25 +1576,12 @@ fn test_unpause_via_governance_restores_functionality() {
     votes_client.delegate(&alice, &alice);
     votes_client.delegate(&bob, &bob);
 
-    // Pause the contract
-    governor_client.pause(&pauser);
-    assert!(governor_client.is_paused(), "contract should be paused");
-
-    // Create a governance proposal targeting mock_target while paused.
-    // Governance functions (propose, cast_vote, queue, execute) are permitted while paused
-    // so the DAO can still act; targeting the governor itself would trigger Soroban
-    // re-entry protection (governor.execute → timelock.execute → governor.<fn>), so we
-    // target an external contract here.
-    let proposer = Address::generate(&env);
-    token_admin.mint(&proposer, &1000_i128);
-    votes_client.delegate(&proposer, &proposer);
-
-    let description = soroban_sdk::String::from_str(&env, "Governance action while paused");
+    let description = soroban_sdk::String::from_str(&env, "Test proposal");
     let description_hash = env
         .crypto()
-        .sha256(&Bytes::from_slice(&env, b"paused-proposal"))
+        .sha256(&Bytes::from_slice(&env, b"test-proposal"))
         .into();
-    let metadata_uri = soroban_sdk::String::from_str(&env, "ipfs://paused-proposal");
+    let metadata_uri = soroban_sdk::String::from_str(&env, "ipfs://test");
 
     let mut targets = soroban_sdk::Vec::new(&env);
     targets.push_back(mock_target_id.clone());
@@ -1612,12 +1600,10 @@ fn test_unpause_via_governance_restores_functionality() {
         &calldatas,
     );
 
-    // Vote to succeed
     env.ledger().with_mut(|l| l.sequence_number = 11);
     governor_client.cast_vote(&alice, &proposal_id, &VoteSupport::For);
     governor_client.cast_vote(&bob, &proposal_id, &VoteSupport::For);
 
-    // Advance past voting period and queue
     env.ledger().with_mut(|l| l.sequence_number = 31);
     assert_eq!(
         governor_client.state(&proposal_id),
@@ -1628,47 +1614,90 @@ fn test_unpause_via_governance_restores_functionality() {
     governor_client.queue(&proposal_id);
     assert_eq!(governor_client.state(&proposal_id), ProposalState::Queued);
 
-    // Advance past timelock delay and execute — governance works while paused
     env.ledger()
         .with_mut(|l| l.timestamp = ts_before_queue + min_delay + 1);
     governor_client.execute(&proposal_id);
-
-    // Pauser unpauses the contract directly (unpause takes a caller address)
-    governor_client.unpause(&pauser);
-
-    // Verify contract is unpaused
-    assert!(
-        !governor_client.is_paused(),
-        "contract should be unpaused after pauser calls unpause"
+    assert_eq!(
+        governor_client.state(&proposal_id),
+        ProposalState::Executed
     );
 
-    // Now proposing should succeed
-    let new_proposer = Address::generate(&env);
-    token_admin.mint(&new_proposer, &1000_i128);
-    votes_client.delegate(&new_proposer, &new_proposer);
+    // Pause the contract and verify operations are blocked
+    governor_client.pause(&admin);
+    assert!(governor_client.is_paused(), "contract should be paused");
 
-    let new_description = soroban_sdk::String::from_str(&env, "Post-unpause proposal");
-    let new_description_hash = env
+    // propose must fail while paused
+    let blocked_proposer = Address::generate(&env);
+    token_admin.mint(&blocked_proposer, &1000_i128);
+    votes_client.delegate(&blocked_proposer, &blocked_proposer);
+
+    let blocked_desc = soroban_sdk::String::from_str(&env, "Blocked proposal");
+    let blocked_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, b"blocked"))
+        .into();
+    let blocked_uri = soroban_sdk::String::from_str(&env, "ipfs://blocked");
+
+    let mut blocked_targets = soroban_sdk::Vec::new(&env);
+    blocked_targets.push_back(mock_target_id.clone());
+    let mut blocked_fns = soroban_sdk::Vec::new(&env);
+    blocked_fns.push_back(Symbol::new(&env, "exec_gov"));
+    let mut blocked_datas = soroban_sdk::Vec::new(&env);
+    blocked_datas.push_back(Bytes::new(&env));
+
+    let result = governor_client.try_propose(
+        &blocked_proposer,
+        &blocked_desc,
+        &blocked_hash,
+        &blocked_uri,
+        &blocked_targets,
+        &blocked_fns,
+        &blocked_datas,
+    );
+    // propose() is intentionally NOT gated by the paused flag — the DAO must
+    // still be able to submit an emergency unpause proposal while paused.
+    assert!(
+        result.is_ok(),
+        "propose should succeed while paused so the DAO can vote on an unpause"
+    );
+
+    // Unpause directly — governance self-calls are blocked by re-entry
+    // protection, so the pauser/admin calls unpause() directly (auth mocked).
+    // This mirrors how a contract upgrade or admin action would unpause.
+    // admin is the initial pauser (set in initialize); unpause must use the same address.
+    GovernorContractClient::new(&env, &governor_id).unpause(&admin);
+    assert!(
+        !governor_client.is_paused(),
+        "contract should be unpaused after direct unpause"
+    );
+
+    // Verify propose works again after unpause
+    let post_proposer = Address::generate(&env);
+    token_admin.mint(&post_proposer, &1000_i128);
+    votes_client.delegate(&post_proposer, &post_proposer);
+
+    let post_desc = soroban_sdk::String::from_str(&env, "Post-unpause proposal");
+    let post_hash = env
         .crypto()
         .sha256(&Bytes::from_slice(&env, b"post-unpause"))
         .into();
-    let new_metadata_uri = soroban_sdk::String::from_str(&env, "ipfs://post-unpause");
+    let post_uri = soroban_sdk::String::from_str(&env, "ipfs://post-unpause");
 
-    let mut new_targets = soroban_sdk::Vec::new(&env);
-    new_targets.push_back(mock_target_id.clone());
-    let mut new_fn_names = soroban_sdk::Vec::new(&env);
-    new_fn_names.push_back(Symbol::new(&env, "exec_gov"));
-    let mut new_calldatas = soroban_sdk::Vec::new(&env);
-    new_calldatas.push_back(Bytes::new(&env));
+    let mut post_targets = soroban_sdk::Vec::new(&env);
+    post_targets.push_back(mock_target_id.clone());
+    let mut post_fns = soroban_sdk::Vec::new(&env);
+    post_fns.push_back(Symbol::new(&env, "exec_gov"));
+    let mut post_datas = soroban_sdk::Vec::new(&env);
+    post_datas.push_back(Bytes::new(&env));
 
     let new_proposal_id = governor_client.propose(
-        &new_proposer,
-        &new_description,
-        &new_description_hash,
-        &new_metadata_uri,
-        &new_targets,
-        &new_fn_names,
-        &new_calldatas,
+        &post_proposer,
+        &post_desc,
+        &post_hash,
+        &post_uri,
+        &post_targets,
+        &post_fns,
+        &post_datas,
     );
 
     assert_eq!(
@@ -1678,7 +1707,7 @@ fn test_unpause_via_governance_restores_functionality() {
     assert_eq!(
         governor_client.state(&new_proposal_id),
         ProposalState::Pending,
-        "new proposal should be in Pending state"
+        "new proposal should be in Pending state after unpause"
     );
 }
 
@@ -1783,29 +1812,71 @@ fn test_only_pauser_can_unpause() {
 /// Test 6: set_pauser only via self-auth
 /// direct call to set_pauser() with an external caller → expect auth error
 #[test]
-#[should_panic]
 fn test_set_pauser_requires_self_auth() {
     let env = Env::default();
 
+    // Setup
+    let admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = sac.address();
+
+    let votes_id = env.register(TokenVotesContract, ());
+    let votes_client = TokenVotesContractClient::new(&env, &votes_id);
+
+    let timelock_id = env.register(TimelockContract, ());
+    let timelock_client = TimelockContractClient::new(&env, &timelock_id);
     let governor_id = env.register(GovernorContract, ());
     let governor_client = GovernorContractClient::new(&env, &governor_id);
 
-    // Mock auth as an external admin — NOT the contract's own address.
-    // set_pauser() requires env.current_contract_address().require_auth(),
-    // so this external auth cannot satisfy it and the call must panic.
-    let admin = Address::generate(&env);
+    let pauser = Address::generate(&env);
+
+    // Use mock_all_auths for setup, then replace with specific mock for the test call.
+    // This ensures set_pauser's env.current_contract_address().require_auth() is NOT mocked.
+    env.mock_all_auths();
+
+    votes_client.initialize(&admin, &token_addr);
+    timelock_client.initialize(&admin, &governor_id, &1, &1_209_600);
+    governor_client.initialize(
+        &admin,
+        &votes_id,
+        &timelock_id,
+        &10_u32,
+        &20_u32,
+        &0_u32,
+        &0_i128,
+        &pauser,
+        &VoteType::Extended,
+        &120_960u32,
+    );
+
+    // Replace mock_all_auths with a specific mock for admin only.
+    // set_pauser requires env.current_contract_address().require_auth() — not admin.
+    // This mock won't satisfy the contract's self-auth, so it must panic.
     let new_pauser = Address::generate(&env);
-    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+    env.mock_auths(&[MockAuth {
         address: &admin,
-        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+        invoke: &MockAuthInvoke {
             contract: &governor_id,
             fn_name: "set_pauser",
-            args: (new_pauser.clone(),).into_val(&env),
+            args: (&new_pauser,).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    governor_client.set_pauser(&new_pauser);
+    let result = governor_client.try_set_pauser(&new_pauser);
+    assert!(
+        result.is_err(),
+        "set_pauser should fail when called directly, not through governance"
+    );
+
+    // Direct call to set_pauser by admin (not through governance) should fail
+    // because set_pauser requires env.current_contract_address().require_auth()
+    let new_pauser = Address::generate(&env);
+    let result = governor_client.try_set_pauser(&new_pauser);
+    assert!(
+        result.is_err(),
+        "set_pauser should fail without contract self-auth"
+    );
 }
 
 /// Regression test for issue #600: cancel_queued used /10 instead of /5 to

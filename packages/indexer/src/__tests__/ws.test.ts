@@ -108,6 +108,98 @@ describe("WebSocket broadcast server", () => {
     ws.close();
   });
 
+  it("filters by proposal_id using the subscribe protocol", async () => {
+    const ws = await openClient(serverUrl);
+
+    ws.send(JSON.stringify({ subscribe: "proposal", proposal_id: 42 }));
+    await waitMs(50);
+
+    broadcast({ type: "vote_cast", data: { proposal_id: "7", voter: "G1" } });
+
+    let received = false;
+    ws.once("message", () => { received = true; });
+    await waitMs(100);
+    expect(received).toBe(false);
+
+    const messagePromise = nextMessage(ws);
+    broadcast({ type: "vote_cast", data: { proposal_id: "42", voter: "G2" } });
+    const raw = await messagePromise;
+    expect(JSON.parse(raw).data.proposal_id).toBe("42");
+    ws.close();
+  });
+
+  it("filters by state using the subscribe protocol", async () => {
+    const ws = await openClient(serverUrl);
+
+    ws.send(JSON.stringify({ subscribe: "state", state: "Active" }));
+    await waitMs(50);
+
+    // proposal_queued implies the "Queued" state, not "Active"
+    broadcast({ type: "proposal_queued", data: { proposal_id: "3" } });
+
+    let received = false;
+    ws.once("message", () => { received = true; });
+    await waitMs(100);
+    expect(received).toBe(false);
+
+    // vote_cast implies the "Active" state
+    const messagePromise = nextMessage(ws);
+    broadcast({ type: "vote_cast", data: { proposal_id: "3", voter: "G1" } });
+    const raw = await messagePromise;
+    expect(JSON.parse(raw).type).toBe("vote_cast");
+    ws.close();
+  });
+
+  it("excludes events with no derivable state when filtering by state", async () => {
+    const ws = await openClient(serverUrl);
+
+    ws.send(JSON.stringify({ subscribe: "state", state: "Active" }));
+    await waitMs(50);
+
+    broadcast({ type: "delegate_changed", data: { delegator: "G1", old_delegatee: "G2", new_delegatee: "G3" } });
+
+    let received = false;
+    ws.once("message", () => { received = true; });
+    await waitMs(100);
+    expect(received).toBe(false);
+    ws.close();
+  });
+
+  it("combines proposal_id and state filters", async () => {
+    const ws = await openClient(serverUrl);
+
+    ws.send(JSON.stringify({ proposalId: "9" }));
+    ws.send(JSON.stringify({ subscribe: "state", state: "Executed" }));
+    await waitMs(50);
+
+    // Matches proposal_id but not state
+    broadcast({ type: "proposal_queued", data: { proposal_id: "9" } });
+    // Matches state but not proposal_id
+    broadcast({ type: "proposal_executed", data: { proposal_id: "10" } });
+
+    let received = false;
+    ws.once("message", () => { received = true; });
+    await waitMs(100);
+    expect(received).toBe(false);
+
+    const messagePromise = nextMessage(ws);
+    broadcast({ type: "proposal_executed", data: { proposal_id: "9" } });
+    const raw = await messagePromise;
+    expect(JSON.parse(raw).type).toBe("proposal_executed");
+    ws.close();
+  });
+
+  it("broadcasts proposal_cancelled events", async () => {
+    const ws = await openClient(serverUrl);
+    const messagePromise = nextMessage(ws);
+
+    broadcast({ type: "proposal_cancelled", data: { proposal_id: "11", caller: "GABC" } });
+
+    const raw = await messagePromise;
+    expect(JSON.parse(raw).type).toBe("proposal_cancelled");
+    ws.close();
+  });
+
   it("removes client from set on disconnect", async () => {
     const ws = await openClient(serverUrl);
     expect(getConnectedClientCount()).toBe(1);

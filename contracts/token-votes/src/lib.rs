@@ -33,6 +33,7 @@ pub enum DataKey {
     Nonce(Address),            // owner -> nonce for delegate_by_sig
     CheckpointRetentionPeriod, // u32: number of ledgers to retain checkpoints
     AccountList,               // Vec<Address>: all accounts that have checkpoints
+    IsInAccountList(Address),  // bool: marker for O(1) AccountList membership check
     DelegatorRecord(Address),  // delegator -> DelegatorRecord
     TimeWeightEnabled,         // bool
     TimeWeightScale,           // u32
@@ -529,19 +530,25 @@ impl TokenVotesContract {
             .set(&DataKey::Checkpoints(account.clone()), &checkpoints);
 
         // Register account in the global list so prune_checkpoints can find it.
-        // Only add if not already present (linear scan is acceptable since the
-        // list grows slowly and is only read during admin pruning operations).
-        let mut account_list: soroban_sdk::Vec<Address> = env
+        // Uses a persistent marker for O(1) membership check instead of O(N) scan.
+        let already_registered: bool = env
             .storage()
             .persistent()
-            .get(&DataKey::AccountList)
-            .unwrap_or(soroban_sdk::Vec::new(env));
-        let already_registered = account_list.iter().any(|a| a == account);
+            .get(&DataKey::IsInAccountList(account.clone()))
+            .unwrap_or(false);
         if !already_registered {
+            let mut account_list: soroban_sdk::Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AccountList)
+                .unwrap_or(soroban_sdk::Vec::new(env));
             account_list.push_back(account.clone());
             env.storage()
                 .persistent()
                 .set(&DataKey::AccountList, &account_list);
+            env.storage()
+                .persistent()
+                .set(&DataKey::IsInAccountList(account.clone()), &true);
         }
 
         env.events()
@@ -753,29 +760,35 @@ impl TokenVotesContract {
             return 0;
         }
 
-        let mut new_checkpoints = soroban_sdk::Vec::new(env);
-
-        // Find the first checkpoint to keep (newer than cutoff_ledger)
-        let mut start_idx = checkpoints.len();
-        for i in 0..checkpoints.len() {
-            let checkpoint = checkpoints.get(i).unwrap();
-            if checkpoint.ledger > cutoff_ledger {
-                start_idx = i;
-                break;
+        // Binary search for the first checkpoint with ledger > cutoff_ledger
+        let len = checkpoints.len();
+        let mut low: u32 = 0;
+        let mut high: u32 = len;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let cp = checkpoints.get(mid).unwrap();
+            if cp.ledger <= cutoff_ledger {
+                low = mid + 1;
+            } else {
+                high = mid;
             }
         }
+        let mut start_idx = low;
 
         // Always keep at least the most recent checkpoint
-        if start_idx == checkpoints.len() {
-            start_idx = checkpoints.len() - 1;
+        if start_idx == len {
+            start_idx = len - 1;
         }
 
-        // Copy checkpoints from start_idx to end
-        for i in start_idx..checkpoints.len() {
+        let pruned_count = start_idx.min(len - 1);
+        if pruned_count == 0 {
+            return 0;
+        }
+
+        let mut new_checkpoints = soroban_sdk::Vec::new(env);
+        for i in start_idx..len {
             new_checkpoints.push_back(checkpoints.get(i).unwrap());
         }
-
-        let pruned_count = start_idx.min(checkpoints.len() - 1);
 
         env.storage()
             .persistent()
@@ -812,34 +825,35 @@ impl TokenVotesContract {
                 continue;
             }
 
-            // Find the index of the first checkpoint strictly newer than cutoff.
-            // We keep the checkpoint just before that index so historical queries
-            // at or before cutoff_ledger still return the correct value.
-            let mut keep_from: u32 = 0;
-            for i in 0..checkpoints.len() {
-                let cp = checkpoints.get(i).unwrap();
+            // Binary search for the last checkpoint with ledger <= cutoff_ledger
+            let len = checkpoints.len();
+            let mut low: u32 = 0;
+            let mut high: u32 = len;
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let cp = checkpoints.get(mid).unwrap();
                 if cp.ledger <= cutoff_ledger {
-                    // This checkpoint is a candidate for pruning; the one after
-                    // it (if any) is newer. We track the last one at/before cutoff
-                    // so we can keep it as the "anchor" for historical queries.
-                    keep_from = i;
+                    low = mid + 1;
                 } else {
-                    break;
+                    high = mid;
                 }
             }
+            // low is the index of the first checkpoint > cutoff_ledger
+            // keep_from is the last checkpoint <= cutoff_ledger, or 0 if none
+            let keep_from = if low > 0 { low - 1 } else { 0 };
 
-            // keep_from is the index of the last checkpoint at/before cutoff.
-            // We prune everything before keep_from (exclusive), retaining keep_from
-            // as the historical anchor plus all newer checkpoints.
             if keep_from == 0 {
-                // Either all checkpoints are newer than cutoff, or there is only
-                // one checkpoint at/before cutoff \u2014 nothing to prune.
                 continue;
             }
 
-            let pruned_count = keep_from; // indices 0..keep_from are removed
+            let new_checkpoints_len = len - keep_from;
+            if new_checkpoints_len >= len {
+                continue;
+            }
+
+            let pruned_count = keep_from;
             let mut new_checkpoints = soroban_sdk::Vec::new(env);
-            for i in keep_from..checkpoints.len() {
+            for i in keep_from..len {
                 new_checkpoints.push_back(checkpoints.get(i).unwrap());
             }
 

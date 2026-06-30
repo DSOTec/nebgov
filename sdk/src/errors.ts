@@ -47,6 +47,7 @@ export enum GovernorErrorCode {
   PauserNotSet = 26,
   ArithmeticOverflow = 27,
   ProposalNotActive = 28,
+  InvalidVoteChoice = 43,
 
   // SDK-level codes
   RpcNotFound = 100,
@@ -101,6 +102,8 @@ const GOVERNOR_MESSAGES: Record<GovernorErrorCode, string> = {
     "Arithmetic overflow while computing governance state",
   [GovernorErrorCode.ProposalNotActive]:
     "Voting has ended for this proposal",
+  [GovernorErrorCode.InvalidVoteChoice]:
+    "Invalid vote choice: must be 0 (Against), 1 (For), or 2 (Abstain)",
 
   // SDK-level codes
   [GovernorErrorCode.RpcNotFound]: "Proposal not found",

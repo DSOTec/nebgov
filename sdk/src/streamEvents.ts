@@ -3,6 +3,7 @@ export type WsEventType =
   | "vote_cast"
   | "proposal_queued"
   | "proposal_executed"
+  | "proposal_cancelled"
   | "delegate_changed"
   | "config_updated"
   | "governor_upgraded"
@@ -19,6 +20,8 @@ export interface StreamEventsOptions {
   types?: WsEventType[];
   /** Filter to a specific proposal ID. */
   proposalId?: string;
+  /** Filter to events implying a specific proposal lifecycle state (e.g. "Active", "Queued"). */
+  state?: string;
   /** Reconnect delay in ms (default 3000). */
   reconnectDelayMs?: number;
   /** Polling interval in ms used as fallback when WebSocket is unavailable (default 10000). */
@@ -26,6 +29,19 @@ export interface StreamEventsOptions {
   /** Custom fetch function for polling fallback (default: global fetch). */
   fetchFn?: typeof fetch;
 }
+
+/**
+ * Proposal lifecycle state implied by each event type. Mirrors the indexer's
+ * mapping in packages/indexer/src/ws.ts — kept in sync there, not imported,
+ * since the SDK has no runtime dependency on the indexer package.
+ */
+const EVENT_STATE_HINT: Partial<Record<WsEventType, string>> = {
+  proposal_created: "Pending",
+  vote_cast: "Active",
+  proposal_queued: "Queued",
+  proposal_executed: "Executed",
+  proposal_cancelled: "Cancelled",
+};
 
 export type UnsubscribeFn = () => void;
 
@@ -50,6 +66,7 @@ export function streamEvents(
   const {
     types,
     proposalId,
+    state,
     reconnectDelayMs = 3000,
     pollIntervalMs = 10_000,
     fetchFn = typeof fetch !== "undefined" ? fetch : undefined,
@@ -105,6 +122,7 @@ export function streamEvents(
       const pid = (event.data as any).proposal_id ?? (event.data as any).id;
       if (String(pid) !== proposalId) return false;
     }
+    if (state !== undefined && EVENT_STATE_HINT[event.type] !== state) return false;
     return true;
   }
 
@@ -130,6 +148,9 @@ export function streamEvents(
       usingPolling = false;
       if (types || proposalId) {
         ws!.send(JSON.stringify({ types, proposalId }));
+      }
+      if (state !== undefined) {
+        ws!.send(JSON.stringify({ subscribe: "state", state }));
       }
     };
 

@@ -22,6 +22,68 @@ use soroban_sdk::{
 /// corresponding migration step.
 const CURRENT_STORAGE_VERSION: u32 = 1;
 
+/// Governor error codes.
+#[contracterror]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum GovernorError {
+    UnauthorizedCancel = 1,
+    InvalidSupport = 2,
+    ProposalExpired = 3,
+    CalldataTooLarge = 4,
+    InvalidCalldata = 5,
+    ProposalRateLimited = 6,
+    ContractPaused = 7,
+    UnauthorizedPause = 8,
+    InvalidVectorLengths = 9,
+    NoTargets = 10,
+    ProposalThresholdNotMet = 11,
+    AlreadyVoted = 12,
+    ZeroVotingPower = 13,
+    ProposalNotSucceeded = 14,
+    ProposalNotQueued = 15,
+    ProposalAlreadyExecuted = 16,
+    MissingOpIds = 17,
+    UnauthorizedGuardian = 18,
+    VetoWindowClosed = 19,
+    ProposalNotFound = 20,
+    TimelockNotSet = 21,
+    GuardianNotSet = 22,
+    TooManyTokens = 23,
+    EmptyMetadataUri = 24,
+    VotesTokenNotSet = 25,
+    PauserNotSet = 26,
+    ArithmeticOverflow = 27,
+    VotePeriodTooShort = 28,
+    ExecutionWindowZero = 29,
+    TooManyCalldataEntries = 30,
+    /// Vote was cast outside the proposal's Active voting window.
+    ProposalNotActive = 31,
+    /// The contract has already been initialized.
+    AlreadyInitialized = 32,
+    /// voting_delay exceeds the protocol maximum (1_209_600 ledgers).
+    InvalidVotingDelay = 33,
+    /// voting_period must be greater than zero.
+    InvalidVotingPeriod = 34,
+    /// quorum_numerator must be at most 100.
+    InvalidQuorumNumerator = 35,
+    /// proposal_threshold must be non-negative.
+    InvalidProposalThreshold = 36,
+    /// max_calldata_size must be greater than zero.
+    InvalidMaxCalldataSize = 37,
+    /// max_proposals_per_period must be greater than zero.
+    InvalidMaxProposalsPerPeriod = 38,
+    /// proposal_period_duration must be greater than zero.
+    InvalidProposalPeriodDuration = 39,
+    /// The proposal batch was empty.
+    EmptyBatch = 40,
+    /// A proposal in the batch was not in the Queued state.
+    BatchProposalNotQueued = 41,
+    /// The proposal has already been cancelled.
+    ProposalAlreadyCancelled = 42,
+    /// Invalid vote choice: must be 0 (Against), 1 (For), or 2 (Abstain).
+    InvalidVoteChoice = 43,
+}
+
 /// Cross-contract interface for the Timelock contract.
 ///
 /// The governor uses this to schedule proposals after they succeed and to
@@ -590,6 +652,50 @@ impl GovernorContract {
         }
     }
 
+    /// Override security settings after initialization (admin-only, before any proposals).
+    ///
+    /// The governor's `initialize()` hardcodes three security values:
+    /// `MaxCalldataSize = 10000`, `ProposalCooldown = 100`, and
+    /// `MaxProposalsPerPeriod = 5`.  This function lets the admin change
+    /// those values before the first proposal is created.
+    ///
+    /// After the first proposal is submitted, this function can no longer
+    /// be called and operators must use the governance `update_config` path instead.
+    pub fn set_initial_config(
+        env: Env,
+        admin: Address,
+        max_calldata_size: u32,
+        proposal_cooldown: u32,
+        max_proposals_per_period: u32,
+    ) {
+        admin.require_auth();
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::UnauthorizedPause));
+        if admin != stored_admin {
+            env.panic_with_error(GovernorError::UnauthorizedPause);
+        }
+        let count: u64 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalCount)
+            .unwrap_or(0);
+        if count > 0 {
+            env.panic_with_error(GovernorError::ProposalRateLimited);
+        }
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxCalldataSize, &max_calldata_size);
+        env.storage()
+            .instance()
+            .set(&DataKey::ProposalCooldown, &proposal_cooldown);
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxProposalsPerPeriod, &max_proposals_per_period);
+    }
+
     /// Create a new governance proposal.
     ///
     /// `targets` and `calldatas` specify the on-chain actions to execute if
@@ -1010,6 +1116,31 @@ impl GovernorContract {
 
         // Emit VoteCastWithReason event
         events::emit_vote_cast_with_reason(&env, &voter, proposal_id, &support, weight, reason);
+    }
+
+    /// Cast a vote using a raw u32 vote choice.
+    ///
+    /// This is a convenience function that accepts vote_choice as a raw u32
+    /// (0 = Against, 1 = For, 2 = Abstain) and validates it before delegating
+    /// to cast_vote(). Invalid vote choices (> 2) are rejected with InvalidVoteChoice.
+    pub fn vote(env: Env, voter: Address, proposal_id: u64, vote_choice: u32) {
+        voter.require_auth();
+
+        // Validate vote_choice is within valid range (0-2)
+        if vote_choice > 2 {
+            env.panic_with_error(GovernorError::InvalidVoteChoice);
+        }
+
+        // Convert u32 to VoteSupport enum
+        let support = match vote_choice {
+            0 => VoteSupport::Against,
+            1 => VoteSupport::For,
+            2 => VoteSupport::Abstain,
+            _ => unreachable!(), // Already validated above
+        };
+
+        // Delegate to cast_vote with the validated VoteSupport
+        Self::cast_vote(env, voter, proposal_id, support);
     }
 
     /// Queue a succeeded proposal for execution via the timelock.
@@ -3891,6 +4022,18 @@ mod test {
         assert_eq!(GovernorError::ExecutionWindowZero as u32, 29);
         assert_eq!(GovernorError::TooManyCalldataEntries as u32, 30);
         assert_eq!(GovernorError::ProposalNotActive as u32, 31);
+        assert_eq!(GovernorError::AlreadyInitialized as u32, 32);
+        assert_eq!(GovernorError::InvalidVotingDelay as u32, 33);
+        assert_eq!(GovernorError::InvalidVotingPeriod as u32, 34);
+        assert_eq!(GovernorError::InvalidQuorumNumerator as u32, 35);
+        assert_eq!(GovernorError::InvalidProposalThreshold as u32, 36);
+        assert_eq!(GovernorError::InvalidMaxCalldataSize as u32, 37);
+        assert_eq!(GovernorError::InvalidMaxProposalsPerPeriod as u32, 38);
+        assert_eq!(GovernorError::InvalidProposalPeriodDuration as u32, 39);
+        assert_eq!(GovernorError::EmptyBatch as u32, 40);
+        assert_eq!(GovernorError::BatchProposalNotQueued as u32, 41);
+        assert_eq!(GovernorError::ProposalAlreadyCancelled as u32, 42);
+        assert_eq!(GovernorError::InvalidVoteChoice as u32, 43);
     }
 
     /// Verify that propose() deletes the previous period's ProposalsInPeriod
@@ -4032,6 +4175,188 @@ mod test {
 
         let data = MigrateData { new_version: 0 };
         client.migrate(&data);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #43)")]
+    fn test_vote_rejects_invalid_choice_3() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = env.register(MockTimelockContract, ());
+        let voter = Address::generate(&env);
+        let guardian = Address::generate(&env);
+
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &0,
+            &1000,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
+
+        let proposal_id = propose_dummy(&env, &client, &admin);
+        env.ledger().with_mut(|li| li.sequence_number += 1);
+
+        // Should panic with InvalidVoteChoice for vote_choice = 3
+        client.vote(&voter, &proposal_id, &3u32);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #43)")]
+    fn test_vote_rejects_invalid_choice_255() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = env.register(MockTimelockContract, ());
+        let voter = Address::generate(&env);
+        let guardian = Address::generate(&env);
+
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &0,
+            &1000,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
+
+        let proposal_id = propose_dummy(&env, &client, &admin);
+        env.ledger().with_mut(|li| li.sequence_number += 1);
+
+        // Should panic with InvalidVoteChoice for vote_choice = 255
+        client.vote(&voter, &proposal_id, &255u32);
+    }
+
+    #[test]
+    fn test_vote_accepts_valid_choice_0_against() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = env.register(MockTimelockContract, ());
+        let voter = Address::generate(&env);
+        let guardian = Address::generate(&env);
+
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &0,
+            &1000,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
+
+        let proposal_id = propose_dummy(&env, &client, &admin);
+        env.ledger().with_mut(|li| li.sequence_number += 1);
+
+        // Should accept vote_choice = 0 (Against)
+        client.vote(&voter, &proposal_id, &0u32);
+
+        let (votes_for, votes_against, votes_abstain) = client.proposal_votes(&proposal_id);
+        assert_eq!(votes_for, 0);
+        assert_eq!(votes_against, 1_000_000);
+        assert_eq!(votes_abstain, 0);
+    }
+
+    #[test]
+    fn test_vote_accepts_valid_choice_1_for() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = env.register(MockTimelockContract, ());
+        let voter = Address::generate(&env);
+        let guardian = Address::generate(&env);
+
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &0,
+            &1000,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
+
+        let proposal_id = propose_dummy(&env, &client, &admin);
+        env.ledger().with_mut(|li| li.sequence_number += 1);
+
+        // Should accept vote_choice = 1 (For)
+        client.vote(&voter, &proposal_id, &1u32);
+
+        let (votes_for, votes_against, votes_abstain) = client.proposal_votes(&proposal_id);
+        assert_eq!(votes_for, 1_000_000);
+        assert_eq!(votes_against, 0);
+        assert_eq!(votes_abstain, 0);
+    }
+
+    #[test]
+    fn test_vote_accepts_valid_choice_2_abstain() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(GovernorContract, ());
+        let client = GovernorContractClient::new(&env, &contract_id);
+
+        let admin = Address::generate(&env);
+        let votes_token_id = env.register(MockVotesContract, ());
+        let timelock = env.register(MockTimelockContract, ());
+        let voter = Address::generate(&env);
+        let guardian = Address::generate(&env);
+
+        client.initialize(
+            &admin,
+            &votes_token_id,
+            &timelock,
+            &0,
+            &1000,
+            &0,
+            &0,
+            &guardian,
+            &VoteType::Extended,
+            &120_960,
+        );
+
+        let proposal_id = propose_dummy(&env, &client, &admin);
+        env.ledger().with_mut(|li| li.sequence_number += 1);
+
+        // Should accept vote_choice = 2 (Abstain)
+        client.vote(&voter, &proposal_id, &2u32);
+
+        let (votes_for, votes_against, votes_abstain) = client.proposal_votes(&proposal_id);
+        assert_eq!(votes_for, 0);
+        assert_eq!(votes_against, 0);
+        assert_eq!(votes_abstain, 1_000_000);
     }
 }
 

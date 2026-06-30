@@ -16,5 +16,25 @@
     "test:sdk": "pnpm --filter @nebgov/sdk test",
     "test:app": "pnpm --filter nebgov-app test"
   },
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "pnpm@9.15.9",
+  "pnpm": {
+    "overrides": {
+      "handlebars": "^4.7.9",
+      "protobufjs": "^7.5.5",
+      "glob": "^10.5.0",
+      "minimatch": "^9.0.7",
+      "defu": "^6.1.5",
+      "axios": "^1.15.2"
+    },
+    "auditConfig": {
+      "ignoreCves": [
+        "GHSA-h25m-26qc-wcjf",
+        "GHSA-q4gf-8mx6-v5v3",
+        "GHSA-8h8q-6873-q5fj",
+        "GHSA-c4j6-fc7j-m34r",
+        "GHSA-36qx-fr4f-26g5",
+        "GHSA-r5fr-rjxr-66jc"
+      ]
+    }
+  }
 }

@@ -6,6 +6,7 @@ export type WsEventType =
   | "vote_cast"
   | "proposal_queued"
   | "proposal_executed"
+  | "proposal_cancelled"
   | "delegate_changed"
   | "config_updated"
   | "governor_upgraded"
@@ -20,6 +21,7 @@ export interface WsEvent {
 interface SubscriptionFilter {
   types?: WsEventType[];
   proposalId?: string;
+  state?: string;
 }
 
 interface SubscribedClient {
@@ -33,6 +35,19 @@ const MAX_MISSED_PINGS = 3;
 
 const clients = new Set<SubscribedClient>();
 
+/**
+ * Proposal lifecycle state implied by each event type. Succeeded/Defeated/Expired
+ * are derived purely from ledger time rather than an on-chain event, so they have
+ * no entry here and can't be matched by a `state` filter.
+ */
+const EVENT_STATE: Partial<Record<WsEventType, string>> = {
+  proposal_created: "Pending",
+  vote_cast: "Active",
+  proposal_queued: "Queued",
+  proposal_executed: "Executed",
+  proposal_cancelled: "Cancelled",
+};
+
 function matchesFilter(event: WsEvent, filter: SubscriptionFilter): boolean {
   if (filter.types && filter.types.length > 0) {
     if (!filter.types.includes(event.type)) return false;
@@ -40,6 +55,9 @@ function matchesFilter(event: WsEvent, filter: SubscriptionFilter): boolean {
   if (filter.proposalId !== undefined) {
     const pid = (event.data as any).proposal_id ?? (event.data as any).id;
     if (String(pid) !== filter.proposalId) return false;
+  }
+  if (filter.state !== undefined) {
+    if (EVENT_STATE[event.type] !== filter.state) return false;
   }
   return true;
 }
@@ -68,10 +86,20 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
         const msg = JSON.parse(raw.toString()) as {
           types?: WsEventType[];
           proposalId?: string;
+          subscribe?: "proposal" | "state";
+          proposal_id?: string | number;
+          state?: string;
         };
         if (Array.isArray(msg.types)) entry.filter.types = msg.types;
         if (typeof msg.proposalId === "string")
           entry.filter.proposalId = msg.proposalId;
+
+        // { subscribe: "proposal", proposal_id: 42 } / { subscribe: "state", state: "Active" }
+        if (msg.subscribe === "proposal" && msg.proposal_id !== undefined) {
+          entry.filter.proposalId = String(msg.proposal_id);
+        } else if (msg.subscribe === "state" && typeof msg.state === "string") {
+          entry.filter.state = msg.state;
+        }
       } catch {
         /* ignore malformed filter messages */
       }
