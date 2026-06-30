@@ -1,20 +1,17 @@
 #![no_std]
-
-// the new module
-pub mod error;
 #![allow(clippy::too_many_arguments)]
 // Prevent future introduction of dead match patterns in this security-critical
 // state machine (issue #439).
 #![deny(unreachable_patterns)]
 
+pub mod error;
 mod events;
 
-// Import the error type into the current scope
 use crate::error::GovernorError;
 use soroban_sdk::xdr::FromXdr;
 use soroban_sdk::{
     auth::{ContractContext, InvokerContractAuthEntry, SubContractInvocation},
-    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, token,
+    contract, contractclient, contractimpl, contracttype, symbol_short, token,
     Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Val, Vec,
 };
 
@@ -24,66 +21,6 @@ use soroban_sdk::{
 /// storage layout so that [`GovernorContract::migrate`] can apply the
 /// corresponding migration step.
 const CURRENT_STORAGE_VERSION: u32 = 1;
-
-/// Governor error codes.
-#[contracterror]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum GovernorError {
-    UnauthorizedCancel = 1,
-    InvalidSupport = 2,
-    ProposalExpired = 3,
-    CalldataTooLarge = 4,
-    InvalidCalldata = 5,
-    ProposalRateLimited = 6,
-    ContractPaused = 7,
-    UnauthorizedPause = 8,
-    InvalidVectorLengths = 9,
-    NoTargets = 10,
-    ProposalThresholdNotMet = 11,
-    AlreadyVoted = 12,
-    ZeroVotingPower = 13,
-    ProposalNotSucceeded = 14,
-    ProposalNotQueued = 15,
-    ProposalAlreadyExecuted = 16,
-    MissingOpIds = 17,
-    UnauthorizedGuardian = 18,
-    VetoWindowClosed = 19,
-    ProposalNotFound = 20,
-    TimelockNotSet = 21,
-    GuardianNotSet = 22,
-    TooManyTokens = 23,
-    EmptyMetadataUri = 24,
-    VotesTokenNotSet = 25,
-    PauserNotSet = 26,
-    ArithmeticOverflow = 27,
-    VotePeriodTooShort = 28,
-    ExecutionWindowZero = 29,
-    TooManyCalldataEntries = 30,
-    /// Vote was cast outside the proposal's Active voting window.
-    ProposalNotActive = 31,
-    /// The contract has already been initialized.
-    AlreadyInitialized = 32,
-    /// voting_delay exceeds the protocol maximum (1_209_600 ledgers).
-    InvalidVotingDelay = 33,
-    /// voting_period must be greater than zero.
-    InvalidVotingPeriod = 34,
-    /// quorum_numerator must be at most 100.
-    InvalidQuorumNumerator = 35,
-    /// proposal_threshold must be non-negative.
-    InvalidProposalThreshold = 36,
-    /// max_calldata_size must be greater than zero.
-    InvalidMaxCalldataSize = 37,
-    /// max_proposals_per_period must be greater than zero.
-    InvalidMaxProposalsPerPeriod = 38,
-    /// proposal_period_duration must be greater than zero.
-    InvalidProposalPeriodDuration = 39,
-    /// The proposal batch was empty.
-    EmptyBatch = 40,
-    /// A proposal in the batch was not in the Queued state.
-    BatchProposalNotQueued = 41,
-    /// The proposal has already been cancelled.
-    ProposalAlreadyCancelled = 42,
-}
 
 /// Cross-contract interface for the Timelock contract.
 ///
@@ -2380,9 +2317,8 @@ impl GovernorContract {
 
     /// Dispatch a single migration step by version number.
     fn apply_migration_step(env: &Env, version: u32) {
-        match version {
-            1 => Self::apply_migration_v1(env),
-            _ => {}
+        if version == 1 {
+            Self::apply_migration_v1(env);
         }
     }
 

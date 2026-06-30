@@ -128,10 +128,11 @@ fn upgrade_rejects_admin_acting_as_direct_caller() {
     let votes_token = Address::generate(&env);
     let timelock = env.register(MockTimelockContract, ());
     let contract_id = env.register(GovernorContract, ());
+    let client = GovernorContractClient::new(&env, &contract_id);
+    let guardian = Address::generate(&env);
 
     env.mock_all_auths();
-    let guardian = Address::generate(&env);
-    GovernorContractClient::new(&env, &contract_id).initialize(
+    client.initialize(
         &admin,
         &votes_token,
         &timelock,
@@ -143,6 +144,21 @@ fn upgrade_rejects_admin_acting_as_direct_caller() {
         &VoteType::Extended,
         &120_960u32,
     );
+
+    // Switch from mock_all_auths to admin-only auth. upgrade() calls
+    // env.current_contract_address().require_auth(), which needs the contract's
+    // own address to be authorised — admin's auth cannot satisfy that, so this panics.
+    let new_wasm_hash = BytesN::from_array(&env, &[9u8; 32]);
+    env.mock_auths(&[MockAuth {
+        address: &admin,
+        invoke: &MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "upgrade",
+            args: (new_wasm_hash.clone(),).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.upgrade(&new_wasm_hash);
 }
 
 #[test]
@@ -373,7 +389,7 @@ fn update_governor_limit_settings_succeed_with_contract_self_auth() {
 }
 
 #[test]
-#[should_panic(expected = "voting delay exceeds maximum")]
+#[should_panic(expected = "Error(Contract, #33)")]
 fn update_config_rejects_excessive_voting_delay() {
     let env = Env::default();
     env.mock_all_auths();
@@ -404,7 +420,7 @@ fn update_config_rejects_excessive_voting_delay() {
 }
 
 #[test]
-#[should_panic(expected = "voting period must be positive")]
+#[should_panic(expected = "Error(Contract, #34)")]
 fn update_config_rejects_short_voting_period() {
     let env = Env::default();
     env.mock_all_auths();
@@ -435,7 +451,7 @@ fn update_config_rejects_short_voting_period() {
 }
 
 #[test]
-#[should_panic(expected = "quorum numerator must be at most 100")]
+#[should_panic(expected = "Error(Contract, #35)")]
 fn update_config_rejects_invalid_quorum_numerator() {
     let env = Env::default();
     env.mock_all_auths();
@@ -466,7 +482,7 @@ fn update_config_rejects_invalid_quorum_numerator() {
 }
 
 #[test]
-#[should_panic(expected = "proposal threshold must be non-negative")]
+#[should_panic(expected = "Error(Contract, #36)")]
 fn update_config_rejects_negative_proposal_threshold() {
     let env = Env::default();
     env.mock_all_auths();
