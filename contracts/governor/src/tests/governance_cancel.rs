@@ -103,7 +103,7 @@ fn setup_queued_proposal() -> (
 /// cancel_by_governance on a Queued proposal must cancel every op_id stored
 /// on the proposal via the timelock.
 fn test_cancel_by_governance_on_queued_proposal_cancels_timelock_ops() {
-    let (env, governor_client, timelock_client, proposal_id) = setup_queued_proposal();
+    let (_env, governor_client, timelock_client, proposal_id) = setup_queued_proposal();
 
     let op_ids = governor_client.get_queued_op_ids(&proposal_id);
     assert!(!op_ids.is_empty(), "expected at least one queued op_id");

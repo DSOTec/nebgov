@@ -2,7 +2,7 @@ use super::{LiquidityContract, LiquidityContractClient, LiquidityError};
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{Address as _, Ledger as _},
     Address, Bytes, Env, IntoVal, String, Symbol, Val, Vec,
 };
 use sorogov_governor::{GovernorContract, GovernorContractClient, VoteSupport, VoteType};

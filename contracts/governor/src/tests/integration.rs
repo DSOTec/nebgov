@@ -23,7 +23,7 @@ use crate::{
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     testutils::{Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke},
-    token, Address, Bytes, Env, IntoVal, String, Symbol, TryIntoVal,
+    token, Address, Bytes, Env, IntoVal, Symbol, TryIntoVal,
 };
 
 // ---------------------------------------------------------------------------

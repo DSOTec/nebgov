@@ -229,13 +229,13 @@ impl LiquidityContract {
         let stored_tokens: Option<(Address, Address)> = env.storage().persistent().get(&tokens_key);
         let (token_lo, token_hi) = match stored_tokens {
             Some(t) => t,
-            None => { env.panic_with_error(LiquidityError::PoolNotFound); unreachable!() }
+            None => env.panic_with_error(LiquidityError::PoolNotFound),
         };
 
         let pool_key = Self::pool_key(lo, hi);
         let mut pool: Pool = match env.storage().persistent().get(&pool_key) {
             Some(p) => p,
-            None => { env.panic_with_error(LiquidityError::PoolNotFound); unreachable!() }
+            None => env.panic_with_error(LiquidityError::PoolNotFound),
         };
         let position_key = Self::position_key(provider.clone(), lo, hi);
         let mut position: LPPosition = env
