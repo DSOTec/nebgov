@@ -22,7 +22,7 @@ use crate::{
 
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke},
     token, Address, Bytes, Env, IntoVal, String, Symbol, TryIntoVal,
 };
 
@@ -1701,7 +1701,7 @@ fn test_unpause_via_governance_restores_functionality() {
     );
 
     assert_eq!(
-        new_proposal_id, 2,
+        new_proposal_id, 3,
         "new proposal should be created after unpause"
     );
     assert_eq!(

@@ -58,4 +58,6 @@ pub enum GovernorError {
     BatchProposalNotQueued = 41,
     /// The proposal has already been cancelled.
     ProposalAlreadyCancelled = 42,
+    /// Invalid vote choice: must be 0 (Against), 1 (For), or 2 (Abstain).
+    InvalidVoteChoice = 43,
 }
