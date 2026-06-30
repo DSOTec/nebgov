@@ -26,6 +26,7 @@ export type TreasuryTx = {
   id: bigint;
   proposer: string;
   target: string;
+  fnName: string;
   approvals: number;
   executed: boolean;
   cancelled: boolean;
@@ -135,6 +136,7 @@ export class TreasuryClient {
       id: bigint;
       proposer: string;
       target: string;
+      fn_name: string;
       data: Uint8Array;
       approvals: number;
       executed: boolean;
@@ -145,6 +147,7 @@ export class TreasuryClient {
       id: BigInt(tx.id),
       proposer: tx.proposer,
       target: tx.target,
+      fnName: String(tx.fn_name ?? ""),
       approvals: Number(tx.approvals),
       executed: !!tx.executed,
       cancelled: !!tx.cancelled,
@@ -234,6 +237,7 @@ export class TreasuryClient {
   async submit(
     signerPublicKey: string,
     target: string,
+    fnName: string,
     data: Uint8Array,
     signUnsignedXdr: (xdr: string) => Promise<string>
   ): Promise<bigint> {
@@ -247,6 +251,7 @@ export class TreasuryClient {
           "submit",
           nativeToScVal(signerPublicKey, { type: "address" }),
           nativeToScVal(target, { type: "address" }),
+          nativeToScVal(fnName, { type: "symbol" }),
           nativeToScVal(data, { type: "bytes" })
         )
       )

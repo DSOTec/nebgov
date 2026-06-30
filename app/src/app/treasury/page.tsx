@@ -305,15 +305,19 @@ export default function TreasuryPage() {
     setSubmitting(true);
     setError(null);
     try {
+      let fnName: string;
       let data: Uint8Array;
       if (calldataMode === "raw") {
+        fnName = "";
         data = hexToBytes(submitDataHex);
       } else {
+        fnName = submitFn.trim();
         data = encodeCallableCalldata(submitFn, argRows);
       }
       const newId = await treasuryClient.submit(
         publicKey,
         submitTarget.trim(),
+        fnName,
         data,
         signTransaction,
       );
@@ -696,7 +700,7 @@ export default function TreasuryPage() {
             >
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-gray-900 leading-snug">
-                  {labelPendingTx(tx.target, tx.dataHex)}
+                  {labelPendingTx(tx.target, tx.dataHex, tx.fnName)}
                 </p>
                 <p className="text-xs text-gray-400 font-mono mt-1">
                   #{tx.id.toString()}

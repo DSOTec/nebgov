@@ -317,7 +317,11 @@ impl TokenVotesWrapperContract {
         assert_eq!(caller, admin, "only admin can lock withdrawals");
         env.storage()
             .persistent()
-            .set(&DataKey::LockedUntil(from), &end_ledger);
+            .set(&DataKey::LockedUntil(from.clone()), &end_ledger);
+        env.events().publish(
+            (symbol_short!("lock_wd"),),
+            (from, end_ledger, env.ledger().sequence()),
+        );
     }
 
     // --- VotesTrait compatible methods (for GovernorClient cross-contract calls) ---
