@@ -79,8 +79,18 @@ pub enum LiquidityError {
     InsufficientReserves = 6,
     /// Input and output outcomes must be different.
     SameOutcome = 7,
+    /// Withdrawn liquidity is below the minimum required.
+    BelowMinLiquidity = 8,
+    /// The contract has already been initialized.
+    AlreadyInitialized = 9,
+    /// Swap fee exceeds the allowed maximum.
+    FeeTooHigh = 10,
     /// LP tokens minted are below the caller's minimum.
-    SlippageExceeded = 8,
+    SlippageExceeded = 11,
+    /// Caller is not the governor.
+    NotGovernor = 12,
+    /// Deposit amount is below the minimum required.
+    DepositTooSmall = 13,
 }
 
 #[contract]
@@ -211,20 +221,22 @@ impl LiquidityContract {
         };
 
         if lo_amount < MIN_LIQUIDITY {
-            panic!("below minimum liquidity");
+            env.panic_with_error(LiquidityError::BelowMinLiquidity);
         }
 
         // Checks & Reads
         let tokens_key = DataKey::PoolTokens(lo, hi);
         let stored_tokens: Option<(Address, Address)> = env.storage().persistent().get(&tokens_key);
-        let (token_lo, token_hi) = stored_tokens.expect("pool not registered");
+        let (token_lo, token_hi) = match stored_tokens {
+            Some(t) => t,
+            None => { env.panic_with_error(LiquidityError::PoolNotFound); unreachable!() }
+        };
 
         let pool_key = Self::pool_key(lo, hi);
-        let mut pool: Pool = env
-            .storage()
-            .persistent()
-            .get(&pool_key)
-            .expect("pool not initialized");
+        let mut pool: Pool = match env.storage().persistent().get(&pool_key) {
+            Some(p) => p,
+            None => { env.panic_with_error(LiquidityError::PoolNotFound); unreachable!() }
+        };
         let position_key = Self::position_key(provider.clone(), lo, hi);
         let mut position: LPPosition = env
             .storage()
@@ -241,16 +253,16 @@ impl LiquidityContract {
         // preventing value extraction through inflated reserve_b contributions.
         let (lp_tokens, deposit_hi) = if pool.total_lp_supply == 0 {
             if hi_amount < MIN_LIQUIDITY {
-                panic!("below minimum liquidity");
+                env.panic_with_error(LiquidityError::BelowMinLiquidity);
             }
             (lo_amount, hi_amount)
         } else {
             let required_hi = Self::checked_mul(&env, lo_amount, pool.reserve_b) / pool.reserve_a;
             if required_hi < MIN_LIQUIDITY {
-                panic!("below minimum liquidity");
+                env.panic_with_error(LiquidityError::BelowMinLiquidity);
             }
             if hi_amount < required_hi {
-                panic!("imbalanced deposit: amount_b below required ratio");
+                env.panic_with_error(LiquidityError::ImbalancedDeposit);
             }
             let lp = Self::checked_mul(&env, lo_amount, pool.total_lp_supply) / pool.reserve_a;
             if lp == 0 {
