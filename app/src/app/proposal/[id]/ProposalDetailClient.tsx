@@ -38,6 +38,8 @@ import {
 } from "recharts";
 
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import ReactMarkdown from "react-markdown";
+import rehypeSanitize from "rehype-sanitize";
 import { ErrorState } from "../../../components/ErrorState";
 import { useTheme } from "../../../hooks/useTheme";
 import {
@@ -516,7 +518,9 @@ export default function ProposalDetailClient({ params }: Props) {
       </div>
 
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-        {proposal.description}
+        <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+          {proposal.description}
+        </ReactMarkdown>
       </h1>
 
       <p className="text-sm text-gray-500 mb-6">
@@ -617,13 +621,21 @@ export default function ProposalDetailClient({ params }: Props) {
             content...
           </div>
         ) : metadata ? (
-          <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
-            {metadata}
+          <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200">
+            <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+              {metadata}
+            </ReactMarkdown>
           </div>
         ) : (
-          <p className="text-gray-400 italic py-4">
-            {fetchError ? "Content unavailable" : proposal.description}
-          </p>
+          <div className="text-gray-400 italic py-4">
+            {fetchError ? (
+              "Content unavailable"
+            ) : (
+              <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+                {proposal.description}
+              </ReactMarkdown>
+            )}
+          </div>
         )}
       </div>
       </ErrorBoundary>
