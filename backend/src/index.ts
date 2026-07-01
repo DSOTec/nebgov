@@ -66,12 +66,14 @@ app.use(
   }),
 );
 
-// Swagger documentation
-app.get("/openapi.json", (_req, res) => {
-  res.setHeader("Content-Type", "application/json");
-  res.send(generateOpenApiDocument());
-});
-app.use("/docs", swaggerUi.serve, swaggerUi.setup(generateOpenApiDocument()));
+// Swagger / OpenAPI documentation — served in development only
+if (process.env.NODE_ENV !== "production") {
+  app.get("/openapi.json", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.send(generateOpenApiDocument());
+  });
+  app.use("/docs", swaggerUi.serve, swaggerUi.setup(generateOpenApiDocument()));
+}
 
 // Health check — exempt from rate limiting
 app.get("/health", (_req, res) => {
