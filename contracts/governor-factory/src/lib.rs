@@ -3,7 +3,7 @@
 #![allow(deprecated)]
 
 use soroban_sdk::{
-    contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, token,
+    contract, contractclient, contracterror, contractimpl, contracttype, token,
     Address, BytesN, Env, Vec,
 };
 
@@ -346,15 +346,13 @@ impl GovernorFactoryContract {
             .instance()
             .set(&DataKey::GovernorList, &list);
 
-        env.events().publish(
-            (
-                symbol_short!("deploy"),
-                id,
-                governor_addr.clone(),
-                timelock_addr.clone(),
-                token_votes_addr.clone(),
-            ),
-            deployer.clone(),
+        emit_governor_deployed(
+            &env,
+            id,
+            &governor_addr,
+            &timelock_addr,
+            &token_votes_addr,
+            &deployer,
         );
 
         id
@@ -376,8 +374,8 @@ impl GovernorFactoryContract {
             .get(&DataKey::GovernorList)
             .unwrap_or(Vec::<u64>::new(&env));
         let len = list.len();
-        let start = (offset as u32).min(len as u32);
-        let end = ((offset + limit) as u32).min(len as u32);
+        let start = offset.min(len);
+        let end = offset.saturating_add(limit).min(len);
         let mut entries = Vec::new(&env);
         let mut i = start;
         while i < end {

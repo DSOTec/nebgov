@@ -1,9 +1,50 @@
 use soroban_sdk::contracterror;
 
 #[contracterror]
-#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum GovernorError {
-    /// The contract has already been initialized.
-    AlreadyInitialized = 1,
+    UnauthorizedCancel = 1,
+    InvalidSupport = 2,
+    ProposalExpired = 3,
+    CalldataTooLarge = 4,
+    InvalidCalldata = 5,
+    ProposalRateLimited = 6,
+    ContractPaused = 7,
+    UnauthorizedPause = 8,
+    InvalidVectorLengths = 9,
+    NoTargets = 10,
+    ProposalThresholdNotMet = 11,
+    AlreadyVoted = 12,
+    ZeroVotingPower = 13,
+    ProposalNotSucceeded = 14,
+    ProposalNotQueued = 15,
+    ProposalAlreadyExecuted = 16,
+    MissingOpIds = 17,
+    UnauthorizedGuardian = 18,
+    VetoWindowClosed = 19,
+    ProposalNotFound = 20,
+    TimelockNotSet = 21,
+    GuardianNotSet = 22,
+    TooManyTokens = 23,
+    EmptyMetadataUri = 24,
+    VotesTokenNotSet = 25,
+    PauserNotSet = 26,
+    ArithmeticOverflow = 27,
+    VotePeriodTooShort = 28,
+    ExecutionWindowZero = 29,
+    TooManyCalldataEntries = 30,
+    ProposalNotActive = 31,
+    AlreadyInitialized = 32,
+    InvalidVotingDelay = 33,
+    InvalidVotingPeriod = 34,
+    InvalidQuorumNumerator = 35,
+    InvalidProposalThreshold = 36,
+    InvalidMaxCalldataSize = 37,
+    InvalidMaxProposalsPerPeriod = 38,
+    InvalidProposalPeriodDuration = 39,
+    EmptyBatch = 40,
+    BatchProposalNotQueued = 41,
+    ProposalAlreadyCancelled = 42,
+    InvalidVoteChoice = 43,
 }

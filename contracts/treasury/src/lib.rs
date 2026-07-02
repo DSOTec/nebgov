@@ -1743,6 +1743,10 @@ mod tests {
         owners.push_back(owner.clone());
         client.initialize(&owners, &1u32, &governor);
 
+        // Attempting to slash the only remaining owner must panic.
+        client.slash_signer(&governor, &owner, &Symbol::new(&env, "bad"));
+    }
+
     #[test]
     fn test_get_spending_remaining_no_cap_returns_max() {
         let env = Env::default();

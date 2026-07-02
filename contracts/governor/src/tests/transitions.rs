@@ -542,7 +542,7 @@ fn test_queue_rejects_proposal_failing_quorum() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "Error(Contract, #15)")]
 /// Verifies that execute_batch reverts entirely (all-or-nothing) when at
 /// least one proposal in the batch has not been queued yet.
 fn test_execute_batch_partial_preflight_failure() {
@@ -602,7 +602,7 @@ fn test_execute_batch_partial_preflight_failure() {
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "Error(Contract, #10)")]
 /// Verifies that execute_batch rejects an empty batch.
 fn test_execute_batch_rejects_empty_batch() {
     let (env, client, _admin, _proposer, _voter) = setup();

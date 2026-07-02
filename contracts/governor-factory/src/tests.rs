@@ -1,5 +1,5 @@
 use super::*;
-use soroban_sdk::{testutils::Address as _, token, Address, BytesN, Env};
+use soroban_sdk::{testutils::{Address as _, Ledger as _}, token, Address, BytesN, Env};
 
 use sorogov_governor::GovernorContract;
 use sorogov_timelock::TimelockContract;
@@ -69,13 +69,15 @@ fn test_deploy_emits_governor_deployed_event_with_all_addresses() {
         &1u32,
         &120_960u32,
     );
-    let entry = factory.get_governor(&id);
 
+    // Capture events before any further contract calls (each call resets the event buffer)
     let events = env.events().all();
     let (_, _, event_data) = events
         .iter()
         .find(|(addr, _, _)| *addr == factory_id)
         .expect("expected a GovernorDeployed event from the factory");
+
+    let entry = factory.get_governor(&id);
 
     let decoded: GovernorDeployedEvent = event_data
         .try_into_val(&env)

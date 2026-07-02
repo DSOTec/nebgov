@@ -386,25 +386,6 @@ mod tests {
         Env,
     };
 
-    #[contract]
-    pub struct MockSep41Token;
-
-    #[contractimpl]
-    impl MockSep41Token {
-        pub fn initialize(env: Env, admin: Address) {
-            env.storage()
-                .instance()
-                .set(&soroban_sdk::Symbol::new(&env, "admin"), &admin);
-        }
-
-        pub fn transfer(env: Env, from: Address, to: Address, amount: i128) {
-            from.require_auth();
-            let from_key = soroban_sdk::Symbol::new(&env, "bal_from");
-            // Simplified: just track balance for `to`
-            let _ = (from, to, amount, from_key);
-        }
-    }
-
     #[test]
     fn test_deposit_and_withdraw() {
         let env = Env::default();

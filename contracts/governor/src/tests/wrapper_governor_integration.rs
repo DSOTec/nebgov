@@ -5,7 +5,7 @@ use sorogov_governor_factory::{GovernorFactoryContract, GovernorFactoryContractC
 
 use soroban_sdk::{
     testutils::{Address as _, Ledger as _},
-    token, Address, Bytes, Env, Symbol, Vec, BytesN,
+    token, Address, Bytes, Env, Vec, BytesN,
 };
 
 fn setup_env() -> (Env, Address) {
@@ -133,15 +133,15 @@ fn test_flow_3_proposal_resolves_withdraw_works() {
 
 #[test]
 fn test_flow_4_factory_deploy_full_lifecycle() {
-    let (env, admin) = setup_env();
+    let (env, _admin) = setup_env();
 
     // Register factory
     let factory_id = env.register(GovernorFactoryContract, ());
-    let factory_client = GovernorFactoryContractClient::new(&env, &factory_id);
+    let _factory_client = GovernorFactoryContractClient::new(&env, &factory_id);
 
     // We need WASM hashes for the factory to deploy
     // In tests, we can use empty hashes since we are mocking the deployment
-    let empty_hash = BytesN::from_array(&env, &[0u8; 32]);
+    let _empty_hash = BytesN::from_array(&env, &[0u8; 32]);
     
     // Actually, GovernorFactory implementation needs valid WASM hashes to deploy
     // For integration test, we can use the same contract IDs if we mock the factory behavior

@@ -1,6 +1,8 @@
 use crate::{GovernorContract, GovernorContractClient, ProposalState, VoteType};
 use soroban_sdk::{
-    contract, contractimpl, testutils::Address as _, testutils::Ledger as _, Address, Env, Symbol,
+    contract, contractimpl,
+    testutils::{Address as _, Events as _, Ledger as _},
+    Address, Env, Symbol,
 };
 use sorogov_timelock::TimelockContract;
 use sorogov_token_votes::TokenVotesContract;
@@ -101,7 +103,7 @@ fn setup_queued_proposal() -> (
 /// cancel_by_governance on a Queued proposal must cancel every op_id stored
 /// on the proposal via the timelock.
 fn test_cancel_by_governance_on_queued_proposal_cancels_timelock_ops() {
-    let (env, governor_client, timelock_client, proposal_id) = setup_queued_proposal();
+    let (_env, governor_client, timelock_client, proposal_id) = setup_queued_proposal();
 
     let op_ids = governor_client.get_queued_op_ids(&proposal_id);
     assert!(!op_ids.is_empty(), "expected at least one queued op_id");
@@ -207,7 +209,7 @@ fn test_cancel_by_governance_on_non_queued_proposal_does_not_call_timelock() {
 }
 
 #[test]
-#[should_panic(expected = "proposal already executed or cancelled")]
+#[should_panic(expected = "Error(Contract, #42)")]
 /// cancel_by_governance on an already-cancelled (terminal) proposal must revert.
 fn test_cancel_by_governance_on_already_cancelled_proposal_reverts() {
     let (_env, governor_client, _timelock_client, proposal_id) = setup_queued_proposal();

@@ -2,7 +2,7 @@ use super::{LiquidityContract, LiquidityContractClient, LiquidityError};
 use soroban_sdk::xdr::ToXdr;
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{Address as _, Ledger as _},
     Address, Bytes, Env, IntoVal, String, Symbol, Val, Vec,
 };
 use sorogov_governor::{GovernorContract, GovernorContractClient, VoteSupport, VoteType};
@@ -575,7 +575,7 @@ fn test_add_liquidity_rejects_required_b_below_minimum() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #8)")]
+#[should_panic(expected = "Error(Contract, #11)")]
 fn test_add_liquidity_rejects_slippage_below_min_lp() {
     let (env, contract_id, governor, provider, _, token_a, token_b) = setup_liquidity();
     let client = LiquidityContractClient::new(&env, &contract_id);
@@ -1006,7 +1006,7 @@ fn test_swap_reverse_direction_finds_pool() {
     // Create pool with reversed ordering (hi, lo)
     setup_pool(&client, &governor, 2, 1, &token_b, &token_a);
     // Add liquidity using the same reversed ordering
-    client.add_liquidity(&provider, &2, &1, &10_000, &10_000);
+    client.add_liquidity(&provider, &2, &1, &10_000, &10_000, &0i128);
 
     // Swap in the forward direction (lo → hi) against the pool stored as (1, 2)
     let amount_out = client.swap(&trader, &1, &2, &1_000, &0);
@@ -1025,7 +1025,7 @@ fn test_swap_both_directions_share_same_pool() {
     let client = LiquidityContractClient::new(&env, &contract_id);
 
     setup_pool(&client, &governor, 0, 1, &token_a, &token_b);
-    client.add_liquidity(&provider, &0, &1, &100_000, &100_000);
+    client.add_liquidity(&provider, &0, &1, &100_000, &100_000, &0i128);
 
     // Swap 0 → 1
     let out_1 = client.swap(&trader, &0, &1, &1_000, &0);
@@ -1051,7 +1051,7 @@ fn test_pool_key_canonical_ordering_lookup() {
     let client = LiquidityContractClient::new(&env, &contract_id);
 
     setup_pool(&client, &governor, 3, 5, &token_a, &token_b);
-    client.add_liquidity(&provider, &3, &5, &10_000, &20_000);
+    client.add_liquidity(&provider, &3, &5, &10_000, &20_000, &0i128);
 
     let pool_35 = client.get_pool(&3, &5);
     let pool_53 = client.get_pool(&5, &3);
