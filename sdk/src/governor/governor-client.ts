@@ -22,7 +22,7 @@ import {
   VotingHistoryEntry,
 } from "../types";
 
-import { GovernorError, GovernorErrorCode } from "../errors";
+import { GovernorError, GovernorErrorCode, parseGovernorError } from "../errors";
 import { hexToBytes32, withRetry } from "../utils";
 
 const RPC_URLS: Record<Network, string> = {
@@ -172,5 +172,99 @@ export class GovernorClient {
       }
     }
     throw new Error(`Transaction not confirmed after ${retries} retries`);
+  }
+
+  async execute(signer: Keypair, proposalId: bigint): Promise<void> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call("execute", nativeToScVal(proposalId, { type: "u64" })),
+        )
+        .setTimeout(30)
+        .build();
+
+      const simResult = await this.server.simulateTransaction(tx);
+      if (SorobanRpc.Api.isSimulationError(simResult)) {
+        const errStr = (simResult as SorobanRpc.Api.SimulateTransactionErrorResponse).error ?? "";
+        throw parseGovernorError(errStr);
+      }
+
+      const assembled = SorobanRpc.assembleTransaction(
+        tx,
+        simResult as SorobanRpc.Api.SimulateTransactionSuccessResponse,
+      ).build();
+      assembled.sign(signer);
+
+      const result = await this.server.sendTransaction(assembled);
+      if (result.status === "ERROR") {
+        throw parseGovernorError((result as unknown as { error?: string }).error ?? "");
+      }
+      await this.pollForConfirmation(result.hash);
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  async listProposals(from: number, count: number): Promise<Proposal[]> {
+    const account = await this.server.getAccount(this.readAccount());
+
+    const listTx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(
+        this.contract.call(
+          "get_proposal_list",
+          nativeToScVal(from, { type: "u32" }),
+          nativeToScVal(count, { type: "u32" }),
+        ),
+      )
+      .setTimeout(30)
+      .build();
+
+    const listResult = await this.server.simulateTransaction(listTx);
+    if (!SorobanRpc.Api.isSimulationError(listResult)) {
+      const raw = (listResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+      return raw ? (scValToNative(raw) as Proposal[]) : [];
+    }
+
+    // Fallback: fetch proposal_count then individual proposals
+    const countTx = new TransactionBuilder(account, {
+      fee: BASE_FEE,
+      networkPassphrase: this.networkPassphrase,
+    })
+      .addOperation(this.contract.call("proposal_count"))
+      .setTimeout(30)
+      .build();
+
+    const countResult = await this.server.simulateTransaction(countTx);
+    if (SorobanRpc.Api.isSimulationError(countResult)) return [];
+
+    const countRaw = (countResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    const total = countRaw ? Number(scValToNative(countRaw)) : 0;
+
+    const proposals: Proposal[] = [];
+    for (let i = from + 1; i <= Math.min(from + count, total); i++) {
+      const proposalTx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call("get_proposal", nativeToScVal(BigInt(i), { type: "u64" })),
+        )
+        .setTimeout(30)
+        .build();
+
+      const proposalResult = await this.server.simulateTransaction(proposalTx);
+      if (SorobanRpc.Api.isSimulationError(proposalResult)) continue;
+
+      const proposalRaw = (proposalResult as SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+      if (proposalRaw) {
+        proposals.push(scValToNative(proposalRaw) as Proposal);
+      }
+    }
+    return proposals;
   }
 }

@@ -9,6 +9,7 @@ module.exports = {
     "src/__tests__/integration.test.ts",
   ],
   maxWorkers: 1,
+  coverageProvider: "v8",
   collectCoverageFrom: [
     "src/**/*.ts",
     "!src/**/*.test.ts",

@@ -1,4 +1,4 @@
-import { GovernorClient } from "../governor";
+import { GovernorClient, getProposalState, propose, castVote } from "../governor";
 import { TimelockClient } from "../timelock";
 import { VoteSupport } from "../types";
 
@@ -84,7 +84,7 @@ describe("SDK Retry Logic", () => {
       });
     mockScValToNative.mockReturnValue(["Active"]);
 
-    const state = await client.getProposalState(1n);
+    const state = await getProposalState(client, 1n);
 
     expect(mockSimulate).toHaveBeenCalledTimes(3);
     expect(state).toBeDefined();
@@ -101,7 +101,8 @@ describe("SDK Retry Logic", () => {
     });
     mockScValToNative.mockReturnValue(42n);
 
-    const id = await client.propose(
+    const id = await propose(
+      client,
       mockSigner,
       "Title",
       VALID_DESC_HASH,
@@ -123,7 +124,7 @@ describe("SDK Retry Logic", () => {
     });
 
     await expect(
-      client.castVote(mockSigner, 1n, VoteSupport.For),
+      castVote(client, mockSigner, 1n, VoteSupport.For),
     ).rejects.toThrow();
 
     // Should only attempt once because it's a contract error, not a network error
@@ -138,7 +139,7 @@ describe("SDK Retry Logic", () => {
     });
 
     await expect(
-      client.castVote(mockSigner, 1n, VoteSupport.For),
+      castVote(client, mockSigner, 1n, VoteSupport.For),
     ).rejects.toThrow();
 
     expect(mockSendTransaction).toHaveBeenCalledTimes(1);
@@ -153,7 +154,7 @@ describe("SDK Retry Logic", () => {
         hash: "tx123",
       });
 
-    await client.castVote(mockSigner, 1n, VoteSupport.For);
+    await castVote(client, mockSigner, 1n, VoteSupport.For);
 
     expect(mockSendTransaction).toHaveBeenCalledTimes(2);
   }, 10_000);

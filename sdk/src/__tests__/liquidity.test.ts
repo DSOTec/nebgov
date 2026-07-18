@@ -44,6 +44,7 @@ describe("LiquidityClient", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockGetAccount.mockResolvedValue({ accountId: () => validGAddr, sequenceNumber: () => "1" });
+    mockSimulateTransaction.mockResolvedValue({ result: { retval: {} } });
 
     client = new LiquidityClient({
       liquidityAddress: validCAddr,

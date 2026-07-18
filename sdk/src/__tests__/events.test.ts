@@ -34,6 +34,8 @@ describe("event parsers", () => {
       proposalId: 1n,
       proposer: "GPROPOSER",
       description: "Upgrade config",
+      descriptionHash: "",
+      metadataUri: "",
       targets: ["CTARGET"],
       fnNames: ["update_config"],
       calldatas: ["deadbeef"],
