@@ -22,7 +22,7 @@ export default function StreamDetailPage() {
   const { publicKey, signTransaction } = useWallet();
   const [stream, setStream] = useState<TreasuryBudgetStream | null>(null);
   const [report, setReport] = useState<TreasuryStreamReport | null>(null);
-  const [spends, setSpends] = useState<TreasuryStreamSpend[]>([]);
+  const [items, setSpends] = useState<TreasuryStreamSpend[]>([]);
   const [loading, setLoading] = useState(true);
   const [showSpend, setShowSpend] = useState(false);
   const [client, setClient] = useState<TreasuryClient | null>(null);
@@ -187,7 +187,7 @@ export default function StreamDetailPage() {
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-400">Spend Count</dt>
-              <dd className="font-medium text-gray-900">{stream.spendCount}</dd>
+              <dd className="font-medium text-gray-900">{stream.itemCount}</dd>
             </div>
             {stream.revokedAtLedger !== null && (
               <div className="flex justify-between">
@@ -261,19 +261,34 @@ export default function StreamDetailPage() {
 
       <div className="border border-gray-200 rounded-lg p-4">
         <h3 className="text-sm font-semibold mb-3">Spend History</h3>
-        {spends.length === 0 ? (
-          <p className="text-xs text-gray-400">No spends recorded</p>
+        {items.length === 0 ? (
+          <p className="text-xs text-gray-400">No items recorded</p>
         ) : (
-          <div className="space-y-2">
-            {spends.map((spend) => (
-              <div key={spend.spendIndex} className="flex items-center gap-3 text-xs border-b border-gray-50 pb-2">
-                <span className="text-gray-400 w-8">#{spend.spendIndex}</span>
-                <span className="font-mono text-gray-700 flex-1 truncate">{spend.recipient}</span>
-                <span className="font-medium text-gray-900 w-24 text-right">{spend.amount.toString()}</span>
-                <span className="text-gray-600 flex-1 truncate">{spend.memo}</span>
-                <span className="text-gray-400 w-16 text-right">L{spend.executedAtLedger}</span>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100 text-left text-gray-400">
+                  <th className="py-2 pr-4">#</th>
+                  <th className="py-2 pr-4">Recipient</th>
+                  <th className="py-2 pr-4">Amount</th>
+                  <th className="py-2 pr-4">Memo</th>
+                  <th className="py-2 pr-4">Ledger</th>
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.itemIndex} className="border-b border-gray-50">
+                    <td className="py-2 pr-4 text-gray-500">{item.itemIndex}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-700 truncate max-w-[120px]}>
+                      {item.recipient}
+                    </td>
+                    <td className="py-2 pr-4 font-medium text-gray-900">{item.amount.toString()}</td>
+                    <td className="py-2 pr-4 text-gray-600 truncate max-w-[150px]">{item.memo}</td>
+                    <td className="py-2 pr-4 text-gray-500">{item.executedAtLedger}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

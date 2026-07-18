@@ -74,7 +74,7 @@ export default function StreamDetailPage() {
       toast.success("Stream revoked");
       fetchData();
     } catch (err) {
-      toast.error(`Revoke failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error("Error");
     }
   };
 
@@ -87,7 +87,7 @@ export default function StreamDetailPage() {
       toast.success("Stream extended");
       fetchData();
     } catch (err) {
-      toast.error(`Extend failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error("Error");
     }
   };
 
@@ -100,7 +100,7 @@ export default function StreamDetailPage() {
       toast.success("Stream topped up");
       fetchData();
     } catch (err) {
-      toast.error(`Top-up failed: ${err instanceof Error ? err.message : String(err)}`);
+      toast.error("Error");
     }
   };
 
@@ -264,16 +264,31 @@ export default function StreamDetailPage() {
         {spends.length === 0 ? (
           <p className="text-xs text-gray-400">No spends recorded</p>
         ) : (
-          <div className="space-y-2">
-            {spends.map((spend) => (
-              <div key={spend.spendIndex} className="flex items-center gap-3 text-xs border-b border-gray-50 pb-2">
-                <span className="text-gray-400 w-8">#{spend.spendIndex}</span>
-                <span className="font-mono text-gray-700 flex-1 truncate">{spend.recipient}</span>
-                <span className="font-medium text-gray-900 w-24 text-right">{spend.amount.toString()}</span>
-                <span className="text-gray-600 flex-1 truncate">{spend.memo}</span>
-                <span className="text-gray-400 w-16 text-right">L{spend.executedAtLedger}</span>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100 text-left text-gray-400">
+                  <th className="py-2 pr-4">#</th>
+                  <th className="py-2 pr-4">Recipient</th>
+                  <th className="py-2 pr-4">Amount</th>
+                  <th className="py-2 pr-4">Memo</th>
+                  <th className="py-2 pr-4">Ledger</th>
+                </tr>
+              </thead>
+              <tbody>
+                {spends.map((spend) => (
+                  <tr key={spend.spendIndex} className="border-b border-gray-50">
+                    <td className="py-2 pr-4 text-gray-500">{spend.spendIndex}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-700 truncate max-w-[120px]}>
+                      {spend.recipient}
+                    </td>
+                    <td className="py-2 pr-4 font-medium text-gray-900">{spend.amount.toString()}</td>
+                    <td className="py-2 pr-4 text-gray-600 truncate max-w-[150px]">{spend.memo}</td>
+                    <td className="py-2 pr-4 text-gray-500">{spend.executedAtLedger}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>

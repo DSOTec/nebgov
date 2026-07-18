@@ -135,7 +135,7 @@ export default function StreamDetailPage() {
       <div className="flex items-center justify-between mt-2 mb-6">
         <div className="flex items-center gap-3">
           <h1 className="text-xl font-bold text-gray-900">{stream.name}</h1>
-          <span className="text-xs text-gray-400">#{stream.id.toString()}</span>
+          <span className="text-xs text-gray-400">#{stream.idString()}</span>
           {stream.isRevoked && (
             <span className="text-xs px-2 py-0.5 rounded-full bg-red-100 text-red-700">Revoked</span>
           )}
@@ -159,19 +159,19 @@ export default function StreamDetailPage() {
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-400">Total Allocated</dt>
-              <dd className="font-medium text-gray-900">{stream.totalAllocated.toString()}</dd>
+              <dd className="font-medium text-gray-900">{stream.totalAllocatedString()}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-400">Total Spent</dt>
-              <dd className="font-medium text-gray-900">{stream.totalSpent.toString()}</dd>
+              <dd className="font-medium text-gray-900">{stream.totalSpentString()}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-400">Remaining</dt>
-              <dd className="font-medium text-emerald-600">{remaining.toString()}</dd>
+              <dd className="font-medium text-emerald-600">{remainingString()}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-400">Max Single Spend</dt>
-              <dd className="font-medium text-gray-900">{stream.maxSingleSpend.toString()}</dd>
+              <dd className="font-medium text-gray-900">{stream.maxSingleSpendString()}</dd>
             </div>
             <div className="flex justify-between">
               <dt className="text-gray-400">Cooldown</dt>
@@ -218,7 +218,7 @@ export default function StreamDetailPage() {
                 </div>
                 <div className="flex justify-between">
                   <dt className="text-gray-400">Avg Spend</dt>
-                  <dd className="font-medium">{report.avgSpend.toString()}</dd>
+                  <dd className="font-medium">{report.avgSpendString()}</dd>
                 </div>
               </dl>
             </>
@@ -264,16 +264,31 @@ export default function StreamDetailPage() {
         {spends.length === 0 ? (
           <p className="text-xs text-gray-400">No spends recorded</p>
         ) : (
-          <div className="space-y-2">
-            {spends.map((spend) => (
-              <div key={spend.spendIndex} className="flex items-center gap-3 text-xs border-b border-gray-50 pb-2">
-                <span className="text-gray-400 w-8">#{spend.spendIndex}</span>
-                <span className="font-mono text-gray-700 flex-1 truncate">{spend.recipient}</span>
-                <span className="font-medium text-gray-900 w-24 text-right">{spend.amount.toString()}</span>
-                <span className="text-gray-600 flex-1 truncate">{spend.memo}</span>
-                <span className="text-gray-400 w-16 text-right">L{spend.executedAtLedger}</span>
-              </div>
-            ))}
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-gray-100 text-left text-gray-400">
+                  <th className="py-2 pr-4">#</th>
+                  <th className="py-2 pr-4">Recipient</th>
+                  <th className="py-2 pr-4">Amount</th>
+                  <th className="py-2 pr-4">Memo</th>
+                  <th className="py-2 pr-4">Ledger</th>
+                </tr>
+              </thead>
+              <tbody>
+                {spends.map((spend) => (
+                  <tr key={spend.spendIndex} className="border-b border-gray-50">
+                    <td className="py-2 pr-4 text-gray-500">{spend.spendIndex}</td>
+                    <td className="py-2 pr-4 font-mono text-gray-700 truncate max-w-[120px]}>
+                      {spend.recipient}
+                    </td>
+                    <td className="py-2 pr-4 font-medium text-gray-900">{spend.amountString()}</td>
+                    <td className="py-2 pr-4 text-gray-600 truncate max-w-[150px]">{spend.memo}</td>
+                    <td className="py-2 pr-4 text-gray-500">{spend.executedAtLedger}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         )}
       </div>
