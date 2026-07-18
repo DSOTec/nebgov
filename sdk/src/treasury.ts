@@ -16,6 +16,12 @@ import {
   BatchTransferEvent,
   Network,
   SpendingCap,
+  BudgetStream,
+  StreamSpend,
+  StreamBudgetReport,
+  TreasuryBudgetSummary,
+  CreateStreamParams,
+  PaginationOptions,
 } from "./types";
 import { TreasuryError, TreasuryErrorCode, parseTreasuryError } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
@@ -613,6 +619,617 @@ export class TreasuryClient {
       .filter((e) => fromLedger === undefined || e.ledger >= fromLedger);
 
     return events;
+  }
+
+  // ── Budget Stream methods ──────────────────────────────────────────────────
+
+  /**
+   * Governance-gated: allocate a new budget stream to a department owner.
+   *
+   * Only the governor may call this. The stream allocates a fixed budget
+   * for a department owner to spend within the specified ledger range.
+   *
+   * @param signer - Keypair authorising the call (must be the governor)
+   * @param params - Stream creation parameters
+   * @returns The newly created stream ID
+   */
+  async createStream(
+    signer: Keypair,
+    params: CreateStreamParams,
+  ): Promise<{ streamId: bigint; txResult: string }> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "create_stream",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(params.name, { type: "symbol" }),
+            nativeToScVal(params.owner, { type: "address" }),
+            nativeToScVal(params.token, { type: "address" }),
+            nativeToScVal(params.totalAllocated, { type: "i128" }),
+            nativeToScVal(params.startLedger, { type: "u32" }),
+            nativeToScVal(params.endLedger, { type: "u32" }),
+            nativeToScVal(params.maxSingleSpend, { type: "i128" }),
+            nativeToScVal(params.cooldownLedgers, { type: "u32" }),
+            nativeToScVal(params.proposalId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
+
+      const confirmed = await this.pollForConfirmation(result.hash);
+      const returnVal = confirmed.returnValue;
+      if (!returnVal) {
+        throw new TreasuryError(
+          TreasuryErrorCode.MissingReturnValue,
+          "No return value from create_stream",
+        );
+      }
+
+      const streamId = BigInt(scValToNative(returnVal) as number | bigint | string);
+      return { streamId, txResult: result.hash };
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Stream owner: spend from an allocated stream.
+   *
+   * Transfers tokens from the treasury to the recipient, debiting
+   * the stream's budget. Enforces max single spend, cooldown, and
+   * remaining budget constraints.
+   *
+   * @param signer    - Keypair of the stream owner
+   * @param streamId  - ID of the stream to spend from
+   * @param recipient - Address receiving the tokens
+   * @param amount    - Amount to spend
+   * @param memo      - Optional memo for the spend record
+   */
+  async streamSpend(
+    signer: Keypair,
+    streamId: bigint,
+    recipient: string,
+    amount: bigint,
+    memo: string,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "stream_spend",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(streamId, { type: "u64" }),
+            nativeToScVal(recipient, { type: "address" }),
+            nativeToScVal(amount, { type: "i128" }),
+            nativeToScVal(memo, { type: "string" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
+
+      await this.pollForConfirmation(result.hash);
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Batch spend from a stream to multiple recipients.
+   */
+  async streamBatchSpend(
+    signer: Keypair,
+    streamId: bigint,
+    recipients: string[],
+    amounts: bigint[],
+    memo: string,
+  ): Promise<string> {
+    return this.retry(async () => {
+      if (recipients.length !== amounts.length) {
+        throw new TreasuryError(
+          TreasuryErrorCode.InvalidArguments,
+          "recipients and amounts must have the same length",
+        );
+      }
+
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const recipientsScVal = xdr.ScVal.scvVec(
+        recipients.map((r) => nativeToScVal(r, { type: "address" })),
+      );
+      const amountsScVal = xdr.ScVal.scvVec(
+        amounts.map((a) => nativeToScVal(a, { type: "i128" })),
+      );
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "stream_batch_spend",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(streamId, { type: "u64" }),
+            recipientsScVal,
+            amountsScVal,
+            nativeToScVal(memo, { type: "string" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
+
+      await this.pollForConfirmation(result.hash);
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Governance-gated: revoke an active stream.
+   */
+  async revokeStream(signer: Keypair, streamId: bigint): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "revoke_stream",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(streamId, { type: "u64" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
+
+      await this.pollForConfirmation(result.hash);
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Governance-gated: extend a stream's end ledger.
+   */
+  async extendStream(
+    signer: Keypair,
+    streamId: bigint,
+    newEndLedger: number,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "extend_stream",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(streamId, { type: "u64" }),
+            nativeToScVal(newEndLedger, { type: "u32" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
+
+      await this.pollForConfirmation(result.hash);
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Governance-gated: top up an existing stream's allocated budget.
+   */
+  async topUpStream(
+    signer: Keypair,
+    streamId: bigint,
+    additionalAmount: bigint,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "top_up_stream",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(streamId, { type: "u64" }),
+            nativeToScVal(additionalAmount, { type: "i128" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTreasuryError(result);
+      }
+
+      await this.pollForConfirmation(result.hash);
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Query: get a stream by ID.
+   */
+  async getStream(streamId: bigint): Promise<BudgetStream> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_stream",
+              nativeToScVal(streamId, { type: "u64" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new TreasuryError(
+          TreasuryErrorCode.StreamNotFound,
+          `Stream ${streamId} not found`,
+        );
+      }
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) {
+        throw new TreasuryError(
+          TreasuryErrorCode.MissingReturnValue,
+          `No return value from get_stream(${streamId})`,
+        );
+      }
+
+      return this.parseBudgetStream(raw);
+    });
+  }
+
+  /**
+   * Query: get paginated list of streams.
+   */
+  async getStreams(
+    options?: PaginationOptions,
+  ): Promise<BudgetStream[]> {
+    return this.retry(async () => {
+      const offset = options?.offset ?? 0;
+      const limit = options?.limit ?? 20;
+
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_streams",
+              nativeToScVal(offset, { type: "u64" }),
+              nativeToScVal(limit, { type: "u64" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return [];
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return [];
+
+      const streams = scValToNative(raw) as unknown[];
+      return streams.map((s) => this.parseBudgetStreamFromNative(s as Record<string, unknown>));
+    });
+  }
+
+  /**
+   * Query: get streams by owner (paginated).
+   */
+  async getStreamsByOwner(
+    owner: string,
+    options?: PaginationOptions,
+  ): Promise<BudgetStream[]> {
+    return this.retry(async () => {
+      const offset = options?.offset ?? 0;
+      const limit = options?.limit ?? 20;
+
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_streams_by_owner",
+              nativeToScVal(owner, { type: "address" }),
+              nativeToScVal(offset, { type: "u64" }),
+              nativeToScVal(limit, { type: "u64" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return [];
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return [];
+
+      const streams = scValToNative(raw) as unknown[];
+      return streams.map((s) => this.parseBudgetStreamFromNative(s as Record<string, unknown>));
+    });
+  }
+
+  /**
+   * Query: get spend history for a stream (paginated).
+   */
+  async getStreamSpends(
+    streamId: bigint,
+    options?: PaginationOptions,
+  ): Promise<StreamSpend[]> {
+    return this.retry(async () => {
+      const offset = options?.offset ?? 0;
+      const limit = options?.limit ?? 50;
+
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_stream_spends",
+              nativeToScVal(streamId, { type: "u64" }),
+              nativeToScVal(offset, { type: "u32" }),
+              nativeToScVal(limit, { type: "u32" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return [];
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return [];
+
+      const spends = scValToNative(raw) as Record<string, unknown>[];
+      return spends.map((s) => ({
+        streamId: BigInt(s.stream_id as number | bigint | string),
+        spendIndex: Number(s.spend_index),
+        recipient: String(s.recipient),
+        amount: BigInt(s.amount as number | bigint | string),
+        memo: String(s.memo),
+        executedAtLedger: Number(s.executed_at_ledger),
+        executedBy: String(s.executed_by),
+      }));
+    });
+  }
+
+  /**
+   * Query: get budget report for a specific stream.
+   */
+  async getStreamReport(streamId: bigint): Promise<StreamBudgetReport> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_stream_report",
+              nativeToScVal(streamId, { type: "u64" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new TreasuryError(
+          TreasuryErrorCode.StreamNotFound,
+          `Stream ${streamId} not found`,
+        );
+      }
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) {
+        throw new TreasuryError(
+          TreasuryErrorCode.MissingReturnValue,
+          `No return value from get_stream_report(${streamId})`,
+        );
+      }
+
+      const r = scValToNative(raw) as Record<string, unknown>;
+      return {
+        streamId: BigInt(r.stream_id as number | bigint | string),
+        name: String(r.name),
+        totalAllocated: BigInt(r.total_allocated as number | bigint | string),
+        totalSpent: BigInt(r.total_spent as number | bigint | string),
+        remaining: BigInt(r.remaining as number | bigint | string),
+        utilizationBps: Number(r.utilization_bps),
+        isActive: Boolean(r.is_active),
+        daysRemaining: Number(r.days_remaining),
+        spendCount: Number(r.spend_count),
+        avgSpend: BigInt(r.avg_spend as number | bigint | string),
+      };
+    });
+  }
+
+  /**
+   * Query: get treasury-wide budget summary.
+   */
+  async getBudgetSummary(): Promise<TreasuryBudgetSummary> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("get_budget_summary"))
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        return {
+          totalStreams: 0,
+          activeStreams: 0,
+          totalAllocatedByToken: [],
+          totalSpentByToken: [],
+          totalRemainingByToken: [],
+        };
+      }
+
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) {
+        return {
+          totalStreams: 0,
+          activeStreams: 0,
+          totalAllocatedByToken: [],
+          totalSpentByToken: [],
+          totalRemainingByToken: [],
+        };
+      }
+
+      const s = scValToNative(raw) as Record<string, unknown>;
+      const parseTokenAmounts = (arr: unknown): Array<{ token: string; amount: bigint }> => {
+        if (!Array.isArray(arr)) return [];
+        return arr.map((pair) => {
+          const p = pair as [string, number | bigint | string];
+          return { token: String(p[0]), amount: BigInt(p[1]) };
+        });
+      };
+
+      return {
+        totalStreams: Number(s.total_streams),
+        activeStreams: Number(s.active_streams),
+        totalAllocatedByToken: parseTokenAmounts(s.total_allocated_by_token),
+        totalSpentByToken: parseTokenAmounts(s.total_spent_by_token),
+        totalRemainingByToken: parseTokenAmounts(s.total_remaining_by_token),
+      };
+    });
+  }
+
+  /**
+   * Query: compute remaining budget for a stream.
+   */
+  async getStreamRemaining(streamId: bigint): Promise<bigint> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_stream_remaining",
+              nativeToScVal(streamId, { type: "u64" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return 0n;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? BigInt(scValToNative(raw) as number | bigint | string) : 0n;
+    });
+  }
+
+  // ── Stream parsing helpers ─────────────────────────────────────────────────
+
+  private parseBudgetStream(raw: xdr.ScVal): BudgetStream {
+    const s = scValToNative(raw) as Record<string, unknown>;
+    return this.parseBudgetStreamFromNative(s);
+  }
+
+  private parseBudgetStreamFromNative(s: Record<string, unknown>): BudgetStream {
+    return {
+      id: BigInt(s.id as number | bigint | string),
+      name: String(s.name),
+      owner: String(s.owner),
+      token: String(s.token),
+      totalAllocated: BigInt(s.total_allocated as number | bigint | string),
+      totalSpent: BigInt(s.total_spent as number | bigint | string),
+      startLedger: Number(s.start_ledger),
+      endLedger: Number(s.end_ledger),
+      isActive: Boolean(s.is_active),
+      isRevoked: Boolean(s.is_revoked),
+      revokedAtLedger: s.revoked_at_ledger != null ? Number(s.revoked_at_ledger) : null,
+      maxSingleSpend: BigInt(s.max_single_spend as number | bigint | string),
+      cooldownLedgers: Number(s.cooldown_ledgers),
+      lastSpendLedger: Number(s.last_spend_ledger),
+      spendCount: Number(s.spend_count),
+      createdByProposalId: BigInt(s.created_by_proposal_id as number | bigint | string),
+    };
   }
 
   // --- Private helpers ---
