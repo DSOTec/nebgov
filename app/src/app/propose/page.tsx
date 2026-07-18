@@ -18,6 +18,7 @@ import {
   Loader2,
   Link as LinkIcon,
   AlertCircle,
+  Copy,
 } from "lucide-react";
 import { Keypair } from "@stellar/stellar-sdk";
 import {
