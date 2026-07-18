@@ -332,6 +332,8 @@ export function parseProposalCreatedEvent(
       proposalId,
       proposer: String(event.topic[1]),
       description: String(event.value[1] ?? ""),
+      descriptionHash: "",
+      metadataUri: "",
       targets: Array.isArray(event.value[2]) ? event.value[2] : [],
       fnNames: Array.isArray(event.value[3]) ? event.value[3] : [],
       calldatas: Array.isArray(event.value[4]) ? event.value[4] : [],
