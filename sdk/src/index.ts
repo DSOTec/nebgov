@@ -13,6 +13,7 @@
  */
 
 export { GovernorClient, hashDescription, uploadProposalMetadata } from "./governor";
+export type { MetadataUploadOptions } from "./governor";
 export { VotesClient } from "./votes";
 export type { TopDelegatesOptions, TopDelegatesResult } from "./votes";
 export { FactoryClient } from "./factory";

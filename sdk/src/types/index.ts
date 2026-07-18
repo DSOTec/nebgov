@@ -397,7 +397,7 @@ export interface VotingHistoryEntry {
 }
 
 /**
- * Result of a {@link GovernorClient.simulatePropose} dry-run.
+ * Result of a `simulateProposal` dry-run.
  *
  * When `ok` is true all resource fields are populated.
  * When `ok` is false only `error` is set.

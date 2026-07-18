@@ -79,10 +79,11 @@ export class TimelockClient {
    * Only the governor may call this. The operation becomes executable once
    * `delay` seconds have elapsed since scheduling.
    *
-   * @param signer  - Keypair authorising the call (must be the governor signer)
-   * @param target  - Strkey address of the contract to invoke on execution
-   * @param data    - Encoded calldata for the target invocation
-   * @param delay   - Delay in seconds; must be >= the contract's `minDelay`
+   * @param signer       - Keypair authorising the call (must be the governor signer)
+   * @param target       - Strkey address of the contract to invoke on execution
+   * @param data         - Encoded calldata for the target invocation
+   * @param fnNameOrDelay - Function name to invoke on the target, or delay in seconds (legacy 4-arg form)
+   * @param delayArg      - Delay in seconds; must be >= the contract's `minDelay` (omit when fnNameOrDelay is a bigint)
    * @returns Hex-encoded operation ID (SHA-256 of `data`)
    */
   async schedule(
