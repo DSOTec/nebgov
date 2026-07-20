@@ -48,6 +48,14 @@ interface WalletContextValue {
   disconnect: () => void;
   /** Sign a prepared Soroban transaction XDR (fee-bump / classic TX). */
   signTransaction: (unsignedXdr: string) => Promise<string>;
+  /**
+   * Sign a Soroban authorization entry preimage (base64 XDR of a
+   * `HashIdPreimage`), returning the raw signature bytes (base64). Used for
+   * gasless/meta-transaction flows (e.g. delegate_by_sig) where the
+   * connected wallet authorizes an action without submitting or paying for
+   * a transaction itself.
+   */
+  signAuthEntry: (preimageXdr: string) => Promise<string>;
 }
 
 // Context
@@ -168,6 +176,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [publicKey],
   );
 
+  const signAuthEntry = useCallback(
+    async (preimageXdr: string) => {
+      const kit = kitRef.current;
+      if (!kit || !publicKey) {
+        throw new Error("Connect your wallet first.");
+      }
+      const { signedAuthEntry } = await kit.signAuthEntry(preimageXdr, {
+        address: publicKey,
+        networkPassphrase: appNetworkPassphrase(),
+      });
+      return signedAuthEntry;
+    },
+    [publicKey],
+  );
+
   return (
     <WalletContext.Provider
       value={{
@@ -179,6 +202,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         connect,
         disconnect,
         signTransaction,
+        signAuthEntry,
       }}
     >
       {children}

@@ -4,6 +4,15 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Symbol, Vec,
 };
 
+mod delegation_sig;
+mod error;
+mod events;
+
+pub use delegation_sig::DelegationPermit;
+pub use error::TokenVotesError;
+
+#[cfg(test)]
+mod delegation_sig_tests;
 #[cfg(test)]
 mod load_tests;
 
@@ -37,6 +46,11 @@ pub enum DataKey {
     DelegatorRecord(Address),  // delegator -> DelegatorRecord
     TimeWeightEnabled,         // bool
     TimeWeightScale,           // u32
+    DomainSeparator,                  // BytesN<32>: cached at init
+    UsedNonce(Address, u64),          // (delegator, nonce) -> bool: replay protection
+    DelegationPermitExpiry(Address),  // delegator -> u32: latest permit expiry
+    RelayerWhitelist(Address),        // relayer -> bool: optional whitelist
+    RelayerWhitelistEnabled,          // bool
 }
 
 #[contract]
@@ -61,6 +75,11 @@ impl TokenVotesContract {
         env.storage()
             .instance()
             .set(&DataKey::TimeWeightScale, &4204800u32);
+        // Relayer whitelist is opt-in.
+        env.storage()
+            .instance()
+            .set(&DataKey::RelayerWhitelistEnabled, &false);
+        delegation_sig::init_domain_separator(&env);
     }
 
     /// Delegate voting power from caller to delegatee.
@@ -595,47 +614,118 @@ impl TokenVotesContract {
         checkpoints.get(low - 1).unwrap()
     }
 
-    /// Delegate voting power by signature (gasless for the token holder).
+    /// Delegate via an off-chain signed [`DelegationPermit`] (gasless for the
+    /// token holder). Callable by any relayer; the relayer pays the fee and
+    /// must authorize the call, but the permit itself is relayer-agnostic
+    /// (see delegation_sig.rs for why).
     ///
-    /// Uses Soroban's native authorization framework (`owner.require_auth()`) to
-    /// verify the delegation. This is the correct approach for Soroban contracts
-    /// because Address types do not directly expose the underlying Ed25519 public
-    /// key needed for manual `ed25519_verify` calls (see ADR-005).
-    ///
-    /// Replay protection is provided by the nonce (must equal the stored nonce,
-    /// then incremented) and expiry (checked against current ledger timestamp).
-    ///
-    /// # Arguments
-    /// * `owner`     - The token holder authorising the delegation
-    /// * `delegatee` - The address to delegate voting power to
-    /// * `nonce`     - Must equal the owner's current stored nonce
-    /// * `expiry`    - Ledger timestamp after which the signature is invalid
-    /// * `signature` - Ed25519 signature (verified via Soroban auth framework)
-    pub fn delegate_by_sig(
-        env: Env,
-        owner: Address,
-        delegatee: Address,
-        nonce: u64,
-        expiry: u64,
-        _signature: BytesN<64>,
-    ) {
-        // Verify expiry against current ledger timestamp
-        let current_time = env.ledger().timestamp();
-        assert!(current_time <= expiry, "signature expired");
+    /// Returns the delegator's new nonce.
+    pub fn delegate_by_sig(env: Env, relayer: Address, permit: DelegationPermit) -> u64 {
+        relayer.require_auth();
+        if !delegation_sig::is_relayer_allowed(&env, &relayer) {
+            env.panic_with_error(TokenVotesError::RelayerNotWhitelisted);
+        }
 
-        // Verify and increment nonce (prevent replay)
-        let nonce_key = DataKey::Nonce(owner.clone());
-        let stored_nonce: u64 = env.storage().persistent().get(&nonce_key).unwrap_or(0);
-        assert!(nonce == stored_nonce, "invalid nonce");
-        env.storage()
-            .persistent()
-            .set(&nonce_key, &(stored_nonce + 1));
+        let delegator = delegation_sig::verify_delegation_permit(&env, &permit);
+        Self::apply_delegation(&env, delegator.clone(), permit.delegatee.clone());
 
-        // Use Soroban's native auth framework for signature verification.
-        // This correctly handles Ed25519 keys, multisig, and smart-wallet accounts
-        // without needing to extract the raw public key from an Address.
-        owner.require_auth();
-        Self::apply_delegation(&env, owner, delegatee);
+        events::emit_delegated_by_sig(&env, &delegator, &permit.delegatee, &relayer, permit.nonce);
+        delegation_sig::current_nonce(&env, &delegator)
+    }
+
+    /// Batch-delegate via multiple signed permits in a single transaction.
+    /// Atomic: if any permit fails verification, the entire batch (including
+    /// permits already applied earlier in the loop) is rolled back.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `permits` is empty.
+    pub fn delegate_batch_by_sig(env: Env, relayer: Address, permits: Vec<DelegationPermit>) {
+        assert!(!permits.is_empty(), "permits must not be empty");
+        relayer.require_auth();
+        if !delegation_sig::is_relayer_allowed(&env, &relayer) {
+            env.panic_with_error(TokenVotesError::RelayerNotWhitelisted);
+        }
+
+        for permit in permits.iter() {
+            let delegator = delegation_sig::verify_delegation_permit(&env, &permit);
+            Self::apply_delegation(&env, delegator.clone(), permit.delegatee.clone());
+            events::emit_delegated_by_sig(
+                &env,
+                &delegator,
+                &permit.delegatee,
+                &relayer,
+                permit.nonce,
+            );
+        }
+    }
+
+    /// Revoke all outstanding signed permits for `delegator` by bumping their
+    /// nonce past anything they may have already signed. Only the delegator
+    /// themself may call this.
+    pub fn invalidate_all_permits(env: Env, delegator: Address) {
+        delegator.require_auth();
+        let new_nonce = delegation_sig::invalidate_all_permits(&env, &delegator);
+        events::emit_permits_invalidated(&env, &delegator, new_nonce);
+    }
+
+    /// Get the current (next expected) nonce for a delegator.
+    pub fn nonce(env: Env, delegator: Address) -> u64 {
+        delegation_sig::current_nonce(&env, &delegator)
+    }
+
+    /// Compute the domain separator for this contract instance.
+    pub fn domain_separator(env: Env) -> BytesN<32> {
+        delegation_sig::domain_separator(&env)
+    }
+
+    /// Compute the full signed-message hash for a permit, for client-side
+    /// verification/tooling parity. See delegation_sig.rs for why this is
+    /// informational and not itself the on-chain signature check.
+    pub fn compute_permit_hash(env: Env, permit: DelegationPermit) -> BytesN<32> {
+        delegation_sig::compute_permit_hash(&env, &permit)
+    }
+
+    /// Check whether a nonce has already been used by a delegator.
+    pub fn is_nonce_used(env: Env, delegator: Address, nonce: u64) -> bool {
+        delegation_sig::is_nonce_used(&env, &delegator, nonce)
+    }
+
+    /// The `expiry_ledger` of the most recently applied signed permit for
+    /// `delegator`, if any.
+    pub fn delegation_permit_expiry(env: Env, delegator: Address) -> Option<u32> {
+        delegation_sig::delegation_permit_expiry(&env, &delegator)
+    }
+
+    /// Admin: enable or disable the relayer whitelist.
+    pub fn set_relayer_whitelist_enabled(env: Env, admin: Address, enabled: bool) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        assert_eq!(admin, stored_admin, "unauthorized");
+        delegation_sig::set_relayer_whitelist_enabled(&env, enabled);
+    }
+
+    /// Admin: add or remove a relayer from the whitelist.
+    pub fn set_relayer_whitelisted(env: Env, admin: Address, relayer: Address, whitelisted: bool) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        assert_eq!(admin, stored_admin, "unauthorized");
+        delegation_sig::set_relayer_whitelisted(&env, &relayer, whitelisted);
+        events::emit_relayer_whitelist_updated(&env, &relayer, whitelisted);
+    }
+
+    /// Check if a relayer is whitelisted (or if the whitelist is disabled,
+    /// in which case every relayer is allowed).
+    pub fn is_relayer_allowed(env: Env, relayer: Address) -> bool {
+        delegation_sig::is_relayer_allowed(&env, &relayer)
     }
 
     /// Set the checkpoint retention period (admin only).
@@ -1745,114 +1835,10 @@ mod tests {
         assert!(pruned > 0, "expected some checkpoints pruned");
     }
 
-    // \u2014\u2014 delegate_by_sig tests (issue #216) \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014
-
-    /// Valid delegation via delegate_by_sig: correct nonce, unexpired, auth passes.
-    #[test]
-    fn test_delegate_by_sig_valid() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee = Address::generate(&env);
-
-        let (contract_id, token_addr) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
-        sac_client.mint(&owner, &1000i128);
-
-        // Set ledger timestamp so expiry is in the future
-        env.ledger().with_mut(|l| l.timestamp = 100);
-
-        let nonce = 0u64;
-        let expiry = 200u64;
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-
-        client.delegate_by_sig(&owner, &delegatee, &nonce, &expiry, &dummy_sig);
-
-        // Delegation should have been applied
-        assert_eq!(client.get_votes(&delegatee), 1000);
-        assert_eq!(client.delegates(&owner), Some(delegatee.clone()));
-    }
-
-    /// Expired signature must be rejected.
-    #[test]
-    #[should_panic(expected = "signature expired")]
-    fn test_delegate_by_sig_expired() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee = Address::generate(&env);
-
-        let (contract_id, _) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-
-        env.ledger().with_mut(|l| l.timestamp = 500);
-
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-        // expiry is in the past
-        client.delegate_by_sig(&owner, &delegatee, &0u64, &100u64, &dummy_sig);
-    }
-
-    /// Replayed nonce must be rejected.
-    #[test]
-    #[should_panic(expected = "invalid nonce")]
-    fn test_delegate_by_sig_replayed_nonce() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee = Address::generate(&env);
-
-        let (contract_id, token_addr) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
-        sac_client.mint(&owner, &500i128);
-
-        env.ledger().with_mut(|l| l.timestamp = 100);
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-
-        // First call with nonce=0 succeeds
-        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
-
-        // Second call with nonce=0 must fail (nonce is now 1)
-        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
-    }
-
-    /// Nonce is incremented after a successful delegate_by_sig call.
-    #[test]
-    fn test_delegate_by_sig_nonce_increments() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee1 = Address::generate(&env);
-        let delegatee2 = Address::generate(&env);
-
-        let (contract_id, token_addr) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
-        sac_client.mint(&owner, &300i128);
-
-        env.ledger().with_mut(|l| l.timestamp = 1);
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-
-        // nonce=0 succeeds
-        client.delegate_by_sig(&owner, &delegatee1, &0u64, &9999u64, &dummy_sig);
-        assert_eq!(client.get_votes(&delegatee1), 300);
-
-        env.ledger().with_mut(|l| l.sequence_number += 1);
-
-        // nonce=1 succeeds (re-delegation)
-        client.delegate_by_sig(&owner, &delegatee2, &1u64, &9999u64, &dummy_sig);
-        assert_eq!(client.get_votes(&delegatee1), 0);
-        assert_eq!(client.get_votes(&delegatee2), 300);
-    }
+    // Old delegate_by_sig tests (issue #216) removed: delegate_by_sig was
+    // replaced by the DelegationPermit-based flow in issue #772 (see
+    // delegation_sig_tests.rs for equivalent + expanded coverage of the new
+    // signature, expiry, and nonce-replay behavior).
 
     #[test]
     fn test_new_delegator_start_ledger_is_current_ledger() {
