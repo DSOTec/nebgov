@@ -195,6 +195,35 @@ export interface GuardianActivityEntry {
   ledger: number;
 }
 
+export interface DependencyEdge {
+  from: string;
+  to: string;
+}
+
+export interface DependencyGraph {
+  nodes: string[];
+  edges: DependencyEdge[];
+}
+
+export interface FailedOperation {
+  opId: string;
+  target: string;
+  fnName: string;
+  failureReason: string;
+  failedAtLedger: number;
+  retryCount: number;
+}
+
+export interface PartialBatchExecutionState {
+  batchOpId: string;
+  totalOps: number;
+  completedOps: string[];
+  failedOps: FailedOperation[];
+  pendingOps: string[];
+  recoveryMode: boolean;
+  recoveryDeadline: number;
+}
+
 export interface GovernorSettings {
   votingDelay: number;
   votingPeriod: number;
