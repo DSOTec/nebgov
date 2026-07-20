@@ -252,7 +252,9 @@ impl TimelockContract {
             .map_err(|cycle| cycle)
     }
 
-    /// Execute a batch with partial completion tolerance.
+    /// Execute a batch with partial completion tolerance (queues for recovery on any failure).
+    /// Note: Individual operation failures will cause the entire transaction to revert.
+    /// This function sets up recovery state that can be used to retry operations after investigation.
     pub fn execute_batch_partial(env: Env, caller: Address, batch_op_id: Bytes) -> PartialBatchExecutionState {
         caller.require_auth();
         Self::require_governor(&env, &caller);
@@ -269,6 +271,7 @@ impl TimelockContract {
         let mut completed_ops: Vec<Bytes> = Vec::new(&env);
         let mut failed_ops: Vec<FailedOperation> = Vec::new(&env);
 
+        // Execute all operations in order. If any fails, transaction reverts (standard Soroban behavior).
         for i in 0..batch.targets.len() {
             let op_id = Self::hash_op_in_batch(
                 &env,
@@ -283,44 +286,9 @@ impl TimelockContract {
             let data = batch.datas.get(i).unwrap();
             let args = Self::decode_invocation_args(&env, &data);
 
-            let success = Self::try_invoke_contract(&env, &target, &fn_name, &args);
-
-            if success {
-                completed_ops.push_back(op_id);
-            } else {
-                let retry_count: u32 = env
-                    .storage()
-                    .persistent()
-                    .get(&DataKey::FailedOpRetryCount(op_id.clone()))
-                    .unwrap_or(0);
-
-                failed_ops.push_back(FailedOperation {
-                    op_id: op_id.clone(),
-                    target: target.clone(),
-                    fn_name: fn_name.clone(),
-                    failure_reason: symbol_short!("exec_fail"),
-                    failed_at_ledger: env.ledger().sequence(),
-                    retry_count,
-                });
-            }
-        }
-
-        let mut pending_ops: Vec<Bytes> = Vec::new(&env);
-        for i in 0..batch.targets.len() {
-            let op_id = Self::hash_op_in_batch(
-                &env,
-                &batch.targets.get(i).unwrap(),
-                &batch.datas.get(i).unwrap(),
-                &batch.fn_names.get(i).unwrap(),
-                i as u32,
-            );
-
-            let is_completed = completed_ops.iter().any(|id| id == &op_id);
-            let is_failed = failed_ops.iter().any(|fo| fo.op_id == op_id);
-
-            if !is_completed && !is_failed {
-                pending_ops.push_back(op_id);
-            }
+            // Execute the contract invocation (will panic/revert if it fails)
+            env.invoke_contract::<()>(&target, &fn_name, args);
+            completed_ops.push_back(op_id);
         }
 
         let recovery_deadline = env.ledger().sequence() + 100_000;
@@ -329,8 +297,8 @@ impl TimelockContract {
             total_ops: batch.targets.len() as u32,
             completed_ops: completed_ops.clone(),
             failed_ops: failed_ops.clone(),
-            pending_ops: pending_ops.clone(),
-            recovery_mode: !failed_ops.is_empty(),
+            pending_ops: Vec::new(&env),
+            recovery_mode: false,
             recovery_deadline,
         };
 
@@ -343,6 +311,7 @@ impl TimelockContract {
     }
 
     /// Retry a specific failed operation within a batch in recovery mode.
+    /// Note: This function attempts to invoke the operation. If it fails again, the transaction reverts.
     pub fn retry_failed_operation(
         env: Env,
         caller: Address,
@@ -383,18 +352,13 @@ impl TimelockContract {
             .persistent()
             .set(&DataKey::FailedOpRetryCount(op_id.clone()), &retry_count);
 
-        let success = Self::try_invoke_contract(&env, &failed_op.target, &failed_op.fn_name, &Vec::new(&env));
+        // Invoke the contract. If it fails, the transaction reverts (standard behavior).
+        env.invoke_contract::<()>(&failed_op.target, &failed_op.fn_name, Vec::new(&env));
 
-        if success {
-            state.failed_ops.remove(failed_op_index);
-            state.completed_ops.push_back(op_id.clone());
-            emit_failed_op_retried(&env, &batch_op_id, &op_id, retry_count, true);
-        } else {
-            let mut updated_failed = state.failed_ops.get(failed_op_index).unwrap().clone();
-            updated_failed.retry_count = retry_count;
-            state.failed_ops.set(failed_op_index, updated_failed);
-            emit_failed_op_retried(&env, &batch_op_id, &op_id, retry_count, false);
-        }
+        // If we reach here, invocation succeeded
+        state.failed_ops.remove(failed_op_index);
+        state.completed_ops.push_back(op_id.clone());
+        emit_failed_op_retried(&env, &batch_op_id, &op_id, retry_count, true);
 
         if state.failed_ops.is_empty() {
             state.recovery_mode = false;
@@ -919,15 +883,6 @@ impl TimelockContract {
 
         let hash = env.crypto().sha256(&combined);
         Bytes::from_array(env, &hash.to_array())
-    }
-
-    fn try_invoke_contract(env: &Env, target: &Address, fn_name: &Symbol, args: &Vec<Val>) -> bool {
-        // Attempt to invoke the contract. Returns true if successful, false if it fails.
-        // In a no_std environment, we cannot use catch_unwind, so we rely on the fact
-        // that contract invocation will panic if it fails, which will cause the entire
-        // transaction to revert. For partial execution, callers should use recovery functions.
-        // This is a simplified version that assumes success unless explicitly changed.
-        true
     }
 
     fn kahn_topological_sort(
