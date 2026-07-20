@@ -7,6 +7,7 @@ members = [
     "contracts/treasury",
     "contracts/liquidity",
     "contracts/token-votes-wrapper",
+    "contracts/co-sponsorship",
 ]
 exclude = ["fuzz"]
 resolver = "2"

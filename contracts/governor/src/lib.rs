@@ -189,6 +189,8 @@ pub struct GovernorSettings {
     pub max_proposals_per_period: u32,
     /// Period duration in ledgers for proposal rate limiting.
     pub proposal_period_duration: u32,
+    /// Trusted external contract authorized to call `propose_via_registry`.
+    pub co_sponsorship_registry: Option<Address>,
 }
 
 /// Estimated resource cost for executing a proposal.
@@ -323,6 +325,9 @@ pub enum DataKey {
     ProposalList,
     /// Current storage schema version (for migration tracking).
     StorageVersion,
+    /// Address of the trusted co-sponsorship registry contract authorized
+    /// to call `propose_via_registry`, if one has been configured.
+    CoSponsorshipRegistry,
 }
 
 #[contract]
@@ -635,6 +640,38 @@ impl GovernorContract {
             .set(&DataKey::MaxProposalsPerPeriod, &max_proposals_per_period);
     }
 
+    /// Validate an action payload's shape: matching vector lengths, at
+    /// least one target, and calldata size/count within configured limits.
+    /// Shared by [`Self::propose`] and [`Self::propose_via_registry`].
+    fn validate_action(env: &Env, targets: &Vec<Address>, fn_names: &Vec<Symbol>, calldatas: &Vec<Bytes>) {
+        if !(targets.len() == fn_names.len() && targets.len() == calldatas.len()) {
+            env.panic_with_error(GovernorError::InvalidVectorLengths);
+        }
+        if targets.is_empty() {
+            env.panic_with_error(GovernorError::NoTargets);
+        }
+
+        let max_calldata_size: u32 = env
+            .storage()
+            .instance()
+            .get(&DataKey::MaxCalldataSize)
+            .unwrap_or(10_000);
+        for i in 0..calldatas.len() {
+            let calldata = calldatas.get(i).unwrap();
+            if calldata.len() > max_calldata_size {
+                env.panic_with_error(GovernorError::CalldataTooLarge);
+            }
+        }
+
+        // MaxCalldataSize bounds each entry's byte size but not the *count* of
+        // entries — without this, a proposal with many tiny entries could
+        // exhaust the compute budget when execute() dispatches every one.
+        const MAX_CALLDATA_COUNT: u32 = 10;
+        if calldatas.len() > MAX_CALLDATA_COUNT {
+            env.panic_with_error(GovernorError::TooManyCalldataEntries);
+        }
+    }
+
     /// Create a new governance proposal.
     ///
     /// `targets` and `calldatas` specify the on-chain actions to execute if
@@ -656,42 +693,93 @@ impl GovernorContract {
         calldatas: Vec<Bytes>,
     ) -> u64 {
         proposer.require_auth();
+        Self::validate_action(&env, &targets, &fn_names, &calldatas);
 
-        // Validate all vectors have the same length
-        if !(targets.len() == fn_names.len() && targets.len() == calldatas.len()) {
-            env.panic_with_error(GovernorError::InvalidVectorLengths);
-        }
-        if targets.is_empty() {
-            env.panic_with_error(GovernorError::NoTargets);
-        }
+        // Get the voting power of the proposer (strategy-aware)
+        let proposer_votes = Self::compute_proposer_votes(&env, &proposer);
 
-        // Validate calldata size limits (Issue #186)
-        let max_calldata_size: u32 = env
+        // Enforce proposal threshold
+        let threshold: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::MaxCalldataSize)
-            .unwrap_or(10_000);
-        for i in 0..calldatas.len() {
-            let calldata = calldatas.get(i).unwrap();
-            if calldata.len() > max_calldata_size {
-                env.panic_with_error(GovernorError::CalldataTooLarge);
-            }
+            .get(&DataKey::ProposalThreshold)
+            .unwrap_or(0);
+
+        if proposer_votes < threshold {
+            env.panic_with_error(GovernorError::ProposalThresholdNotMet);
         }
 
-        // Validate calldata count (Issue #447)
-        //
-        // MaxCalldataSize limits the byte size of each individual calldata entry,
-        // but does not bound the *number* of entries.  A proposal with thousands
-        // of tiny entries would pass the size check yet exhaust the Soroban
-        // compute budget when execute() iterates and dispatches every entry.
-        //
-        // 10 is a conservative upper bound that covers all realistic batch
-        // governance proposals while preventing compute-exhaustion attacks.
-        const MAX_CALLDATA_COUNT: u32 = 10;
-        if calldatas.len() > MAX_CALLDATA_COUNT {
-            env.panic_with_error(GovernorError::TooManyCalldataEntries);
+        Self::create_proposal_internal(
+            &env,
+            &proposer,
+            description,
+            description_hash,
+            metadata_uri,
+            targets,
+            fn_names,
+            calldatas,
+        )
+    }
+
+    /// Create a proposal on behalf of a trusted external "registry" contract
+    /// that has already verified sufficient aggregate support for `proposer`
+    /// through its own mechanism (e.g. a co-sponsorship system pooling
+    /// voting power from multiple addresses) — bypassing the single-address
+    /// `proposal_threshold` check that [`Self::propose`] enforces.
+    ///
+    /// Only callable by the address configured via
+    /// [`Self::set_co_sponsorship_registry`]. Soroban's invoker-auth model
+    /// means `registry.require_auth()` succeeds automatically when `registry`
+    /// is the contract directly invoking this call — the same pattern this
+    /// contract already relies on when calling the Timelock as itself (see
+    /// `queue`/`execute`), so no explicit signature is needed beyond that.
+    #[allow(clippy::too_many_arguments)]
+    pub fn propose_via_registry(
+        env: Env,
+        registry: Address,
+        proposer: Address,
+        description: String,
+        description_hash: BytesN<32>,
+        metadata_uri: String,
+        targets: Vec<Address>,
+        fn_names: Vec<Symbol>,
+        calldatas: Vec<Bytes>,
+    ) -> u64 {
+        registry.require_auth();
+        let configured: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::CoSponsorshipRegistry)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::UnauthorizedRegistry));
+        if registry != configured {
+            env.panic_with_error(GovernorError::UnauthorizedRegistry);
         }
 
+        Self::validate_action(&env, &targets, &fn_names, &calldatas);
+
+        Self::create_proposal_internal(
+            &env,
+            &proposer,
+            description,
+            description_hash,
+            metadata_uri,
+            targets,
+            fn_names,
+            calldatas,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn create_proposal_internal(
+        env: &Env,
+        proposer: &Address,
+        description: String,
+        description_hash: BytesN<32>,
+        metadata_uri: String,
+        targets: Vec<Address>,
+        fn_names: Vec<Symbol>,
+        calldatas: Vec<Bytes>,
+    ) -> u64 {
         // Rate limiting checks (Issue #188)
         let current_ledger = env.ledger().sequence();
 
@@ -737,20 +825,6 @@ impl GovernorContract {
             env.panic_with_error(GovernorError::ProposalRateLimited);
         }
 
-        // Get the voting power of the proposer (strategy-aware)
-        let proposer_votes = Self::compute_proposer_votes(&env, &proposer);
-
-        // Enforce proposal threshold
-        let threshold: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ProposalThreshold)
-            .unwrap_or(0);
-
-        if proposer_votes < threshold {
-            env.panic_with_error(GovernorError::ProposalThresholdNotMet);
-        }
-
         let count: u64 = env
             .storage()
             .instance()
@@ -787,14 +861,14 @@ impl GovernorContract {
             executed: false,
             cancelled: false,
             queued: false,
-            op_ids: Vec::new(&env),
+            op_ids: Vec::new(env),
         };
 
         env.storage()
             .persistent()
             .set(&DataKey::Proposal(proposal_id), &proposal);
         // Extend TTL to cover full proposal lifecycle
-        Self::extend_proposal_ttl(&env, proposal_id, &proposal);
+        Self::extend_proposal_ttl(env, proposal_id, &proposal);
         env.storage()
             .instance()
             .set(&DataKey::ProposalCount, &proposal_id);
@@ -803,7 +877,7 @@ impl GovernorContract {
             .storage()
             .persistent()
             .get(&DataKey::ProposalList)
-            .unwrap_or(Vec::new(&env));
+            .unwrap_or(Vec::new(env));
         proposal_list.push_back(proposal_id);
         env.storage()
             .persistent()
@@ -848,7 +922,7 @@ impl GovernorContract {
             period_duration.saturating_add(1000),
         );
 
-        events::emit_proposal_created(&env, &proposal);
+        events::emit_proposal_created(env, &proposal);
 
         proposal_id
     }
@@ -1769,6 +1843,10 @@ impl GovernorContract {
                 .instance()
                 .get(&DataKey::ProposalPeriodDuration)
                 .unwrap_or(10_000),
+            co_sponsorship_registry: env
+                .storage()
+                .instance()
+                .get(&DataKey::CoSponsorshipRegistry),
         }
     }
 
@@ -1862,6 +1940,16 @@ impl GovernorContract {
                 .instance()
                 .set(&DataKey::ReflectorOracle, addr),
             None => env.storage().instance().remove(&DataKey::ReflectorOracle),
+        }
+        match new_settings.co_sponsorship_registry {
+            Some(ref addr) => env
+                .storage()
+                .instance()
+                .set(&DataKey::CoSponsorshipRegistry, addr),
+            None => env
+                .storage()
+                .instance()
+                .remove(&DataKey::CoSponsorshipRegistry),
         }
 
         events::emit_config_updated(&env, &old_settings, &new_settings);

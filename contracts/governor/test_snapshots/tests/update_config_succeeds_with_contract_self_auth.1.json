@@ -73,6 +73,12 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "co_sponsorship_registry"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
                         "symbol": "guardian"
                       },
                       "val": {

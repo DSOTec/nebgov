@@ -47,4 +47,5 @@ pub enum GovernorError {
     BatchProposalNotQueued = 41,
     ProposalAlreadyCancelled = 42,
     InvalidVoteChoice = 43,
+    UnauthorizedRegistry = 44,
 }

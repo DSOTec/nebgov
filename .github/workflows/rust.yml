@@ -44,7 +44,8 @@ jobs:
             -p sorogov-token-votes \
             -p sorogov-governor-factory \
             -p sorogov-treasury \
-            -p sorogov-liquidity
+            -p sorogov-liquidity \
+            -p sorogov-co-sponsorship
 
       - name: Run tests
         run: |
@@ -54,6 +55,7 @@ jobs:
             -p sorogov-token-votes \
             -p sorogov-governor-factory \
             -p sorogov-liquidity \
+            -p sorogov-co-sponsorship \
             -p sorogov-token-votes-wrapper
 
       - name: Install cargo-llvm-cov
@@ -105,7 +107,8 @@ jobs:
             -p sorogov-token-votes \
             -p sorogov-governor-factory \
             -p sorogov-treasury \
-            -p sorogov-liquidity
+            -p sorogov-liquidity \
+            -p sorogov-co-sponsorship
 
       - name: Run clippy
         run: |
@@ -115,6 +118,7 @@ jobs:
             -p sorogov-token-votes \
             -p sorogov-governor-factory \
             -p sorogov-liquidity \
+            -p sorogov-co-sponsorship \
             -p sorogov-token-votes-wrapper \
             --all-targets \
             -- -D warnings
@@ -153,7 +157,8 @@ jobs:
             -p sorogov-token-votes \
             -p sorogov-governor-factory \
             -p sorogov-treasury \
-            -p sorogov-liquidity
+            -p sorogov-liquidity \
+            -p sorogov-co-sponsorship
 
       - name: Check contract WASM sizes
         run: |
