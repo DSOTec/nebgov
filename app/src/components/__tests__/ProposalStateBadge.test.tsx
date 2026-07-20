@@ -25,7 +25,8 @@ describe("ProposalStateBadge", () => {
     expect(tree).toBeTruthy();
     expect(tree).toHaveProperty("type", "span");
     expect(tree).toHaveProperty("children");
-    expect(Array.isArray(tree.children)).toBe(true);
-    expect(tree.children.length).toBeGreaterThan(0);
+    const json = Array.isArray(tree) ? tree[0] : tree;
+    expect(Array.isArray(json?.children)).toBe(true);
+    expect((json?.children as unknown[]).length).toBeGreaterThan(0);
   });
 });

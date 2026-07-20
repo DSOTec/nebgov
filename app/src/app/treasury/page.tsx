@@ -356,7 +356,15 @@ export default function TreasuryPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-8">Treasury</h1>
+      <div className="flex items-center justify-between mb-8">
+        <h1 className="text-3xl font-bold text-gray-900">Treasury</h1>
+        <a
+          href="/treasury/streams"
+          className="text-sm text-indigo-600 hover:text-indigo-700 hover:underline"
+        >
+          Budget Streams →
+        </a>
+      </div>
 
       {error && (
         <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">

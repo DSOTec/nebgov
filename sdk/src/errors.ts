@@ -334,6 +334,19 @@ export enum TreasuryErrorCode {
   SingleTransferExceeded = 1,
   DailyLimitExceeded     = 2,
 
+  // Stream errors (match on-chain TreasuryError enum)
+  StreamNotFound = 10,
+  StreamNotActive = 11,
+  StreamExpired = 12,
+  StreamRevoked = 13,
+  StreamBudgetExhausted = 14,
+  StreamSpendExceedsMax = 15,
+  StreamCooldownNotElapsed = 16,
+  UnauthorizedStreamOwner = 17,
+  InsufficientTreasuryBalance = 18,
+  StreamAlreadyRevoked = 19,
+  StreamEndBeforeStart = 20,
+
   // SDK-level codes
   SimulationFailed = 100,
   TransactionFailed = 101,
@@ -347,6 +360,17 @@ const TREASURY_MESSAGES: Record<TreasuryErrorCode, string> = {
     "Transfer exceeds the maximum allowed single-transfer amount",
   [TreasuryErrorCode.DailyLimitExceeded]:
     "Transfer exceeds the configured daily treasury limit",
+  [TreasuryErrorCode.StreamNotFound]: "Budget stream not found",
+  [TreasuryErrorCode.StreamNotActive]: "Budget stream is not active",
+  [TreasuryErrorCode.StreamExpired]: "Budget stream has expired",
+  [TreasuryErrorCode.StreamRevoked]: "Budget stream has been revoked",
+  [TreasuryErrorCode.StreamBudgetExhausted]: "Budget stream has no remaining funds",
+  [TreasuryErrorCode.StreamSpendExceedsMax]: "Spend exceeds the maximum single spend for a stream",
+  [TreasuryErrorCode.StreamCooldownNotElapsed]: "Cooldown period between spends has not elapsed",
+  [TreasuryErrorCode.UnauthorizedStreamOwner]: "Caller is not the authorized stream owner",
+  [TreasuryErrorCode.InsufficientTreasuryBalance]: "Treasury has insufficient balance for the stream spend",
+  [TreasuryErrorCode.StreamAlreadyRevoked]: "Stream has already been revoked",
+  [TreasuryErrorCode.StreamEndBeforeStart]: "Stream end ledger is before start ledger",
   [TreasuryErrorCode.SimulationFailed]: "Simulation failed",
   [TreasuryErrorCode.TransactionFailed]: "Transaction failed",
   [TreasuryErrorCode.TransactionTimeout]: "Transaction timed out",

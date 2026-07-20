@@ -3,8 +3,12 @@
 use soroban_sdk::xdr::{FromXdr, ToXdr};
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, token,
-    Address, Bytes, Env, Symbol, Val, Vec,
+    Address, Bytes, Env, String, Symbol, Val, Vec,
 };
+
+mod streams;
+
+pub use streams::{BudgetStream, StreamBudgetReport, StreamSpend, TreasuryBudgetSummary};
 
 const DEFAULT_PENDING_EXPIRY_LEDGERS: u32 = 17_280;
 const TX_STORAGE_TTL_LEDGERS: u32 = 518_400;
@@ -17,6 +21,28 @@ pub enum TreasuryError {
     SingleTransferExceeded = 1,
     /// Proposed transfer would cause daily transfer total to exceed the daily limit.
     DailyLimitExceeded = 2,
+    /// Budget stream not found.
+    StreamNotFound = 10,
+    /// Budget stream is not active.
+    StreamNotActive = 11,
+    /// Budget stream has expired.
+    StreamExpired = 12,
+    /// Budget stream has been revoked.
+    StreamRevoked = 13,
+    /// Budget stream has no remaining funds.
+    StreamBudgetExhausted = 14,
+    /// Spend exceeds the maximum single spend for a stream.
+    StreamSpendExceedsMax = 15,
+    /// Cooldown period between spends has not elapsed.
+    StreamCooldownNotElapsed = 16,
+    /// Caller is not the authorized stream owner.
+    UnauthorizedStreamOwner = 17,
+    /// Treasury has insufficient balance for the stream spend.
+    InsufficientTreasuryBalance = 18,
+    /// Stream has already been revoked.
+    StreamAlreadyRevoked = 19,
+    /// Stream end ledger is before start ledger.
+    StreamEndBeforeStart = 20,
 }
 
 /// A treasury transaction proposal.
@@ -98,6 +124,20 @@ pub enum DataKey {
     PendingOwner,
 }
 
+/// Storage keys for budget streams.
+#[contracttype]
+pub enum StreamDataKey {
+    Stream(u64),
+    StreamCount,
+    StreamList,
+    ActiveStreams,
+    StreamsByOwner(Address),
+    StreamsByToken(Address),
+    StreamSpends(u64),
+    StreamSpendCount(u64),
+    TotalStreamedByToken(Address),
+}
+
 #[contractclient(name = "TreasuryClient")]
 pub trait TreasuryTrait {
     fn approve(env: Env, approver: Address, tx_id: u64);
@@ -170,12 +210,8 @@ impl TreasuryContract {
             .get(&DataKey::PendingOwner)
             .expect("no pending owner");
         pending.require_auth();
-        env.storage()
-            .instance()
-            .set(&DataKey::Governor, &pending);
-        env.storage()
-            .instance()
-            .remove(&DataKey::PendingOwner);
+        env.storage().instance().set(&DataKey::Governor, &pending);
+        env.storage().instance().remove(&DataKey::PendingOwner);
         env.events()
             .publish((Symbol::new(&env, "OwnershipTransferred"),), (pending,));
     }
@@ -814,6 +850,121 @@ impl TreasuryContract {
             }
         }
         false
+    }
+
+    // ── Budget Stream functions ────────────────────────────────────────────
+
+    /// Governance-gated: allocate a new budget stream to a department owner.
+    pub fn create_stream(
+        env: Env,
+        caller: Address,
+        name: Symbol,
+        owner: Address,
+        token: Address,
+        total_allocated: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+        max_single_spend: i128,
+        cooldown_ledgers: u32,
+        proposal_id: u64,
+    ) -> u64 {
+        streams::create_stream(
+            env,
+            caller,
+            name,
+            owner,
+            token,
+            total_allocated,
+            start_ledger,
+            end_ledger,
+            max_single_spend,
+            cooldown_ledgers,
+            proposal_id,
+        )
+    }
+
+    /// Stream owner: spend from an allocated stream.
+    pub fn stream_spend(
+        env: Env,
+        owner: Address,
+        stream_id: u64,
+        recipient: Address,
+        amount: i128,
+        memo: String,
+    ) {
+        streams::stream_spend(env, owner, stream_id, recipient, amount, memo);
+    }
+
+    /// Batch spend from a stream to multiple recipients.
+    pub fn stream_batch_spend(
+        env: Env,
+        owner: Address,
+        stream_id: u64,
+        recipients: Vec<Address>,
+        amounts: Vec<i128>,
+        memo: String,
+    ) {
+        streams::stream_batch_spend(env, owner, stream_id, recipients, amounts, memo);
+    }
+
+    /// Governance-gated: revoke an active stream and return unspent funds to treasury.
+    pub fn revoke_stream(env: Env, caller: Address, stream_id: u64) {
+        streams::revoke_stream(env, caller, stream_id);
+    }
+
+    /// Governance-gated: extend a stream's end_ledger.
+    pub fn extend_stream(env: Env, caller: Address, stream_id: u64, new_end_ledger: u32) {
+        streams::extend_stream(env, caller, stream_id, new_end_ledger);
+    }
+
+    /// Governance-gated: top up an existing stream's allocated budget.
+    pub fn top_up_stream(env: Env, caller: Address, stream_id: u64, additional_amount: i128) {
+        streams::top_up_stream(env, caller, stream_id, additional_amount);
+    }
+
+    /// Query: get a stream by ID.
+    pub fn get_stream(env: Env, stream_id: u64) -> BudgetStream {
+        streams::get_stream(env, stream_id)
+    }
+
+    /// Query: get paginated list of streams.
+    pub fn get_streams(env: Env, offset: u64, limit: u64) -> Vec<BudgetStream> {
+        streams::get_streams(env, offset, limit)
+    }
+
+    /// Query: get streams by owner (paginated).
+    pub fn get_streams_by_owner(
+        env: Env,
+        owner: Address,
+        offset: u64,
+        limit: u64,
+    ) -> Vec<BudgetStream> {
+        streams::get_streams_by_owner(env, owner, offset, limit)
+    }
+
+    /// Query: get spend history for a stream (paginated).
+    pub fn get_stream_spends(
+        env: Env,
+        stream_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<StreamSpend> {
+        streams::get_stream_spends(env, stream_id, offset, limit)
+    }
+
+    /// Query: get budget report for a specific stream.
+    pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
+        streams::get_stream_report(env, stream_id)
+    }
+
+    /// Query: get treasury-wide budget summary.
+    pub fn get_budget_summary(env: Env) -> TreasuryBudgetSummary {
+        streams::get_budget_summary(env)
+    }
+
+    /// Query: compute remaining budget for a stream at the current ledger.
+    pub fn get_stream_remaining(env: Env, stream_id: u64) -> i128 {
+        streams::get_stream_remaining(env, stream_id)
     }
 }
 
@@ -1813,3 +1964,6 @@ mod tests {
         assert_eq!(client.get_spending_remaining(&token_addr), 500i128);
     }
 }
+
+#[cfg(test)]
+mod stream_tests;

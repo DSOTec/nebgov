@@ -20,7 +20,6 @@ import {
   CartesianGrid,
 } from "recharts";
 import { useGovernorConfig } from "@/hooks/useGovernorConfig";
-} from "recharts";
 import { isValidStellarAddress, formatVotingPower } from "../../../lib/utils";
 
 interface VotingRecord {

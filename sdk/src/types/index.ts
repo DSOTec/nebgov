@@ -327,6 +327,81 @@ export interface SpendingCap {
   periodLedgers: number;
 }
 
+// ─── Treasury Budget Stream Types ─────────────────────────────────────────────
+
+/** On-chain budget stream allocated to a department owner. */
+export interface BudgetStream {
+  id: bigint;
+  name: string;
+  owner: string;
+  token: string;
+  totalAllocated: bigint;
+  totalSpent: bigint;
+  startLedger: number;
+  endLedger: number;
+  isActive: boolean;
+  isRevoked: boolean;
+  revokedAtLedger: number | null;
+  maxSingleSpend: bigint;
+  cooldownLedgers: number;
+  lastSpendLedger: number;
+  spendCount: number;
+  createdByProposalId: bigint;
+}
+
+/** A single spend record from a budget stream. */
+export interface StreamSpend {
+  streamId: bigint;
+  spendIndex: number;
+  recipient: string;
+  amount: bigint;
+  memo: string;
+  executedAtLedger: number;
+  executedBy: string;
+}
+
+/** Budget utilization report for a single stream. */
+export interface StreamBudgetReport {
+  streamId: bigint;
+  name: string;
+  totalAllocated: bigint;
+  totalSpent: bigint;
+  remaining: bigint;
+  utilizationBps: number;
+  isActive: boolean;
+  daysRemaining: number;
+  spendCount: number;
+  avgSpend: bigint;
+}
+
+/** Treasury-wide budget summary across all streams. */
+export interface TreasuryBudgetSummary {
+  totalStreams: number;
+  activeStreams: number;
+  totalAllocatedByToken: Array<{ token: string; amount: bigint }>;
+  totalSpentByToken: Array<{ token: string; amount: bigint }>;
+  totalRemainingByToken: Array<{ token: string; amount: bigint }>;
+}
+
+/** Parameters for creating a new budget stream. */
+export interface CreateStreamParams {
+  name: string;
+  owner: string;
+  token: string;
+  totalAllocated: bigint;
+  startLedger: number;
+  endLedger: number;
+  maxSingleSpend: bigint;
+  cooldownLedgers: number;
+  proposalId: bigint;
+}
+
+/** Pagination options for query methods. */
+export interface PaginationOptions {
+  offset?: number;
+  limit?: number;
+}
+
 export interface LiquidityConfig {
   /** Contract address of the liquidity pool contract */
   liquidityAddress: string;
