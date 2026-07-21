@@ -808,5 +808,90 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
+  // GET /drafts?status=active&page=1&limit=20 — co-sponsorship drafts
+  app.get("/drafts", async (req: Request, res: Response): Promise<void> => {
+    const limit = Math.min(Number(req.query.limit ?? 20), 100);
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const status = req.query.status ? String(req.query.status).trim() : undefined;
+    const key = `drafts:list:${status ?? ""}:${page}:${limit}`;
+
+    try {
+      const conditions: string[] = [];
+      if (status === "active") {
+        conditions.push("finalized = false AND cancelled = false");
+      } else if (status === "finalized") {
+        conditions.push("finalized = true");
+      } else if (status === "cancelled") {
+        conditions.push("cancelled = true");
+      }
+      const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
+
+      const data = await cached(key, TTL.proposals, async () => {
+        const result = await pool.query(
+          `SELECT * FROM drafts ${whereClause} ORDER BY draft_id DESC LIMIT $1 OFFSET $2`,
+          [limit, (page - 1) * limit],
+        );
+        return {
+          data: result.rows,
+          pagination: { page, limit, hasMore: result.rows.length === limit },
+        };
+      });
+      res.json(data);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /drafts/by-creator/:address
+  app.get(
+    "/drafts/by-creator/:address",
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT * FROM drafts WHERE creator_address = $1 ORDER BY draft_id DESC`,
+          [address],
+        );
+        res.json({ data: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /drafts/:id
+  app.get("/drafts/:id", async (req: Request, res: Response): Promise<void> => {
+    const draftId = req.params.id;
+    try {
+      const result = await pool.query(`SELECT * FROM drafts WHERE draft_id = $1`, [
+        draftId,
+      ]);
+      if (!result.rows[0]) {
+        res.status(404).json({ error: "Draft not found" });
+        return;
+      }
+      res.json(result.rows[0]);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /drafts/:id/co-sponsors
+  app.get(
+    "/drafts/:id/co-sponsors",
+    async (req: Request, res: Response): Promise<void> => {
+      const draftId = req.params.id;
+      try {
+        const result = await pool.query(
+          `SELECT * FROM draft_co_sponsors WHERE draft_id = $1 AND withdrawn = false ORDER BY pledged_at_ledger ASC`,
+          [draftId],
+        );
+        res.json({ data: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   return app;
 }

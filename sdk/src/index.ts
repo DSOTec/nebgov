@@ -23,6 +23,7 @@ export { TreasuryClient } from "./treasury";
 export { LiquidityClient } from "./liquidity";
 export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
+export { CoSponsorshipClient } from "./coSponsorship";
 export {
   GovernorError,
   GovernorErrorCode,
@@ -32,10 +33,13 @@ export {
   VotesErrorCode,
   TreasuryError,
   TreasuryErrorCode,
+  CoSponsorshipError,
+  CoSponsorshipErrorCode,
   parseGovernorError,
   parseTimelockError,
   parseVotesError,
   parseTreasuryError,
+  parseCoSponsorshipError,
   extractContractErrorCode,
 } from "./errors";
 export type { SorobanRpcError } from "./errors";

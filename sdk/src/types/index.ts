@@ -89,6 +89,44 @@ export interface ProposalInput {
   calldata: Buffer | Uint8Array;
 }
 
+/**
+ * A co-sponsorship pre-proposal, awaiting enough pledged voting power to
+ * meet the governor's proposal threshold before being promoted into a real
+ * governor proposal via `CoSponsorshipClient.finalizeDraft`.
+ */
+export interface ProposalDraft {
+  /** Unique numeric identifier assigned at creation. */
+  id: bigint;
+  /** Stellar address that created the draft. */
+  creator: string;
+  /** Human-readable summary. */
+  description: string;
+  /** SHA-256 hash of the off-chain description content. */
+  descriptionHash: string;
+  /** URI pointing to the full proposal description content. */
+  metadataUri: string;
+  /** Contract addresses that will be invoked if the draft is finalized. */
+  targets: string[];
+  /** Function names invoked on each target. */
+  fnNames: string[];
+  /** ABI-encoded calldata for each target. */
+  calldatas: (Buffer | Uint8Array)[];
+  /** Ledger sequence at which the draft was created. */
+  createdLedger: number;
+  /** Ledger sequence after which the draft can no longer be co-sponsored or finalized. */
+  expiryLedger: number;
+  /** Addresses that have pledged voting power to this draft. */
+  coSponsors: string[];
+  /** Voting power pledged by each address in `coSponsors`, same order. */
+  coSponsorPower: bigint[];
+  /** Sum of all pledged co-sponsor voting power. */
+  totalPower: bigint;
+  /** Whether the draft has been promoted into a real proposal. */
+  finalized: boolean;
+  /** Whether the draft was cancelled. */
+  cancelled: boolean;
+}
+
 /** Aggregated vote tallies for a proposal. */
 export interface ProposalVotes {
   /** Total tokens cast in favour. */
@@ -106,6 +144,8 @@ export interface GovernorConfig {
   timelockAddress: string;
   /** Contract address of the token-votes contract */
   votesAddress: string;
+  /** Contract address of the co-sponsorship registry, if deployed */
+  coSponsorshipAddress?: string;
   /** Stellar network to connect to */
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
