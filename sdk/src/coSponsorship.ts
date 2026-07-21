@@ -187,7 +187,7 @@ export class CoSponsorshipClient {
     return BigInt(scValToNative(returnVal));
   }
 
-  /** Wallet-signing variant of {@link createDraft} — see {@link submitWithSign}. */
+  /** Wallet-signing variant of {@link createDraft} */
   async createDraftWithSign(
     signerPublicKey: string,
     description: string,
@@ -231,7 +231,7 @@ export class CoSponsorshipClient {
     return hash;
   }
 
-  /** Wallet-signing variant of {@link coSponsor} — see {@link submitWithSign}. */
+  /** Wallet-signing variant of {@link coSponsor} */
   async coSponsorWithSign(
     signerPublicKey: string,
     draftId: bigint,
@@ -258,7 +258,7 @@ export class CoSponsorshipClient {
     return hash;
   }
 
-  /** Wallet-signing variant of {@link withdrawCoSponsorship} — see {@link submitWithSign}. */
+  /** Wallet-signing variant of {@link withdrawCoSponsorship} */
   async withdrawCoSponsorshipWithSign(
     signerPublicKey: string,
     draftId: bigint,
@@ -296,7 +296,7 @@ export class CoSponsorshipClient {
     return BigInt(scValToNative(returnVal));
   }
 
-  /** Wallet-signing variant of {@link finalizeDraft} — see {@link submitWithSign}. */
+  /** Wallet-signing variant of {@link finalizeDraft} */
   async finalizeDraftWithSign(
     signerPublicKey: string,
     draftId: bigint,
@@ -330,7 +330,7 @@ export class CoSponsorshipClient {
     return hash;
   }
 
-  /** Wallet-signing variant of {@link cancelDraft} — see {@link submitWithSign}. */
+  /** Wallet-signing variant of {@link cancelDraft} */
   async cancelDraftWithSign(
     signerPublicKey: string,
     draftId: bigint,

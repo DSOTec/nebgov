@@ -356,6 +356,48 @@ fn test_get_active_drafts_pagination() {
 }
 
 #[test]
+fn test_get_active_drafts_excludes_finalized_and_cancelled() {
+    let (env, client, votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let sponsor = Address::generate(&env);
+    votes.set_power(&sponsor, &2_000);
+
+    let open_id = create_draft(&env, &client, &creator);
+    let finalized_id = create_draft(&env, &client, &creator);
+    let cancelled_id = create_draft(&env, &client, &creator);
+
+    client.co_sponsor(&sponsor, &finalized_id);
+    client.finalize_draft(&creator, &finalized_id);
+    client.cancel_draft(&creator, &cancelled_id);
+
+    let active = client.get_active_drafts(&0, &10);
+    assert_eq!(active.len(), 1);
+    assert_eq!(active.get(0).unwrap().id, open_id);
+    assert_ne!(open_id, finalized_id);
+    assert_ne!(open_id, cancelled_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_finalize_draft_rechecks_current_power_not_stale_pledge() {
+    let (env, client, votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let sponsor = Address::generate(&env);
+    votes.set_power(&sponsor, &2_000);
+
+    let draft_id = create_draft(&env, &client, &creator);
+    client.co_sponsor(&sponsor, &draft_id);
+    assert_eq!(client.get_draft(&draft_id).total_power, 2_000);
+
+    // Sponsor's power drops below the threshold after pledging (e.g. they
+    // transferred tokens away). The cached `total_power` on the draft is
+    // now stale/inflated; finalize must re-check live power and reject.
+    votes.set_power(&sponsor, &100);
+
+    client.finalize_draft(&creator, &draft_id);
+}
+
+#[test]
 #[should_panic(expected = "Error(Contract, #9)")]
 fn test_finalize_draft_rejects_non_creator() {
     let (env, client, votes, _admin) = setup(1_000);

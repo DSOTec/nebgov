@@ -123,6 +123,19 @@ impl CoSponsorshipContract {
         }
     }
 
+    /// Sum each co-sponsor's *current* voting power (not their power at
+    /// pledge time). Negative/zero balances contribute nothing.
+    fn compute_current_co_sponsor_power(env: &Env, votes_token: &Address, co_sponsors: &Vec<Address>) -> i128 {
+        let votes_client = VotesClient::new(env, votes_token);
+        let mut total: i128 = 0;
+        for i in 0..co_sponsors.len() {
+            let sponsor = co_sponsors.get(i).unwrap();
+            let power = votes_client.get_votes(&sponsor).max(0);
+            total = total.saturating_add(power);
+        }
+        total
+    }
+
     /// Lazily emit `DraftExpired` the first time an expired, non-terminal
     /// draft is read via `get_draft` — events published from a panicking
     /// call are rolled back, so expiry can only be observed (and only needs
@@ -346,10 +359,21 @@ impl CoSponsorshipContract {
         let governor: Address = env.storage().instance().get(&DataKey::Governor).unwrap();
         let governor_client = GovernorClient::new(&env, &governor);
 
+        // `draft.total_power` is the sum of each co-sponsor's power *at the
+        // ledger they pledged* — a sponsor may have since transferred or
+        // undelegated their tokens, leaving the cached total stale. Re-query
+        // every co-sponsor's current voting power here so a draft can only
+        // finalize on support that still actually exists, mirroring how
+        // governor's own `queue()` independently re-verifies quorum/threshold
+        // against live state rather than trusting cached tallies.
+        let votes_token: Address = env.storage().instance().get(&DataKey::VotesToken).unwrap();
+        let current_power = Self::compute_current_co_sponsor_power(&env, &votes_token, &draft.co_sponsors);
+
         let threshold = governor_client.proposal_threshold();
-        if draft.total_power < threshold {
+        if current_power < threshold {
             env.panic_with_error(CoSponsorshipError::DraftThresholdNotMet);
         }
+        draft.total_power = current_power;
 
         let proposal_id = governor_client.propose_via_registry(
             &env.current_contract_address(),
@@ -404,21 +428,34 @@ impl CoSponsorshipContract {
     }
 
     /// Get a paginated slice of drafts in creation-id order.
+    /// Paginate over drafts that are neither finalized, cancelled, nor
+    /// expired — `offset`/`limit` apply to this filtered set, not raw
+    /// storage order, so this scans the full draft list each call. Fine at
+    /// current scale; if draft volume grows this should move to an
+    /// indexer-backed query instead (see `proposals_count_by_state` in the
+    /// governor contract for the equivalent trade-off already made there).
     pub fn get_active_drafts(env: Env, offset: u64, limit: u64) -> Vec<ProposalDraft> {
         let draft_list: Vec<u64> = env
             .storage()
             .persistent()
             .get(&DataKey::DraftList)
             .unwrap_or(Vec::new(&env));
+        let current = env.ledger().sequence();
 
         let mut result: Vec<ProposalDraft> = Vec::new(&env);
-        let total = draft_list.len() as u64;
-        let mut i = offset;
-        let end = offset.saturating_add(limit).min(total);
-        while i < end {
-            let draft_id = draft_list.get(i as u32).unwrap();
-            result.push_back(Self::must_get_draft(&env, draft_id));
-            i += 1;
+        let mut active_seen: u64 = 0;
+        for i in 0..draft_list.len() {
+            let draft = Self::must_get_draft(&env, draft_list.get(i).unwrap());
+            if draft.finalized || draft.cancelled || current > draft.expiry_ledger {
+                continue;
+            }
+            if active_seen >= offset {
+                if (result.len() as u64) >= limit {
+                    break;
+                }
+                result.push_back(draft);
+            }
+            active_seen += 1;
         }
         result
     }
