@@ -114,6 +114,7 @@ const TTL = {
   delegates: 60_000, // 60 seconds
   profile: 30_000, // 30 seconds
   stats: 60_000, // 60 seconds
+  delegationRegistry: 30_000, // 30 seconds
 };
 
 const HEALTH_LAG_THRESHOLD = Number(process.env.HEALTH_LAG_THRESHOLD ?? 100);
@@ -622,6 +623,182 @@ export function createApp(server: SorobanRpc.Server): express.Application {
               withdrawalTotal: withdrawalTotal.toString(),
               wrappedBalance: wrappedBalance.toString(),
             },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // --- Delegation registry endpoints (issue #769) ---
+  //
+  // Backed by the `delegation_entries` table populated from the token-votes
+  // contract's DelegationRegistered/DelegationRevoked events. This is a
+  // registry-level view distinct from the governor's own `delegates` table
+  // used by GET /delegates and GET /profile/:address above.
+
+  // GET /delegates/:address/profile
+  app.get(
+    "/delegates/:address/profile",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const key = `delegate_profile:${address}`;
+      try {
+        const data = await cached(key, TTL.delegationRegistry, async () => {
+          const result = await pool.query(
+            `SELECT
+               COUNT(*)::int AS total_delegators,
+               COALESCE(SUM(power_at_delegation), 0) AS total_delegated_power,
+               MIN(delegated_at_ledger) AS first_delegated_at_ledger
+             FROM delegation_entries
+             WHERE delegatee_address = $1 AND active = TRUE`,
+            [address],
+          );
+          const row = result.rows[0];
+          return {
+            address,
+            total_delegators: row?.total_delegators ?? 0,
+            total_delegated_power: String(row?.total_delegated_power ?? 0),
+            first_delegated_at_ledger: row?.first_delegated_at_ledger ?? null,
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /delegates/:address/delegators?offset=0&limit=50
+  app.get(
+    "/delegates/:address/delegators",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+      try {
+        const result = await pool.query(
+          `SELECT delegator_address, power_at_delegation, delegated_at_ledger, chain_depth
+           FROM delegation_entries
+           WHERE delegatee_address = $1 AND active = TRUE
+           ORDER BY delegated_at_ledger ASC
+           OFFSET $2 LIMIT $3`,
+          [address, offset, limit],
+        );
+        res.json({ delegators: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /delegates/:address/history — full history of delegations received,
+  // including revoked entries.
+  app.get(
+    "/delegates/:address/history",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT delegator_address, delegated_at_ledger, revoked_at_ledger, power_at_delegation, active
+           FROM delegation_entries
+           WHERE delegatee_address = $1
+           ORDER BY delegated_at_ledger ASC`,
+          [address],
+        );
+        res.json({ history: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /delegates/:address/chain — resolve the delegation chain starting at
+  // `address` by following active delegation_entries edges to the tip.
+  app.get(
+    "/delegates/:address/chain",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const MAX_HOPS = 64;
+      try {
+        const chain: string[] = [address];
+        const visited = new Set([address]);
+        let current = address;
+        for (let i = 0; i < MAX_HOPS; i++) {
+          const result = await pool.query(
+            `SELECT delegatee_address FROM delegation_entries
+             WHERE delegator_address = $1 AND active = TRUE
+             LIMIT 1`,
+            [current],
+          );
+          const next = result.rows[0]?.delegatee_address as string | undefined;
+          if (!next || visited.has(next)) break;
+          chain.push(next);
+          visited.add(next);
+          current = next;
+        }
+        res.json({ chain });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /delegators/:address/history — history of delegations made by this
+  // address as a delegator.
+  app.get(
+    "/delegators/:address/history",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT delegatee_address, delegated_at_ledger, revoked_at_ledger, power_at_delegation, active
+           FROM delegation_entries
+           WHERE delegator_address = $1
+           ORDER BY delegated_at_ledger ASC`,
+          [address],
+        );
+        res.json({ history: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /delegation-graph?top=100 — top delegatees by active delegator count.
+  app.get(
+    "/delegation-graph",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const top = Math.min(Math.max(Number(req.query.top ?? 100), 1), 500);
+      const key = `delegation_graph:${top}`;
+      try {
+        const data = await cached(key, TTL.delegationRegistry, async () => {
+          const result = await pool.query(
+            `SELECT
+               delegatee_address AS address,
+               COUNT(*)::int AS delegator_count,
+               COALESCE(SUM(power_at_delegation), 0) AS total_delegated_power
+             FROM delegation_entries
+             WHERE active = TRUE
+             GROUP BY delegatee_address
+             ORDER BY delegator_count DESC
+             LIMIT $1`,
+            [top],
+          );
+          return {
+            nodes: result.rows.map((r) => ({
+              address: r.address,
+              delegator_count: r.delegator_count,
+              total_delegated_power: String(r.total_delegated_power),
+            })),
           };
         });
         res.json(data);
