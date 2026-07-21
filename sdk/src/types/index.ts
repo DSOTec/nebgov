@@ -285,6 +285,20 @@ export interface DelegatorRecord {
   startLedger: number;
 }
 
+/**
+ * An off-chain-signed instruction to delegate voting power (issue #772).
+ * Mirrors `DelegationPermit` in contracts/token-votes/src/delegation_sig.rs.
+ */
+export interface DelegationPermit {
+  delegator: string;
+  delegatee: string;
+  nonce: bigint;
+  expiryLedger: number;
+  /** 32 raw bytes — the network ID (sha256 of the network passphrase). */
+  chainId: Buffer;
+  contractId: string;
+}
+
 export interface VoteGasEstimate {
   ok: boolean;
   cpuInsns?: string;

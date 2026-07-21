@@ -5,6 +5,7 @@ import Link from "next/link";
 import { VotesClient, type TopDelegate, type Network } from "@nebgov/sdk";
 import { useWallet } from "../../lib/wallet-context";
 import { DelegateModal } from "../../components/DelegateModal";
+import { GaslessDelegateModal } from "../../components/GaslessDelegateModal";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 
@@ -55,6 +56,7 @@ export default function DelegatesPage() {
   const [totalDelegated, setTotalDelegated] = useState(0n);
   const [totalSupply, setTotalSupply] = useState(0n);
   const [modalOpen, setModalOpen] = useState(false);
+  const [gaslessModalOpen, setGaslessModalOpen] = useState(false);
   const [prefillAddress, setPrefillAddress] = useState<string>("");
   const [currentDelegatee, setCurrentDelegatee] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
@@ -322,6 +324,18 @@ export default function DelegatesPage() {
         onDelegated={() => window.location.reload()}
         prefillAddress={prefillAddress}
         currentDelegatee={currentDelegatee}
+        onOpenGasless={() => {
+          setModalOpen(false);
+          setGaslessModalOpen(true);
+        }}
+      />
+
+      <GaslessDelegateModal
+        open={gaslessModalOpen}
+        onClose={() => setGaslessModalOpen(false)}
+        onDelegated={() => window.location.reload()}
+        prefillAddress={prefillAddress}
+        topDelegates={delegates}
       />
     </div>
   );

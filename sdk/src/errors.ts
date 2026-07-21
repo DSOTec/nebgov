@@ -181,10 +181,23 @@ export class TimelockError extends Error {
 /**
  * Error codes for the TokenVotes contract + SDK transport layer.
  *
- * The token-votes contract does not define a #[contracterror] enum, so all
- * codes here are SDK-level.
+ * Codes 10-16 mirror the on-chain `TokenVotesError` enum
+ * (contracts/token-votes/src/error.rs), introduced for signed delegation
+ * (issue #772). Codes 1-9 are reserved on-chain for delegation/checkpoint
+ * invariants that still panic via `assert!`/`expect` rather than a typed
+ * error. SDK-level codes start at 100.
  */
 export enum VotesErrorCode {
+  // On-chain contract errors (match contracts/token-votes/src/error.rs)
+  InvalidSignature = 10,
+  NonceAlreadyUsed = 11,
+  PermitExpired = 12,
+  InvalidDelegationPermit = 13,
+  RelayerNotWhitelisted = 14,
+  InvalidChainId = 15,
+  InvalidContractId = 16,
+
+  // SDK-level codes
   SimulationFailed = 100,
   TransactionFailed = 101,
   TransactionTimeout = 102,
@@ -193,6 +206,21 @@ export enum VotesErrorCode {
 }
 
 const VOTES_MESSAGES: Record<VotesErrorCode, string> = {
+  [VotesErrorCode.InvalidSignature]:
+    "Invalid or missing delegation signature",
+  [VotesErrorCode.NonceAlreadyUsed]:
+    "Permit nonce has already been used or invalidated",
+  [VotesErrorCode.PermitExpired]:
+    "Delegation permit has expired",
+  [VotesErrorCode.InvalidDelegationPermit]:
+    "Delegation permit is malformed or out of order",
+  [VotesErrorCode.RelayerNotWhitelisted]:
+    "Relayer is not whitelisted to submit signed permits",
+  [VotesErrorCode.InvalidChainId]:
+    "Permit was signed for a different network",
+  [VotesErrorCode.InvalidContractId]:
+    "Permit was signed for a different contract",
+
   [VotesErrorCode.SimulationFailed]: "Simulation failed",
   [VotesErrorCode.TransactionFailed]: "Transaction failed",
   [VotesErrorCode.TransactionTimeout]: "Transaction timed out",
@@ -529,6 +557,12 @@ export function parseVotesError(
   raw: SorobanRpcError | string | null | undefined,
   cause?: unknown,
 ): VotesError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null && contractCode in VOTES_MESSAGES) {
+    const code = contractCode as VotesErrorCode;
+    return new VotesError(code, VOTES_MESSAGES[code], cause);
+  }
+
   if (hasErrorStatus(raw)) {
     return new VotesError(
       VotesErrorCode.TransactionFailed,

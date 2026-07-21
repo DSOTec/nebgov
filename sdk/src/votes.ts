@@ -617,50 +617,6 @@ export class VotesClient {
   }
 
   /**
-   * Delegate voting power by signature (gasless for the token holder).
-   *
-   * A relayer submits this on behalf of a token holder who signed a message
-   * off-chain. The holder only needs to sign, no gas required.
-   *
-   * @param owner - The token holder who signed the delegation message
-   * @param delegatee - The address to delegate voting power to
-   * @param nonce - Unique nonce to prevent replay attacks
-   * @param expiry - Unix timestamp after which the signature is invalid
-   * @param signature - Ed25519 signature over (owner, delegatee, nonce, expiry)
-   */
-  async delegateBySig(
-    owner: string,
-    delegatee: string,
-    nonce: bigint,
-    expiry: bigint,
-    signature: Buffer,
-  ): Promise<void> {
-    return this.retry(async () => {
-      const account = await this.server.getAccount(this.contract.contractId());
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            "delegate_by_sig",
-            nativeToScVal(owner, { type: "address" }),
-            nativeToScVal(delegatee, { type: "address" }),
-            nativeToScVal(nonce, { type: "u64" }),
-            nativeToScVal(expiry, { type: "u64" }),
-            nativeToScVal(signature, { type: "bytes" }),
-          ),
-        )
-        .setTimeout(30)
-        .build();
-
-      const prepared = await this.server.prepareTransaction(tx);
-      await this.server.sendTransaction(prepared);
-    }, (e) => this.isRetryableSubmissionError(e));
-  }
-
-  /**
    * Get the current votes contract settings.
    */
   async getVotesSettings(): Promise<VotesSettings> {
@@ -792,30 +748,10 @@ export class VotesClient {
     };
   }
 
-  /**
-   * Sign a delegation message off-chain for gasless delegation.
-   *
-   * @param signer - Keypair of the token holder
-   * @param delegatee - Address to delegate to
-   * @param nonce - Current nonce for the owner
-   * @param expiry - Unix timestamp after which the signature is invalid
-   * @returns Ed25519 signature bytes
-   */
-  signDelegation(
-    signer: Keypair,
-    delegatee: string,
-    nonce: bigint,
-    expiry: bigint,
-  ): Buffer {
-    const message = Buffer.concat([
-      Buffer.from(signer.publicKey()),
-      Buffer.from(delegatee),
-      Buffer.from(nonce.toString(16).padStart(16, "0"), "hex"),
-      Buffer.from(expiry.toString(16).padStart(16, "0"), "hex"),
-    ]);
-
-    return signer.sign(message);
-  }
+  // Gasless ("delegate by signature") delegation lives in
+  // DelegationSigClient (./delegation-sig.ts) — it needs a full
+  // SorobanAuthorizationEntry, not a raw signature, because verification is
+  // done through Soroban's native auth framework. See that module's docs.
 
   // ─── Internal ──────────────────────────────────────────────────────────────
 
