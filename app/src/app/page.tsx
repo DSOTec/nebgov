@@ -24,6 +24,7 @@ interface ProposalSummary {
   state: ProposalState;
   votesFor: bigint;
   votesAgainst: bigint;
+  votesAbstain: bigint;
   startLedger: number;
   endLedger: number;
 }
@@ -234,6 +235,7 @@ function ProposalsPageInner() {
           state: r.state!,
           votesFor: r.votes!.votesFor,
           votesAgainst: r.votes!.votesAgainst,
+          votesAbstain: r.votes!.votesAbstain,
           startLedger: 0,
           endLedger: 0,
         }));

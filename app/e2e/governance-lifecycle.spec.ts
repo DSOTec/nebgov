@@ -3,9 +3,9 @@ import { ProposalState, VoteSupport, hashDescription } from "@nebgov/sdk";
 import { createSdkClients, hasE2eEnv, createSigner, createGovernorConfig } from "./helpers/sdk";
 import { mockWalletConnection } from "./helpers/wallet";
 
-const testIfConfigured = hasE2eEnv() ? test : test.skip;
+test.describe("Full Governance Lifecycle (testnet)", () => {
+  test.skip(!hasE2eEnv(), "E2E env not configured");
 
-testIfConfigured.describe("Full Governance Lifecycle (testnet)", () => {
   let signer: ReturnType<typeof createSigner>;
   let config: ReturnType<typeof createGovernorConfig>;
   let governor: ReturnType<typeof createSdkClients>["governor"];

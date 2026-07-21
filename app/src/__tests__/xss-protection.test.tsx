@@ -17,9 +17,10 @@ jest.mock('@/hooks/useGovernorConfig', () => ({
 
 // Mock next/link to avoid router context issues
 jest.mock('next/link', () => {
-  function MockLink({ children, href }: any) {
+  const MockLink = ({ children, href }: any) => {
     return <a href={href}>{children}</a>;
-  }
+  };
+  MockLink.displayName = 'MockLink';
   return MockLink;
 });
 

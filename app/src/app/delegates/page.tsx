@@ -91,7 +91,10 @@ export default function DelegatesPage() {
         const result = await votesClient.getTopDelegates({ limit: PAGE_SIZE, offset: 0 });
         const page = Array.isArray(result) ? result : result.delegates;
         setDelegates(page);
-        const total = page.reduce((sum, d) => sum + d.votingPower, 0n);
+        let total = 0n;
+        for (const d of page) {
+          total += d.votingPower;
+        }
         setTotalDelegated(total);
         setOffset(PAGE_SIZE);
         setHasMore(page.length === PAGE_SIZE);
