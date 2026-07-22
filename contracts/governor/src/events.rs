@@ -1,5 +1,6 @@
 use soroban_sdk::{Address, Bytes, BytesN, Env, String, Symbol, Vec};
 
+use crate::reputation::ReputationConfig;
 use crate::{GovernorSettings, Proposal, VoteSupport};
 
 pub const PROPOSAL_CREATED_TOPIC: &str = "ProposalCreated";
@@ -14,6 +15,10 @@ pub const PROPOSAL_EXPIRED_TOPIC: &str = "ProposalExpired";
 pub const GOVERNOR_UPGRADED_TOPIC: &str = "GovernorUpgraded";
 pub const CONFIG_UPDATED_TOPIC: &str = "ConfigUpdated";
 pub const GUARDIAN_CHANGED_TOPIC: &str = "GuardianChanged";
+pub const REPUTATION_UPDATED_TOPIC: &str = "ReputationUpdated";
+pub const EFFECTIVE_THRESHOLD_CHANGED_TOPIC: &str = "EffectiveThresholdChanged";
+pub const LEADERBOARD_REFRESHED_TOPIC: &str = "LeaderboardRefreshed";
+pub const REPUTATION_CONFIG_UPDATED_TOPIC: &str = "ReputationConfigUpdated";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -277,5 +282,93 @@ pub fn emit_pauser_changed(env: &Env, old_pauser: &Address, new_pauser: &Address
     env.events().publish(
         (Symbol::new(env, "PauserChanged"),),
         (old_pauser.clone(), new_pauser.clone()),
+    );
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct ReputationUpdatedEvent {
+    pub proposer: Address,
+    pub old_score: i32,
+    pub new_score: i32,
+    pub reason: Symbol,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct EffectiveThresholdChangedEvent {
+    pub proposer: Address,
+    pub old_threshold: i128,
+    pub new_threshold: i128,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct LeaderboardRefreshedEvent {
+    pub top_proposer: Address,
+    pub top_score: i32,
+}
+
+pub fn emit_reputation_updated(
+    env: &Env,
+    proposer: &Address,
+    old_score: i32,
+    new_score: i32,
+    reason: &Symbol,
+) {
+    env.events().publish(
+        (Symbol::new(env, REPUTATION_UPDATED_TOPIC), proposer.clone()),
+        ReputationUpdatedEvent {
+            proposer: proposer.clone(),
+            old_score,
+            new_score,
+            reason: reason.clone(),
+        },
+    );
+}
+
+pub fn emit_effective_threshold_changed(
+    env: &Env,
+    proposer: &Address,
+    old_threshold: i128,
+    new_threshold: i128,
+) {
+    env.events().publish(
+        (
+            Symbol::new(env, EFFECTIVE_THRESHOLD_CHANGED_TOPIC),
+            proposer.clone(),
+        ),
+        EffectiveThresholdChangedEvent {
+            proposer: proposer.clone(),
+            old_threshold,
+            new_threshold,
+        },
+    );
+}
+
+pub fn emit_leaderboard_refreshed(env: &Env, top_proposer: &Address, top_score: i32) {
+    env.events().publish(
+        (Symbol::new(env, LEADERBOARD_REFRESHED_TOPIC),),
+        LeaderboardRefreshedEvent {
+            top_proposer: top_proposer.clone(),
+            top_score,
+        },
+    );
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct ReputationConfigUpdatedEvent {
+    pub caller: Address,
+    pub config: ReputationConfig,
+}
+
+pub fn emit_reputation_config_updated(env: &Env, caller: &Address, config: &ReputationConfig) {
+    env.events().publish(
+        (Symbol::new(env, REPUTATION_CONFIG_UPDATED_TOPIC),),
+        ReputationConfigUpdatedEvent {
+            caller: caller.clone(),
+            config: config.clone(),
+        },
     );
 }

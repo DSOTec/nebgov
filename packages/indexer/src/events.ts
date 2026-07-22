@@ -46,6 +46,11 @@ const TOPIC_MAP: Record<string, string> = {
   DelegationRegistered: "DelegationRegistered",
   DelegationRevoked: "DelegationRevoked",
   DelegationDepthLimitUpdated: "DelegationDepthLimitUpdated",
+  // Proposer reputation events (#771)
+  ReputationUpdated: "ReputationUpdated",
+  EffectiveThresholdChanged: "EffectiveThresholdChanged",
+  LeaderboardRefreshed: "LeaderboardRefreshed",
+  ReputationConfigUpdated: "ReputationConfigUpdated",
 };
 
 export interface IndexerConfig {
@@ -244,6 +249,18 @@ export async function processEvents(
             case "ProposalCancelled":
               await handleProposalCancelled(event, topics);
               break;
+            case "ReputationUpdated":
+              await handleReputationUpdated(event, topics);
+              break;
+            case "EffectiveThresholdChanged":
+              await handleEffectiveThresholdChanged(event, topics);
+              break;
+            case "LeaderboardRefreshed":
+              await handleLeaderboardRefreshed(event);
+              break;
+            case "ReputationConfigUpdated":
+              await handleReputationConfigUpdated(event);
+              break;
             default:
               break;
           }
@@ -439,6 +456,145 @@ async function handleDelegationDepthLimitUpdated(
     type: "delegation_depth_limit_updated",
     data: { old_limit: oldLimit, new_limit: newLimit, ledger: event.ledger },
   });
+}
+
+// --- Proposer reputation events (#771) ---
+//
+// Backed by the `proposer_reputation` / `reputation_score_history` tables.
+// `proposer_reputation` is a running snapshot upserted on every
+// ReputationUpdated event; the counters (proposals_succeeded, etc.) live
+// on-chain and are refreshed by re-reading the contract's
+// get_proposer_reputation() view alongside the indexed score, so this table
+// only tracks the score/ledger fields the event itself carries.
+
+async function handleReputationUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, number, number, string];
+  const [, oldScore, newScore, reason] = data;
+
+  await pool.query(
+    `INSERT INTO proposer_reputation (proposer_address, reputation_score, last_updated_ledger)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (proposer_address) DO UPDATE
+       SET reputation_score = $2, last_updated_ledger = $3, updated_at = NOW()`,
+    [proposer, newScore, event.ledger],
+  );
+  await pool.query(
+    `INSERT INTO reputation_score_history (proposer_address, ledger, score, change, reason)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [proposer, event.ledger, newScore, newScore - oldScore, reason],
+  );
+  invalidate(`reputation:${proposer}`);
+  invalidatePattern("reputation:leaderboard");
+  broadcast({
+    type: "reputation_updated",
+    data: { proposer, old_score: oldScore, new_score: newScore, reason, ledger: event.ledger },
+  });
+}
+
+async function handleEffectiveThresholdChanged(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, bigint, bigint];
+  const [, oldThreshold, newThreshold] = data;
+
+  broadcast({
+    type: "effective_threshold_changed",
+    data: {
+      proposer,
+      old_threshold: String(oldThreshold),
+      new_threshold: String(newThreshold),
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleLeaderboardRefreshed(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  invalidatePattern("reputation:leaderboard");
+  broadcast({ type: "leaderboard_refreshed", data: { ledger: event.ledger } });
+}
+
+async function handleReputationConfigUpdated(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // ReputationConfigUpdatedEvent { caller, config: ReputationConfig } — a
+  // #[contracttype] struct nested inside another serializes as a nested
+  // array in the same field-declaration order as the Rust struct.
+  const data = scValToNative(event.value) as [
+    string,
+    [
+      boolean, // enabled
+      number, // score_for_succeed
+      number, // score_for_executed
+      number, // score_for_defeated
+      number, // score_for_cancelled
+      number, // score_for_expired
+      number, // score_for_high_participation
+      number, // min_proposals_for_discount
+      number, // max_score
+      number, // min_score
+      number, // max_threshold_multiplier_bps
+      number, // min_threshold_multiplier_bps
+      number, // decay_rate_per_1000_ledgers
+    ],
+  ];
+  const [, config] = data;
+  const [
+    enabled,
+    scoreForSucceed,
+    scoreForExecuted,
+    scoreForDefeated,
+    scoreForCancelled,
+    scoreForExpired,
+    scoreForHighParticipation,
+    minProposalsForDiscount,
+    maxScore,
+    minScore,
+    maxThresholdMultiplierBps,
+    minThresholdMultiplierBps,
+    decayRatePer1000Ledgers,
+  ] = config;
+
+  await pool.query(
+    `INSERT INTO reputation_config (
+       id, enabled, score_for_succeed, score_for_executed, score_for_defeated,
+       score_for_cancelled, score_for_expired, score_for_high_participation,
+       min_proposals_for_discount, max_score, min_score,
+       max_threshold_multiplier_bps, min_threshold_multiplier_bps,
+       decay_rate_per_1000_ledgers, updated_at
+     ) VALUES (1, $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW())
+     ON CONFLICT (id) DO UPDATE SET
+       enabled = $1, score_for_succeed = $2, score_for_executed = $3,
+       score_for_defeated = $4, score_for_cancelled = $5, score_for_expired = $6,
+       score_for_high_participation = $7, min_proposals_for_discount = $8,
+       max_score = $9, min_score = $10, max_threshold_multiplier_bps = $11,
+       min_threshold_multiplier_bps = $12, decay_rate_per_1000_ledgers = $13,
+       updated_at = NOW()`,
+    [
+      enabled,
+      scoreForSucceed,
+      scoreForExecuted,
+      scoreForDefeated,
+      scoreForCancelled,
+      scoreForExpired,
+      scoreForHighParticipation,
+      minProposalsForDiscount,
+      maxScore,
+      minScore,
+      maxThresholdMultiplierBps,
+      minThresholdMultiplierBps,
+      decayRatePer1000Ledgers,
+    ],
+  );
+  invalidate("reputation:config");
+  broadcast({ type: "reputation_config_updated", data: { ledger: event.ledger } });
 }
 
 async function handleWrapperDeposit(

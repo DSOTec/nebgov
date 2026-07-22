@@ -617,3 +617,62 @@ export interface SimulateResult {
   /** Human-readable error message when `ok` is false. */
   error?: string;
 }
+
+// ─── Proposer Reputation Types (Issue #771) ──────────────────────────────────
+
+/** On-chain proposer reputation record, as returned by {@link ReputationClient.getProposerReputation}. */
+export interface ProposerReputation {
+  proposer: string;
+  totalProposals: number;
+  proposalsSucceeded: number;
+  proposalsExecuted: number;
+  proposalsDefeated: number;
+  proposalsCancelled: number;
+  proposalsExpired: number;
+  /** Sum of participation (in basis points) across every proposal this address created. */
+  totalParticipationBpsSum: bigint;
+  totalQuorumHit: number;
+  lastProposalLedger: number;
+  /** Rolling score, clamped to `[minScore, maxScore]` from {@link ReputationConfig}. */
+  reputationScore: number;
+  /** 10000 = no change, lower = discount, higher = penalty on the flat proposal threshold. */
+  thresholdMultiplierBps: number;
+  firstProposalLedger: number;
+  consecutiveSuccessful: number;
+  consecutiveFailed: number;
+}
+
+/** Tunable parameters for the proposer reputation system. */
+export interface ReputationConfig {
+  enabled: boolean;
+  scoreForSucceed: number;
+  scoreForExecuted: number;
+  scoreForDefeated: number;
+  scoreForCancelled: number;
+  scoreForExpired: number;
+  scoreForHighParticipation: number;
+  minProposalsForDiscount: number;
+  maxScore: number;
+  minScore: number;
+  maxThresholdMultiplierBps: number;
+  minThresholdMultiplierBps: number;
+  decayRatePer1000Ledgers: number;
+}
+
+/** A single entry in a proposer's reputation score history. */
+export interface ReputationScoreEntry {
+  ledger: number;
+  score: number;
+  change: number;
+  reason: string;
+}
+
+/** One row of the top-proposer leaderboard, as returned by {@link ReputationClient.getLeaderboard}. */
+export interface ProposerLeaderboardEntry {
+  rank: number;
+  proposer: string;
+  reputationScore: number;
+  totalProposals: number;
+  successRateBps: number;
+  avgParticipationBps: number;
+}

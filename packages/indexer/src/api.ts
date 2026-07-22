@@ -115,6 +115,7 @@ const TTL = {
   profile: 30_000, // 30 seconds
   stats: 60_000, // 60 seconds
   delegationRegistry: 30_000, // 30 seconds
+  reputation: 30_000, // 30 seconds
 };
 
 const HEALTH_LAG_THRESHOLD = Number(process.env.HEALTH_LAG_THRESHOLD ?? 100);
@@ -800,6 +801,118 @@ export function createApp(server: SorobanRpc.Server): express.Application {
               total_delegated_power: String(r.total_delegated_power),
             })),
           };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // --- Proposer reputation endpoints (issue #771) ---
+  //
+  // Backed by `proposer_reputation` / `reputation_score_history` /
+  // `reputation_config`, populated from the governor's ReputationUpdated,
+  // EffectiveThresholdChanged and ReputationConfigUpdated events. The
+  // authoritative source is always the on-chain contract (see
+  // ReputationClient in the SDK) — these endpoints exist for fast,
+  // aggregate reads such as the leaderboard and score history timeline.
+
+  // GET /reputation/:address
+  app.get(
+    "/reputation/:address",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const key = `reputation:${address}`;
+      try {
+        const data = await cached(key, TTL.reputation, async () => {
+          const result = await pool.query(
+            `SELECT proposer_address, reputation_score, last_updated_ledger
+             FROM proposer_reputation WHERE proposer_address = $1`,
+            [address],
+          );
+          const row = result.rows[0];
+          return {
+            address,
+            reputation_score: row?.reputation_score ?? 0,
+            last_updated_ledger: row?.last_updated_ledger ?? null,
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /reputation/:address/history
+  app.get(
+    "/reputation/:address/history",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT ledger, score, change, reason
+           FROM reputation_score_history
+           WHERE proposer_address = $1
+           ORDER BY ledger ASC`,
+          [address],
+        );
+        res.json({ history: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /reputation/leaderboard?limit=50
+  app.get(
+    "/reputation/leaderboard",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+      const key = `reputation:leaderboard:${limit}`;
+      try {
+        const data = await cached(key, TTL.reputation, async () => {
+          const result = await pool.query(
+            `SELECT proposer_address, reputation_score, last_updated_ledger
+             FROM proposer_reputation
+             ORDER BY reputation_score DESC
+             LIMIT $1`,
+            [limit],
+          );
+          return {
+            leaderboard: result.rows.map((r, i) => ({
+              rank: i + 1,
+              address: r.proposer_address,
+              reputation_score: r.reputation_score,
+              last_updated_ledger: r.last_updated_ledger,
+            })),
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /reputation/config
+  app.get(
+    "/reputation/config",
+    async (_req: Request, res: Response): Promise<void> => {
+      try {
+        const data = await cached("reputation:config", TTL.reputation, async () => {
+          const result = await pool.query(
+            `SELECT enabled, score_for_succeed, score_for_executed, score_for_defeated,
+                    score_for_cancelled, score_for_expired, score_for_high_participation,
+                    min_proposals_for_discount, max_score, min_score,
+                    max_threshold_multiplier_bps, min_threshold_multiplier_bps,
+                    decay_rate_per_1000_ledgers
+             FROM reputation_config WHERE id = 1`,
+          );
+          return result.rows[0] ?? null;
         });
         res.json(data);
       } catch {
