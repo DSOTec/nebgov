@@ -627,7 +627,7 @@ export interface ProposerReputation {
   /** Sum of participation (in basis points) across every proposal this address created. */
   totalParticipationBpsSum: bigint;
   lastProposalLedger: number;
-  /** Rolling score, clamped to `[minScore, maxScore]` from {@link ReputationConfig}. */
+  /** Rolling score, clamped to a fixed [-1000, 1000] range on-chain. */
   reputationScore: number;
   /** 10000 = no change, lower = discount, higher = penalty on the flat proposal threshold. */
   thresholdMultiplierBps: number;
