@@ -1,3 +1,4 @@
+mod analytics;
 mod governance_cancel;
 mod integration;
 mod registry;

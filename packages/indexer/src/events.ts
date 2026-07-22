@@ -46,6 +46,8 @@ const TOPIC_MAP: Record<string, string> = {
   DelegationRegistered: "DelegationRegistered",
   DelegationRevoked: "DelegationRevoked",
   DelegationDepthLimitUpdated: "DelegationDepthLimitUpdated",
+  // Governance analytics events (#765)
+  AnalyticsSnapshotTaken: "AnalyticsSnapshotTaken",
 };
 
 export interface IndexerConfig {
@@ -243,6 +245,9 @@ export async function processEvents(
               break;
             case "ProposalCancelled":
               await handleProposalCancelled(event, topics);
+              break;
+            case "AnalyticsSnapshotTaken":
+              await handleAnalyticsSnapshotTaken(event);
               break;
             default:
               break;
@@ -678,6 +683,70 @@ async function handleProposalCancelled(
   broadcast({
     type: "proposal_cancelled",
     data: { proposal_id: proposalId, cancelled_at_ledger: cancelledAtLedger, caller },
+  });
+}
+
+// --- Governance analytics events (#765) ---
+//
+// Backed by the `governance_snapshots` table, populated exclusively from the
+// governor's permissionless `AnalyticsSnapshotTaken` event. Per-proposal
+// participation and per-voter history are *not* event-sourced here — they're
+// derived on demand from the existing `proposals`/`votes` tables in the
+// `/analytics/*` route handlers, since those already carry everything needed.
+async function handleAnalyticsSnapshotTaken(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+
+  const ledger = Number(data.ledger);
+  const timestampApprox = String(data.timestamp_approx ?? 0);
+  const totalProposals = String(data.total_proposals ?? 0);
+  const activeProposals = String(data.active_proposals ?? 0);
+  const totalVotesCast = String(data.total_votes_cast ?? 0);
+  const uniqueVoters = String(data.unique_voters ?? 0);
+  const participationBps = Number(data.participation_bps ?? 0);
+  const quorumHitRateBps = Number(data.quorum_hit_rate_bps ?? 0);
+  const topDelegateShareBps = Number(data.top_delegate_share_bps ?? 0);
+  const delegationRateBps = Number(data.delegation_rate_bps ?? 0);
+  const avgVoteWeight = String(data.avg_vote_weight ?? 0);
+  const proposalPassRateBps = Number(data.proposal_pass_rate_bps ?? 0);
+
+  await pool.query(
+    `INSERT INTO governance_snapshots (
+       ledger, timestamp_approx, total_proposals, active_proposals,
+       total_votes_cast, unique_voters, participation_bps, quorum_hit_rate_bps,
+       top_delegate_share_bps, delegation_rate_bps, avg_vote_weight, proposal_pass_rate_bps
+     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+     ON CONFLICT (ledger) DO NOTHING`,
+    [
+      ledger,
+      timestampApprox,
+      totalProposals,
+      activeProposals,
+      totalVotesCast,
+      uniqueVoters,
+      participationBps,
+      quorumHitRateBps,
+      topDelegateShareBps,
+      delegationRateBps,
+      avgVoteWeight,
+      proposalPassRateBps,
+    ],
+  );
+
+  invalidatePattern("analytics:");
+  broadcast({
+    type: "analytics_snapshot_taken",
+    data: {
+      ledger,
+      total_proposals: totalProposals,
+      active_proposals: activeProposals,
+      total_votes_cast: totalVotesCast,
+      unique_voters: uniqueVoters,
+      participation_bps: participationBps,
+      quorum_hit_rate_bps: quorumHitRateBps,
+      proposal_pass_rate_bps: proposalPassRateBps,
+    },
   });
 }
 

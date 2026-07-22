@@ -617,3 +617,60 @@ export interface SimulateResult {
   /** Human-readable error message when `ok` is false. */
   error?: string;
 }
+
+/**
+ * A captured point-in-time governance analytics snapshot (Issue #765).
+ * `topDelegateShareBps`/`delegationRateBps` are always 0 when read directly
+ * from the contract — the governor has no cross-contract visibility into
+ * the token-votes contract's full delegator set. The indexer populates
+ * those two fields from delegation events when serving `/analytics/snapshots`.
+ */
+export interface GovernanceSnapshot {
+  ledger: number;
+  timestampApprox: bigint;
+  totalProposals: bigint;
+  activeProposals: bigint;
+  totalVotesCast: bigint;
+  uniqueVoters: bigint;
+  participationBps: number;
+  quorumHitRateBps: number;
+  topDelegateShareBps: number;
+  delegationRateBps: number;
+  avgVoteWeight: bigint;
+  proposalPassRateBps: number;
+}
+
+export interface AllTimeStats {
+  totalProposals: bigint;
+  totalVotesCast: bigint;
+  uniqueVoters: bigint;
+  quorumHitCount: bigint;
+  quorumMissCount: bigint;
+  passRateBps: number;
+  avgParticipationBps: number;
+}
+
+export interface ProposalParticipation {
+  proposalId: bigint;
+  totalEligibleSupply: bigint;
+  totalVotesCast: bigint;
+  participationBps: number;
+  quorumRequired: bigint;
+  quorumReached: boolean;
+  uniqueVoters: number;
+  forBps: number;
+  againstBps: number;
+  abstainBps: number;
+}
+
+export interface VoterHistory {
+  voter: string;
+  proposalsVoted: number;
+  proposalsEligible: number;
+  participationRateBps: number;
+  totalWeightCast: bigint;
+  forCount: number;
+  againstCount: number;
+  abstainCount: number;
+  lastVotedLedger: number;
+}

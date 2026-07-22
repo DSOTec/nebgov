@@ -1,5 +1,6 @@
 use soroban_sdk::{Address, Bytes, BytesN, Env, String, Symbol, Vec};
 
+use crate::analytics::GovernanceSnapshot;
 use crate::{GovernorSettings, Proposal, VoteSupport};
 
 pub const PROPOSAL_CREATED_TOPIC: &str = "ProposalCreated";
@@ -14,6 +15,7 @@ pub const PROPOSAL_EXPIRED_TOPIC: &str = "ProposalExpired";
 pub const GOVERNOR_UPGRADED_TOPIC: &str = "GovernorUpgraded";
 pub const CONFIG_UPDATED_TOPIC: &str = "ConfigUpdated";
 pub const GUARDIAN_CHANGED_TOPIC: &str = "GuardianChanged";
+pub const ANALYTICS_SNAPSHOT_TAKEN_TOPIC: &str = "AnalyticsSnapshotTaken";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -277,5 +279,12 @@ pub fn emit_pauser_changed(env: &Env, old_pauser: &Address, new_pauser: &Address
     env.events().publish(
         (Symbol::new(env, "PauserChanged"),),
         (old_pauser.clone(), new_pauser.clone()),
+    );
+}
+
+pub fn emit_analytics_snapshot_taken(env: &Env, snapshot: &GovernanceSnapshot) {
+    env.events().publish(
+        (Symbol::new(env, ANALYTICS_SNAPSHOT_TAKEN_TOPIC),),
+        snapshot.clone(),
     );
 }
