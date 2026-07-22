@@ -2,26 +2,24 @@
 
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
-import { ReputationClient, ProposerLeaderboardEntry, Network } from "@nebgov/sdk";
+import { ProposerLeaderboardEntry } from "@nebgov/sdk";
 import { AddressDisplay } from "./AddressDisplay";
 
-type SortKey =
-  | "rank"
-  | "reputationScore"
-  | "totalProposals"
-  | "successRateBps"
-  | "avgParticipationBps";
+type SortKey = "rank" | "reputationScore";
 
 interface ProposerLeaderboardProps {
   className?: string;
+  limit?: number;
 }
 
 /**
- * Sortable table of the top proposers by reputation score (Issue #771),
- * backed by the on-chain leaderboard cache via
- * {@link ReputationClient.getLeaderboard}.
+ * Sortable table of the top proposers by reputation score (Issue #771).
+ * Backed by the indexer's `GET /reputation/leaderboard` — ranking is
+ * computed off-chain from indexed `ReputationUpdated` events rather than
+ * on-chain, since sorting a growing address list is cheap off-chain and
+ * unnecessarily expensive (gas and contract size) on it.
  */
-export function ProposerLeaderboard({ className = "" }: ProposerLeaderboardProps) {
+export function ProposerLeaderboard({ className = "", limit = 50 }: ProposerLeaderboardProps) {
   const [entries, setEntries] = useState<ProposerLeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,31 +30,36 @@ export function ProposerLeaderboard({ className = "" }: ProposerLeaderboardProps
     setLoading(true);
     setError(null);
     try {
-      const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
-      const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
-      const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-      const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
-      const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
-
-      if (!governorAddress || !timelockAddress || !votesAddress) {
-        throw new Error("Missing required environment variables for ReputationClient");
+      const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
+      if (!indexerUrl) {
+        throw new Error("Missing NEXT_PUBLIC_INDEXER_URL");
       }
 
-      const client = new ReputationClient({
-        governorAddress,
-        timelockAddress,
-        votesAddress,
-        network,
-        ...(rpcUrl && { rpcUrl }),
+      const resp = await fetch(`${indexerUrl}/reputation/leaderboard?limit=${limit}`, {
+        cache: "no-store",
       });
-
-      setEntries(await client.getLeaderboard());
+      if (!resp.ok) throw new Error("Failed to load leaderboard");
+      const json = await resp.json();
+      const rows = (json.leaderboard ?? []) as Array<{
+        rank: number;
+        address: string;
+        reputation_score: number;
+        last_updated_ledger: number | null;
+      }>;
+      setEntries(
+        rows.map((r) => ({
+          rank: r.rank,
+          proposer: r.address,
+          reputationScore: r.reputation_score,
+          lastUpdatedLedger: r.last_updated_ledger,
+        })),
+      );
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load leaderboard");
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [limit]);
 
   useEffect(() => {
     fetchLeaderboard();
@@ -80,9 +83,6 @@ export function ProposerLeaderboard({ className = "" }: ProposerLeaderboardProps
   const columns: { key: SortKey; label: string }[] = [
     { key: "rank", label: "Rank" },
     { key: "reputationScore", label: "Score" },
-    { key: "totalProposals", label: "Proposals" },
-    { key: "successRateBps", label: "Success Rate" },
-    { key: "avgParticipationBps", label: "Avg Participation" },
   ];
 
   if (loading) {
@@ -121,6 +121,9 @@ export function ProposerLeaderboard({ className = "" }: ProposerLeaderboardProps
                 {sortKey === col.key && (sortAsc ? " ▲" : " ▼")}
               </th>
             ))}
+            <th className="pb-2 px-4 font-medium text-gray-500 dark:text-gray-400">
+              Last Updated
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -139,9 +142,9 @@ export function ProposerLeaderboard({ className = "" }: ProposerLeaderboardProps
               </td>
               <td className="py-2 px-4">{entry.rank}</td>
               <td className="py-2 px-4">{entry.reputationScore}</td>
-              <td className="py-2 px-4">{entry.totalProposals}</td>
-              <td className="py-2 px-4">{(entry.successRateBps / 100).toFixed(1)}%</td>
-              <td className="py-2 px-4">{(entry.avgParticipationBps / 100).toFixed(1)}%</td>
+              <td className="py-2 px-4">
+                {entry.lastUpdatedLedger !== null ? `#${entry.lastUpdatedLedger}` : "—"}
+              </td>
             </tr>
           ))}
         </tbody>

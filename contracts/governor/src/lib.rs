@@ -278,17 +278,6 @@ pub enum DataKey {
     CoSponsorshipRegistry,
     /// Per-address proposer reputation record (Issue #771).
     ProposerReputation(Address),
-    /// Tunable parameters for the reputation scoring/threshold system.
-    ReputationConfig,
-    /// Bounded (most-recent-`N`) history of reputation score changes for an address.
-    ReputationScoreHistory(Address),
-    /// Cached top-N proposer ranking, rebuilt on demand by `refresh_proposer_leaderboard`.
-    GlobalProposerLeaderboard,
-    /// Ledger sequence at which the leaderboard cache was last rebuilt.
-    LeaderboardLastUpdated,
-    /// Bounded list of every address that has ever created a proposal, used
-    /// to rebuild the leaderboard without an iterable on-chain map.
-    ReputationProposerList,
     /// Idempotency guard so a proposal that concludes via grace-period
     /// expiry (succeeded but not executed in time) only records its
     /// reputation penalty once, no matter how many times `state()` is read.
@@ -2349,21 +2338,9 @@ impl GovernorContract {
         reputation::get_reputation(&env, &proposer)
     }
 
-    pub fn get_reputation_config(env: Env) -> reputation::ReputationConfig {
-        reputation::get_config(&env)
-    }
-
     /// Governance-only: only callable via an executed proposal (the governor
     /// contract calling itself), matching the pattern used by `update_config`
     /// and friends elsewhere in this file.
-    pub fn update_reputation_config(env: Env, caller: Address, config: reputation::ReputationConfig) {
-        caller.require_auth();
-        if caller != env.current_contract_address() {
-            env.panic_with_error(GovernorError::UnauthorizedPause);
-        }
-        reputation::update_config_checked(&env, &caller, config);
-    }
-
     pub fn get_effective_threshold(env: Env, proposer: Address) -> i128 {
         let flat: i128 = env
             .storage()
@@ -2371,24 +2348,6 @@ impl GovernorContract {
             .get(&DataKey::ProposalThreshold)
             .unwrap_or(0);
         reputation::get_effective_threshold(&env, &proposer, flat)
-    }
-
-    pub fn get_reputation_score_history(
-        env: Env,
-        proposer: Address,
-    ) -> Vec<reputation::ReputationScoreEntry> {
-        reputation::get_score_history(&env, &proposer)
-    }
-
-    pub fn get_proposer_leaderboard(env: Env) -> Vec<reputation::ProposerLeaderboardEntry> {
-        reputation::get_leaderboard(&env)
-    }
-
-    /// Permissionless keeper function — any authenticated caller may trigger
-    /// a leaderboard rebuild.
-    pub fn refresh_proposer_leaderboard(env: Env, caller: Address) {
-        caller.require_auth();
-        reputation::refresh_leaderboard(&env);
     }
 
     /// Permissionless — decays `proposer`'s score a step back toward zero

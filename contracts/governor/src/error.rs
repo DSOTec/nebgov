@@ -48,5 +48,4 @@ pub enum GovernorError {
     ProposalAlreadyCancelled = 42,
     InvalidVoteChoice = 43,
     UnauthorizedRegistry = 44,
-    InvalidReputationConfig = 45,
 }

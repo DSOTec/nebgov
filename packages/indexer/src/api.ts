@@ -811,10 +811,12 @@ export function createApp(server: SorobanRpc.Server): express.Application {
 
   // --- Proposer reputation endpoints (issue #771) ---
   //
-  // Backed by `proposer_reputation` / `reputation_score_history` /
-  // `reputation_config`, populated from the governor's ReputationUpdated,
-  // EffectiveThresholdChanged and ReputationConfigUpdated events. The
-  // authoritative source is always the on-chain contract (see
+  // Backed by `proposer_reputation` / `reputation_score_history`, populated
+  // from the governor's ReputationUpdated and EffectiveThresholdChanged
+  // events. Scoring parameters are fixed contract-side constants (not
+  // governance-tunable, to stay under Soroban's WASM size budget), so
+  // there's no config endpoint to mirror. The authoritative source for an
+  // individual address is always the on-chain contract (see
   // ReputationClient in the SDK) — these endpoints exist for fast,
   // aggregate reads such as the leaderboard and score history timeline.
 
@@ -890,29 +892,6 @@ export function createApp(server: SorobanRpc.Server): express.Application {
               last_updated_ledger: r.last_updated_ledger,
             })),
           };
-        });
-        res.json(data);
-      } catch {
-        res.status(500).json({ error: "Internal server error" });
-      }
-    },
-  );
-
-  // GET /reputation/config
-  app.get(
-    "/reputation/config",
-    async (_req: Request, res: Response): Promise<void> => {
-      try {
-        const data = await cached("reputation:config", TTL.reputation, async () => {
-          const result = await pool.query(
-            `SELECT enabled, score_for_succeed, score_for_executed, score_for_defeated,
-                    score_for_cancelled, score_for_expired, score_for_high_participation,
-                    min_proposals_for_discount, max_score, min_score,
-                    max_threshold_multiplier_bps, min_threshold_multiplier_bps,
-                    decay_rate_per_1000_ledgers
-             FROM reputation_config WHERE id = 1`,
-          );
-          return result.rows[0] ?? null;
         });
         res.json(data);
       } catch {

@@ -9,14 +9,7 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
-import {
-  GovernorConfig,
-  Network,
-  ProposerReputation,
-  ReputationConfig,
-  ReputationScoreEntry,
-  ProposerLeaderboardEntry,
-} from "./types";
+import { GovernorConfig, Network, ProposerReputation } from "./types";
 import { GovernorError, GovernorErrorCode, parseGovernorError } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
 
@@ -41,13 +34,7 @@ function mapProposerReputation(raw: any): ProposerReputation {
   return {
     proposer: raw.proposer,
     totalProposals: Number(raw.total_proposals),
-    proposalsSucceeded: Number(raw.proposals_succeeded),
-    proposalsExecuted: Number(raw.proposals_executed),
-    proposalsDefeated: Number(raw.proposals_defeated),
-    proposalsCancelled: Number(raw.proposals_cancelled),
-    proposalsExpired: Number(raw.proposals_expired),
     totalParticipationBpsSum: BigInt(raw.total_participation_bps_sum ?? 0),
-    totalQuorumHit: Number(raw.total_quorum_hit),
     lastProposalLedger: Number(raw.last_proposal_ledger),
     reputationScore: Number(raw.reputation_score),
     thresholdMultiplierBps: Number(raw.threshold_multiplier_bps),
@@ -57,81 +44,6 @@ function mapProposerReputation(raw: any): ProposerReputation {
   };
 }
 
-function mapReputationConfig(raw: any): ReputationConfig {
-  return {
-    enabled: Boolean(raw.enabled),
-    scoreForSucceed: Number(raw.score_for_succeed),
-    scoreForExecuted: Number(raw.score_for_executed),
-    scoreForDefeated: Number(raw.score_for_defeated),
-    scoreForCancelled: Number(raw.score_for_cancelled),
-    scoreForExpired: Number(raw.score_for_expired),
-    scoreForHighParticipation: Number(raw.score_for_high_participation),
-    minProposalsForDiscount: Number(raw.min_proposals_for_discount),
-    maxScore: Number(raw.max_score),
-    minScore: Number(raw.min_score),
-    maxThresholdMultiplierBps: Number(raw.max_threshold_multiplier_bps),
-    minThresholdMultiplierBps: Number(raw.min_threshold_multiplier_bps),
-    decayRatePer1000Ledgers: Number(raw.decay_rate_per_1000_ledgers),
-  };
-}
-
-function reputationConfigToScVal(config: ReputationConfig): xdr.ScVal {
-  return xdr.ScVal.scvMap([
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("enabled"),
-      val: xdr.ScVal.scvBool(config.enabled),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("score_for_succeed"),
-      val: nativeToScVal(config.scoreForSucceed, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("score_for_executed"),
-      val: nativeToScVal(config.scoreForExecuted, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("score_for_defeated"),
-      val: nativeToScVal(config.scoreForDefeated, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("score_for_cancelled"),
-      val: nativeToScVal(config.scoreForCancelled, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("score_for_expired"),
-      val: nativeToScVal(config.scoreForExpired, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("score_for_high_participation"),
-      val: nativeToScVal(config.scoreForHighParticipation, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("min_proposals_for_discount"),
-      val: nativeToScVal(config.minProposalsForDiscount, { type: "u32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("max_score"),
-      val: nativeToScVal(config.maxScore, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("min_score"),
-      val: nativeToScVal(config.minScore, { type: "i32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("max_threshold_multiplier_bps"),
-      val: nativeToScVal(config.maxThresholdMultiplierBps, { type: "u32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("min_threshold_multiplier_bps"),
-      val: nativeToScVal(config.minThresholdMultiplierBps, { type: "u32" }),
-    }),
-    new xdr.ScMapEntry({
-      key: xdr.ScVal.scvSymbol("decay_rate_per_1000_ledgers"),
-      val: nativeToScVal(config.decayRatePer1000Ledgers, { type: "i32" }),
-    }),
-  ]);
-}
-
 /**
  * ReputationClient — interact with the Proposer Reputation System (Issue
  * #771) exposed on a deployed NebGov governor contract.
@@ -139,6 +51,12 @@ function reputationConfigToScVal(config: ReputationConfig): xdr.ScVal {
  * The reputation functions live directly on the governor contract (not a
  * separate deployment), so this client targets `config.governorAddress`
  * just like {@link GovernorClient}.
+ *
+ * Scoring parameters are fixed compile-time constants (not governance-
+ * tunable) and the proposer leaderboard is not exposed as an on-chain read
+ * function — both kept off the contract to stay under Soroban's WASM size
+ * budget. The indexer mirrors the leaderboard from the `ReputationUpdated`
+ * event stream at `GET /reputation/leaderboard`.
  *
  * @example
  * const client = new ReputationClient({
@@ -271,12 +189,6 @@ export class ReputationClient {
     return mapProposerReputation(raw);
   }
 
-  /** Get the currently configured reputation scoring/threshold parameters. */
-  async getReputationConfig(): Promise<ReputationConfig> {
-    const raw = await this.simulate("get_reputation_config");
-    return mapReputationConfig(raw);
-  }
-
   /**
    * Reputation-adjusted effective proposal threshold for `proposer` — what
    * they would actually need to meet, as used by `propose()`. Falls back to
@@ -289,92 +201,6 @@ export class ReputationClient {
       nativeToScVal(proposer, { type: "address" }),
     );
     return BigInt(raw as string | number | bigint);
-  }
-
-  /** Full (bounded, most-recent-N) score change history for a proposer. */
-  async getScoreHistory(proposer: string): Promise<ReputationScoreEntry[]> {
-    const raw = (await this.simulate(
-      "get_reputation_score_history",
-      nativeToScVal(proposer, { type: "address" }),
-    )) as any[];
-    return raw.map((entry) => ({
-      ledger: Number(entry.ledger),
-      score: Number(entry.score),
-      change: Number(entry.change),
-      reason: String(entry.reason),
-    }));
-  }
-
-  /** Cached top-proposer leaderboard, ordered by reputation score descending. */
-  async getLeaderboard(): Promise<ProposerLeaderboardEntry[]> {
-    const raw = (await this.simulate("get_proposer_leaderboard")) as any[];
-    return raw.map((entry) => ({
-      rank: Number(entry.rank),
-      proposer: entry.proposer,
-      reputationScore: Number(entry.reputation_score),
-      totalProposals: Number(entry.total_proposals),
-      successRateBps: Number(entry.success_rate_bps),
-      avgParticipationBps: Number(entry.avg_participation_bps),
-    }));
-  }
-
-  /**
-   * Update the reputation scoring/threshold configuration. Governance-only:
-   * on-chain this requires the governor contract to call itself, so in
-   * practice `signer` can only be the transaction submitter for a proposal
-   * whose target/calldata invokes `update_reputation_config` — the same
-   * pattern as any other governance-only setter (see
-   * `buildUpdateConfigProposal`). A direct call from an external keypair
-   * will fail auth. Returns the submitting transaction's hash.
-   */
-  async updateReputationConfig(signer: Keypair, config: ReputationConfig): Promise<string> {
-    const { hash } = await this.submit(
-      signer,
-      "update_reputation_config",
-      nativeToScVal(signer.publicKey(), { type: "address" }),
-      reputationConfigToScVal(config),
-    );
-    return hash;
-  }
-
-  /** Wallet-signing variant of {@link updateReputationConfig}. */
-  async updateReputationConfigWithSign(
-    signerPublicKey: string,
-    config: ReputationConfig,
-    signUnsignedXdr: (xdr: string) => Promise<string>,
-  ): Promise<string> {
-    const { hash } = await this.submitWithSign(
-      signerPublicKey,
-      signUnsignedXdr,
-      "update_reputation_config",
-      nativeToScVal(signerPublicKey, { type: "address" }),
-      reputationConfigToScVal(config),
-    );
-    return hash;
-  }
-
-  /** Permissionless: rebuild the cached top-proposer leaderboard. Returns the tx hash. */
-  async refreshLeaderboard(signer: Keypair): Promise<string> {
-    const { hash } = await this.submit(
-      signer,
-      "refresh_proposer_leaderboard",
-      nativeToScVal(signer.publicKey(), { type: "address" }),
-    );
-    return hash;
-  }
-
-  /** Wallet-signing variant of {@link refreshLeaderboard}. */
-  async refreshLeaderboardWithSign(
-    signerPublicKey: string,
-    signUnsignedXdr: (xdr: string) => Promise<string>,
-  ): Promise<string> {
-    const { hash } = await this.submitWithSign(
-      signerPublicKey,
-      signUnsignedXdr,
-      "refresh_proposer_leaderboard",
-      nativeToScVal(signerPublicKey, { type: "address" }),
-    );
-    return hash;
   }
 
   /**

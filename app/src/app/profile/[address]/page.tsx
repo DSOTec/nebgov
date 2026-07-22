@@ -2,11 +2,10 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   GovernorClient,
   VotesClient,
-  ReputationClient,
   ProposalState,
   Network,
   VoteSupport,
@@ -92,6 +91,18 @@ function VoterProfilePageContent() {
   const { reputation } = useProposerReputation(address);
   const [scoreHistory, setScoreHistory] = useState<ReputationScoreEntry[]>([]);
   const [scoreHistoryLoading, setScoreHistoryLoading] = useState(true);
+  // Per-outcome tallies aren't kept on-chain (trimmed to stay under Soroban's
+  // WASM size budget) — derive them client-side from the indexed score
+  // history, which already carries a `reason` per entry.
+  const outcomeTally = useMemo(() => {
+    const tally = { succeeded: 0, executed: 0, defeated: 0, cancelled: 0, expired: 0 };
+    for (const entry of scoreHistory) {
+      if (entry.reason in tally) {
+        tally[entry.reason as keyof typeof tally] += 1;
+      }
+    }
+    return tally;
+  }, [scoreHistory]);
 
   // Validate address
   const isValidAddress = address && isValidStellarAddress(String(address));
@@ -313,24 +324,19 @@ function VoterProfilePageContent() {
     async function fetchScoreHistory() {
       setScoreHistoryLoading(true);
       try {
-        const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
-        const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
-        const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-        const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
-        const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+        // Score history isn't an on-chain read (kept off the governor
+        // contract to stay under Soroban's WASM size budget) — the indexer
+        // mirrors it from ReputationUpdated events.
+        const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
+        if (!indexerUrl) return;
 
-        if (!governorAddress || !timelockAddress || !votesAddress) return;
-
-        const reputationClient = new ReputationClient({
-          governorAddress,
-          timelockAddress,
-          votesAddress,
-          network,
-          ...(rpcUrl && { rpcUrl }),
+        const resp = await fetch(`${indexerUrl}/reputation/${address}/history`, {
+          cache: "no-store",
         });
-
-        const history = await reputationClient.getScoreHistory(address);
-        if (!cancelled) setScoreHistory(history);
+        if (resp.ok) {
+          const json = await resp.json();
+          if (!cancelled) setScoreHistory(json.history ?? []);
+        }
       } catch {
         // Reputation history is supplementary; fail silently.
       } finally {
@@ -662,11 +668,11 @@ function VoterProfilePageContent() {
             </div>
 
             <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6 text-xs text-gray-500 dark:text-gray-400">
-              <div>Succeeded: {reputation.proposalsSucceeded}</div>
-              <div>Executed: {reputation.proposalsExecuted}</div>
-              <div>Defeated: {reputation.proposalsDefeated}</div>
-              <div>Cancelled: {reputation.proposalsCancelled}</div>
-              <div>Expired: {reputation.proposalsExpired}</div>
+              <div>Succeeded: {outcomeTally.succeeded}</div>
+              <div>Executed: {outcomeTally.executed}</div>
+              <div>Defeated: {outcomeTally.defeated}</div>
+              <div>Cancelled: {outcomeTally.cancelled}</div>
+              <div>Expired: {outcomeTally.expired}</div>
             </div>
           </>
         )}

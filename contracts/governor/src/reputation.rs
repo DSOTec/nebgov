@@ -9,32 +9,23 @@
 //! to the flat `proposal_threshold`, so existing governance flows are
 //! unaffected by default beyond the one call-site changes in `lib.rs`.
 
-use soroban_sdk::{Address, Env, Symbol, Vec};
+use soroban_sdk::{Address, Env, Symbol};
 
-use crate::error::GovernorError;
 use crate::DataKey;
 
 const BPS_DENOMINATOR: u32 = 10_000;
 const HIGH_PARTICIPATION_THRESHOLD_BPS: u32 = 5_000;
-const MAX_HISTORY_ENTRIES: u32 = 50;
-const MAX_LEADERBOARD_ENTRIES: u32 = 50;
 /// TTL applied to every reputation-related persistent entry on write. Chosen
 /// generously (comparable to the multi-year Soroban max) since reputation
 /// records are long-lived, low-churn per-address data.
 const REPUTATION_TTL_LEDGERS: u32 = 3_110_400;
 
 #[soroban_sdk::contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 pub struct ProposerReputation {
     pub proposer: Address,
     pub total_proposals: u32,
-    pub proposals_succeeded: u32,
-    pub proposals_executed: u32,
-    pub proposals_defeated: u32,
-    pub proposals_cancelled: u32,
-    pub proposals_expired: u32,
     pub total_participation_bps_sum: u64,
-    pub total_quorum_hit: u32,
     pub last_proposal_ledger: u32,
     pub reputation_score: i32,
     pub threshold_multiplier_bps: u32,
@@ -43,8 +34,7 @@ pub struct ProposerReputation {
     pub consecutive_failed: u32,
 }
 
-#[soroban_sdk::contracttype]
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone)]
 pub struct ReputationConfig {
     pub enabled: bool,
     pub score_for_succeed: i32,
@@ -61,31 +51,11 @@ pub struct ReputationConfig {
     pub decay_rate_per_1000_ledgers: i32,
 }
 
-#[soroban_sdk::contracttype]
-#[derive(Clone, Debug)]
-pub struct ReputationScoreEntry {
-    pub ledger: u32,
-    pub score: i32,
-    pub change: i32,
-    pub reason: Symbol,
-}
-
-#[soroban_sdk::contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct ProposerLeaderboardEntry {
-    pub rank: u32,
-    pub proposer: Address,
-    pub reputation_score: i32,
-    pub total_proposals: u32,
-    pub success_rate_bps: u32,
-    pub avg_participation_bps: u32,
-}
-
 /// The terminal (or quasi-terminal, for `Succeeded`) lifecycle outcome a
 /// proposal reached, used to select which `ReputationConfig` score delta
 /// applies. Not a `#[contracttype]` — this is a call-site parameter only,
 /// never persisted.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy)]
 pub enum ReputationOutcome {
     Succeeded,
     Executed,
@@ -112,35 +82,8 @@ pub fn default_config() -> ReputationConfig {
     }
 }
 
-pub fn get_config(env: &Env) -> ReputationConfig {
-    env.storage()
-        .instance()
-        .get(&DataKey::ReputationConfig)
-        .unwrap_or_else(default_config)
-}
-
-fn set_config(env: &Env, config: &ReputationConfig) {
-    env.storage()
-        .instance()
-        .set(&DataKey::ReputationConfig, config);
-}
-
-/// Validates a caller-supplied config and, if valid, persists it. Panics with
-/// `GovernorError::InvalidReputationConfig` on an inverted/degenerate range so
-/// a misconfigured proposal can never leave the score-to-multiplier mapping
-/// undefined.
-pub fn update_config_checked(env: &Env, caller: &Address, config: ReputationConfig) {
-    if config.min_score >= config.max_score {
-        env.panic_with_error(GovernorError::InvalidReputationConfig);
-    }
-    if config.min_threshold_multiplier_bps == 0
-        || config.max_threshold_multiplier_bps == 0
-        || config.min_threshold_multiplier_bps > config.max_threshold_multiplier_bps
-    {
-        env.panic_with_error(GovernorError::InvalidReputationConfig);
-    }
-    set_config(env, &config);
-    crate::events::emit_reputation_config_updated(env, caller, &config);
+pub fn get_config(_env: &Env) -> ReputationConfig {
+    default_config()
 }
 
 fn default_reputation(env: &Env, proposer: &Address) -> ProposerReputation {
@@ -148,13 +91,7 @@ fn default_reputation(env: &Env, proposer: &Address) -> ProposerReputation {
     ProposerReputation {
         proposer: proposer.clone(),
         total_proposals: 0,
-        proposals_succeeded: 0,
-        proposals_executed: 0,
-        proposals_defeated: 0,
-        proposals_cancelled: 0,
-        proposals_expired: 0,
         total_participation_bps_sum: 0,
-        total_quorum_hit: 0,
         last_proposal_ledger: current_ledger,
         reputation_score: 0,
         threshold_multiplier_bps: BPS_DENOMINATOR,
@@ -206,44 +143,6 @@ fn reason_symbol(env: &Env, outcome: ReputationOutcome) -> Symbol {
     }
 }
 
-fn push_history(env: &Env, proposer: &Address, old_score: i32, new_score: i32, reason: Symbol) {
-    let key = DataKey::ReputationScoreHistory(proposer.clone());
-    let mut history: Vec<ReputationScoreEntry> =
-        env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
-    history.push_back(ReputationScoreEntry {
-        ledger: env.ledger().sequence(),
-        score: new_score,
-        change: new_score - old_score,
-        reason,
-    });
-    while history.len() > MAX_HISTORY_ENTRIES {
-        history.pop_front();
-    }
-    env.storage().persistent().set(&key, &history);
-    env.storage()
-        .persistent()
-        .extend_ttl(&key, REPUTATION_TTL_LEDGERS, REPUTATION_TTL_LEDGERS);
-}
-
-pub fn get_score_history(env: &Env, proposer: &Address) -> Vec<ReputationScoreEntry> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::ReputationScoreHistory(proposer.clone()))
-        .unwrap_or(Vec::new(env))
-}
-
-fn track_proposer_for_leaderboard(env: &Env, proposer: &Address) {
-    let key = DataKey::ReputationProposerList;
-    let mut list: Vec<Address> = env.storage().persistent().get(&key).unwrap_or(Vec::new(env));
-    if !list.contains(proposer) {
-        list.push_back(proposer.clone());
-        env.storage().persistent().set(&key, &list);
-        env.storage()
-            .persistent()
-            .extend_ttl(&key, REPUTATION_TTL_LEDGERS, REPUTATION_TTL_LEDGERS);
-    }
-}
-
 /// Called once per `propose()` (via `create_proposal_internal`) to bump the
 /// proposer's lifetime proposal count ahead of knowing the eventual outcome.
 pub fn record_proposal_created(env: &Env, proposer: &Address) {
@@ -259,7 +158,6 @@ pub fn record_proposal_created(env: &Env, proposer: &Address) {
     rep.total_proposals += 1;
     rep.last_proposal_ledger = current_ledger;
     save_reputation(env, &rep);
-    track_proposer_for_leaderboard(env, proposer);
 }
 
 /// Applies the score delta for a terminal (or Succeeded) proposal outcome,
@@ -285,29 +183,22 @@ pub fn record_proposal_terminal(
 
     let mut delta = match outcome {
         ReputationOutcome::Succeeded => {
-            rep.proposals_succeeded += 1;
             rep.consecutive_successful += 1;
             rep.consecutive_failed = 0;
             config.score_for_succeed
         }
-        ReputationOutcome::Executed => {
-            rep.proposals_executed += 1;
-            config.score_for_executed
-        }
+        ReputationOutcome::Executed => config.score_for_executed,
         ReputationOutcome::Defeated => {
-            rep.proposals_defeated += 1;
             rep.consecutive_failed += 1;
             rep.consecutive_successful = 0;
             config.score_for_defeated
         }
         ReputationOutcome::Cancelled => {
-            rep.proposals_cancelled += 1;
             rep.consecutive_failed += 1;
             rep.consecutive_successful = 0;
             config.score_for_cancelled
         }
         ReputationOutcome::Expired => {
-            rep.proposals_expired += 1;
             rep.consecutive_failed += 1;
             rep.consecutive_successful = 0;
             config.score_for_expired
@@ -318,9 +209,6 @@ pub fn record_proposal_terminal(
         rep.total_participation_bps_sum = rep.total_participation_bps_sum.saturating_add(bps as u64);
         if bps >= HIGH_PARTICIPATION_THRESHOLD_BPS {
             delta = delta.saturating_add(config.score_for_high_participation);
-        }
-        if outcome == ReputationOutcome::Succeeded {
-            rep.total_quorum_hit += 1;
         }
     }
 
@@ -339,7 +227,6 @@ pub fn record_proposal_terminal(
 
     save_reputation(env, &rep);
     let reason = reason_symbol(env, outcome);
-    push_history(env, proposer, old_score, new_score, reason.clone());
     crate::events::emit_reputation_updated(env, proposer, old_score, new_score, &reason);
 
     if new_multiplier != old_multiplier {
@@ -416,89 +303,11 @@ pub fn apply_decay(env: &Env, proposer: &Address) {
     save_reputation(env, &rep);
 
     let reason = Symbol::new(env, "decay");
-    push_history(env, proposer, old_score, new_score, reason.clone());
     crate::events::emit_reputation_updated(env, proposer, old_score, new_score, &reason);
 }
 
-pub fn get_leaderboard(env: &Env) -> Vec<ProposerLeaderboardEntry> {
-    env.storage()
-        .persistent()
-        .get(&DataKey::GlobalProposerLeaderboard)
-        .unwrap_or(Vec::new(env))
-}
-
-/// Rebuilds the top-`MAX_LEADERBOARD_ENTRIES` proposer ranking from the
-/// bounded list of addresses that have ever created a proposal. Uses a
-/// simple insertion sort — the proposer list is expected to stay small
-/// relative to proposal volume (bounded by unique governance participants,
-/// not by proposal count), so O(n^2) is an acceptable, easy-to-audit choice.
-pub fn refresh_leaderboard(env: &Env) {
-    let list: Vec<Address> = env
-        .storage()
-        .persistent()
-        .get(&DataKey::ReputationProposerList)
-        .unwrap_or(Vec::new(env));
-
-    let mut entries: Vec<ProposerLeaderboardEntry> = Vec::new(env);
-    for addr in list.iter() {
-        let rep = get_reputation(env, &addr);
-        let success_rate_bps = if rep.total_proposals > 0 {
-            (rep.proposals_succeeded as u64 * BPS_DENOMINATOR as u64 / rep.total_proposals as u64) as u32
-        } else {
-            0
-        };
-        let avg_participation_bps = if rep.total_proposals > 0 {
-            (rep.total_participation_bps_sum / rep.total_proposals as u64) as u32
-        } else {
-            0
-        };
-        entries.push_back(ProposerLeaderboardEntry {
-            rank: 0,
-            proposer: addr.clone(),
-            reputation_score: rep.reputation_score,
-            total_proposals: rep.total_proposals,
-            success_rate_bps,
-            avg_participation_bps,
-        });
-    }
-
-    let n = entries.len();
-    for i in 1..n {
-        let mut j = i;
-        while j > 0 {
-            let a = entries.get(j - 1).unwrap();
-            let b = entries.get(j).unwrap();
-            if a.reputation_score < b.reputation_score {
-                entries.set(j - 1, b);
-                entries.set(j, a);
-                j -= 1;
-            } else {
-                break;
-            }
-        }
-    }
-
-    let top_n = entries.len().min(MAX_LEADERBOARD_ENTRIES);
-    let mut ranked: Vec<ProposerLeaderboardEntry> = Vec::new(env);
-    for i in 0..top_n {
-        let mut entry = entries.get(i).unwrap();
-        entry.rank = i + 1;
-        ranked.push_back(entry);
-    }
-
-    env.storage()
-        .persistent()
-        .set(&DataKey::GlobalProposerLeaderboard, &ranked);
-    env.storage().persistent().extend_ttl(
-        &DataKey::GlobalProposerLeaderboard,
-        REPUTATION_TTL_LEDGERS,
-        REPUTATION_TTL_LEDGERS,
-    );
-    env.storage()
-        .instance()
-        .set(&DataKey::LeaderboardLastUpdated, &env.ledger().sequence());
-
-    if let Some(top) = ranked.get(0) {
-        crate::events::emit_leaderboard_refreshed(env, &top.proposer, top.reputation_score);
-    }
-}
+// Note: proposer leaderboard ranking is computed off-chain by the indexer
+// (GET /reputation/leaderboard, ordered by reputation_score) from the
+// ReputationUpdated event stream rather than maintained on-chain — sorting a
+// growing address list is exactly the kind of work that's cheap off-chain
+// and unnecessarily expensive (in both gas and contract size) on it.

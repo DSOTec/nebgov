@@ -49,7 +49,6 @@ export enum GovernorErrorCode {
   ProposalNotActive = 28,
   InvalidVoteChoice = 43,
   UnauthorizedRegistry = 44,
-  InvalidReputationConfig = 45,
 
   // SDK-level codes
   RpcNotFound = 100,
@@ -108,8 +107,6 @@ const GOVERNOR_MESSAGES: Record<GovernorErrorCode, string> = {
     "Invalid vote choice: must be 0 (Against), 1 (For), or 2 (Abstain)",
   [GovernorErrorCode.UnauthorizedRegistry]:
     "Caller is not the configured co-sponsorship registry",
-  [GovernorErrorCode.InvalidReputationConfig]:
-    "Invalid reputation config: score/multiplier ranges must be well-formed",
 
   // SDK-level codes
   [GovernorErrorCode.RpcNotFound]: "Proposal not found",

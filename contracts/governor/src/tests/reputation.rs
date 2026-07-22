@@ -12,8 +12,8 @@
 use crate::{reputation, GovernorContract, GovernorContractClient, ProposalState, VoteSupport, VoteType};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    testutils::{Address as _, Ledger as _, MockAuth, MockAuthInvoke},
-    Address, Bytes, Env, IntoVal, String, Symbol,
+    testutils::{Address as _, Ledger as _},
+    Address, Bytes, Env, String, Symbol,
 };
 use sorogov_timelock::{TimelockContract, TimelockContractClient};
 
@@ -171,7 +171,7 @@ fn test_score_increments_on_successful_proposal() {
     h.governor.queue(&proposal_id);
 
     let rep = h.governor.get_proposer_reputation(&proposer);
-    assert_eq!(rep.proposals_succeeded, 1);
+    assert_eq!(rep.consecutive_successful, 1);
     // 2 voters * 1000 / 10_000 supply = 2000 bps participation: below the
     // 5000 bps high-participation bonus threshold, so just score_for_succeed.
     assert_eq!(rep.reputation_score, 100);
@@ -194,7 +194,7 @@ fn test_score_decrements_on_defeated_proposal() {
     assert_eq!(h.governor.state(&proposal_id), ProposalState::Defeated);
 
     let rep = h.governor.get_proposer_reputation(&proposer);
-    assert_eq!(rep.proposals_defeated, 1);
+    assert_eq!(rep.consecutive_failed, 1);
     assert_eq!(rep.reputation_score, -30);
 }
 
@@ -221,7 +221,7 @@ fn test_score_decrements_on_expired_proposal() {
     assert_eq!(h.governor.state(&proposal_id), ProposalState::Expired);
 
     let rep = h.governor.get_proposer_reputation(&proposer);
-    assert_eq!(rep.proposals_expired, 1);
+    assert_eq!(rep.consecutive_failed, 1);
     assert_eq!(rep.reputation_score, -60);
 }
 
@@ -325,16 +325,12 @@ fn test_score_clamped_at_max_and_min() {
     let h = setup(10, 20, 0, 0, 120_960);
     let good_proposer = Address::generate(&h.env);
     let bad_proposer = Address::generate(&h.env);
+    let config = reputation::default_config();
 
     h.env.as_contract(&h.governor_id, || {
-        let caller = h.governor_id.clone();
-        let mut config = reputation::default_config();
-        config.max_score = 50;
-        config.min_score = -50;
-        reputation::update_config_checked(&h.env, &caller, config);
-
-        // Two Executed outcomes (+50 each) sum to 100, but must clamp at 50.
-        for _ in 0..2 {
+        // 21 Executed outcomes (+50 each) sum to 1050, but must clamp at
+        // the default max_score of 1000.
+        for _ in 0..21 {
             reputation::record_proposal_created(&h.env, &good_proposer);
             reputation::record_proposal_terminal(
                 &h.env,
@@ -344,8 +340,9 @@ fn test_score_clamped_at_max_and_min() {
             );
         }
 
-        // Two Expired outcomes (-60 each) sum to -120, but must clamp at -50.
-        for _ in 0..2 {
+        // 17 Expired outcomes (-60 each) sum to -1020, but must clamp at
+        // the default min_score of -1000.
+        for _ in 0..17 {
             reputation::record_proposal_created(&h.env, &bad_proposer);
             reputation::record_proposal_terminal(
                 &h.env,
@@ -358,8 +355,8 @@ fn test_score_clamped_at_max_and_min() {
 
     let good = h.governor.get_proposer_reputation(&good_proposer);
     let bad = h.governor.get_proposer_reputation(&bad_proposer);
-    assert_eq!(good.reputation_score, 50);
-    assert_eq!(bad.reputation_score, -50);
+    assert_eq!(good.reputation_score, config.max_score);
+    assert_eq!(bad.reputation_score, config.min_score);
 }
 
 #[test]
@@ -403,91 +400,6 @@ fn test_threshold_multiplier_computed_correctly_at_extremes() {
     let at_min_score = reputation::compute_threshold_multiplier(config.min_score, &config);
     assert_eq!(at_max_score, config.min_threshold_multiplier_bps);
     assert_eq!(at_min_score, config.max_threshold_multiplier_bps);
-}
-
-#[test]
-fn test_leaderboard_refresh_orders_by_score() {
-    let h = setup(10, 20, 0, 0, 120_960);
-    let top = Address::generate(&h.env);
-    let mid = Address::generate(&h.env);
-    let bottom = Address::generate(&h.env);
-
-    h.env.as_contract(&h.governor_id, || {
-        reputation::record_proposal_created(&h.env, &top);
-        reputation::record_proposal_terminal(
-            &h.env,
-            &top,
-            reputation::ReputationOutcome::Succeeded,
-            Some(6_000),
-        ); // 130
-
-        reputation::record_proposal_created(&h.env, &mid);
-        reputation::record_proposal_terminal(
-            &h.env,
-            &mid,
-            reputation::ReputationOutcome::Executed,
-            None,
-        ); // 50
-
-        reputation::record_proposal_created(&h.env, &bottom);
-        reputation::record_proposal_terminal(
-            &h.env,
-            &bottom,
-            reputation::ReputationOutcome::Defeated,
-            None,
-        ); // -30
-
-        reputation::refresh_leaderboard(&h.env);
-    });
-
-    let board = h.governor.get_proposer_leaderboard();
-    assert_eq!(board.len(), 3);
-    assert_eq!(board.get(0).unwrap().proposer, top);
-    assert_eq!(board.get(0).unwrap().rank, 1);
-    assert_eq!(board.get(1).unwrap().proposer, mid);
-    assert_eq!(board.get(1).unwrap().rank, 2);
-    assert_eq!(board.get(2).unwrap().proposer, bottom);
-    assert_eq!(board.get(2).unwrap().rank, 3);
-}
-
-#[test]
-fn test_reputation_config_update_by_governance() {
-    let h = setup(10, 20, 0, 0, 120_960);
-
-    let mut new_config = reputation::default_config();
-    new_config.score_for_succeed = 222;
-    new_config.decay_rate_per_1000_ledgers = 5;
-
-    // Governance-only: only the governor contract calling itself (as would
-    // happen via an executed proposal) is authorized.
-    h.governor.update_reputation_config(&h.governor_id, &new_config);
-
-    let stored = h.governor.get_reputation_config();
-    assert_eq!(stored.score_for_succeed, 222);
-    assert_eq!(stored.decay_rate_per_1000_ledgers, 5);
-}
-
-#[test]
-#[should_panic]
-fn reputation_config_update_rejects_caller_that_is_not_the_contract_address() {
-    let env = Env::default();
-    let governor_id = env.register(GovernorContract, ());
-    let governor = GovernorContractClient::new(&env, &governor_id);
-
-    let attacker = Address::generate(&env);
-    let config = reputation::default_config();
-
-    env.mock_auths(&[MockAuth {
-        address: &attacker,
-        invoke: &MockAuthInvoke {
-            contract: &governor_id,
-            fn_name: "update_reputation_config",
-            args: (attacker.clone(), config.clone()).into_val(&env),
-            sub_invokes: &[],
-        },
-    }]);
-
-    governor.update_reputation_config(&attacker, &config);
 }
 
 #[test]

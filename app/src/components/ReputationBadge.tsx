@@ -45,14 +45,14 @@ interface Props {
 export function ReputationBadge({ reputation }: Props) {
   const tier = tierFor(reputation);
   const meta = TIER_CONFIG[tier];
-  const successRate =
-    reputation.totalProposals > 0
-      ? Math.round(
-          (reputation.proposalsSucceeded / reputation.totalProposals) * 100,
-        )
-      : 0;
+  const streak =
+    reputation.consecutiveSuccessful > 0
+      ? `${reputation.consecutiveSuccessful} succeeded in a row`
+      : reputation.consecutiveFailed > 0
+        ? `${reputation.consecutiveFailed} failed in a row`
+        : "no streak";
 
-  const tooltip = `Score: ${reputation.reputationScore} | Success rate: ${successRate}% | Proposals: ${reputation.totalProposals}`;
+  const tooltip = `Score: ${reputation.reputationScore} | Proposals: ${reputation.totalProposals} | Streak: ${streak}`;
 
   return (
     <span

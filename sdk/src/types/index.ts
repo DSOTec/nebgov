@@ -624,14 +624,8 @@ export interface SimulateResult {
 export interface ProposerReputation {
   proposer: string;
   totalProposals: number;
-  proposalsSucceeded: number;
-  proposalsExecuted: number;
-  proposalsDefeated: number;
-  proposalsCancelled: number;
-  proposalsExpired: number;
   /** Sum of participation (in basis points) across every proposal this address created. */
   totalParticipationBpsSum: bigint;
-  totalQuorumHit: number;
   lastProposalLedger: number;
   /** Rolling score, clamped to `[minScore, maxScore]` from {@link ReputationConfig}. */
   reputationScore: number;
@@ -642,24 +636,12 @@ export interface ProposerReputation {
   consecutiveFailed: number;
 }
 
-/** Tunable parameters for the proposer reputation system. */
-export interface ReputationConfig {
-  enabled: boolean;
-  scoreForSucceed: number;
-  scoreForExecuted: number;
-  scoreForDefeated: number;
-  scoreForCancelled: number;
-  scoreForExpired: number;
-  scoreForHighParticipation: number;
-  minProposalsForDiscount: number;
-  maxScore: number;
-  minScore: number;
-  maxThresholdMultiplierBps: number;
-  minThresholdMultiplierBps: number;
-  decayRatePer1000Ledgers: number;
-}
-
-/** A single entry in a proposer's reputation score history. */
+/**
+ * A single entry in a proposer's reputation score history, as returned by
+ * the indexer's `GET /reputation/:address/history` (built from
+ * `ReputationUpdated` events — not an on-chain read, to keep the governor
+ * contract's WASM size under budget).
+ */
 export interface ReputationScoreEntry {
   ledger: number;
   score: number;
@@ -667,12 +649,14 @@ export interface ReputationScoreEntry {
   reason: string;
 }
 
-/** One row of the top-proposer leaderboard, as returned by {@link ReputationClient.getLeaderboard}. */
+/**
+ * One row of the top-proposer leaderboard, as returned by the indexer's
+ * `GET /reputation/leaderboard` (computed off-chain from indexed
+ * `ReputationUpdated` events, not an on-chain read).
+ */
 export interface ProposerLeaderboardEntry {
   rank: number;
   proposer: string;
   reputationScore: number;
-  totalProposals: number;
-  successRateBps: number;
-  avgParticipationBps: number;
+  lastUpdatedLedger: number | null;
 }
