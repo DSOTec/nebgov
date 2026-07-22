@@ -48,6 +48,7 @@ export enum GovernorErrorCode {
   ArithmeticOverflow = 27,
   ProposalNotActive = 28,
   InvalidVoteChoice = 43,
+  UnauthorizedRegistry = 44,
 
   // SDK-level codes
   RpcNotFound = 100,
@@ -104,6 +105,8 @@ const GOVERNOR_MESSAGES: Record<GovernorErrorCode, string> = {
     "Voting has ended for this proposal",
   [GovernorErrorCode.InvalidVoteChoice]:
     "Invalid vote choice: must be 0 (Against), 1 (For), or 2 (Abstain)",
+  [GovernorErrorCode.UnauthorizedRegistry]:
+    "Caller is not the configured co-sponsorship registry",
 
   // SDK-level codes
   [GovernorErrorCode.RpcNotFound]: "Proposal not found",
@@ -178,10 +181,23 @@ export class TimelockError extends Error {
 /**
  * Error codes for the TokenVotes contract + SDK transport layer.
  *
- * The token-votes contract does not define a #[contracterror] enum, so all
- * codes here are SDK-level.
+ * Codes 10-16 mirror the on-chain `TokenVotesError` enum
+ * (contracts/token-votes/src/error.rs), introduced for signed delegation
+ * (issue #772). Codes 1-9 are reserved on-chain for delegation/checkpoint
+ * invariants that still panic via `assert!`/`expect` rather than a typed
+ * error. SDK-level codes start at 100.
  */
 export enum VotesErrorCode {
+  // On-chain contract errors (match contracts/token-votes/src/error.rs)
+  InvalidSignature = 10,
+  NonceAlreadyUsed = 11,
+  PermitExpired = 12,
+  InvalidDelegationPermit = 13,
+  RelayerNotWhitelisted = 14,
+  InvalidChainId = 15,
+  InvalidContractId = 16,
+
+  // SDK-level codes
   SimulationFailed = 100,
   TransactionFailed = 101,
   TransactionTimeout = 102,
@@ -190,6 +206,21 @@ export enum VotesErrorCode {
 }
 
 const VOTES_MESSAGES: Record<VotesErrorCode, string> = {
+  [VotesErrorCode.InvalidSignature]:
+    "Invalid or missing delegation signature",
+  [VotesErrorCode.NonceAlreadyUsed]:
+    "Permit nonce has already been used or invalidated",
+  [VotesErrorCode.PermitExpired]:
+    "Delegation permit has expired",
+  [VotesErrorCode.InvalidDelegationPermit]:
+    "Delegation permit is malformed or out of order",
+  [VotesErrorCode.RelayerNotWhitelisted]:
+    "Relayer is not whitelisted to submit signed permits",
+  [VotesErrorCode.InvalidChainId]:
+    "Permit was signed for a different network",
+  [VotesErrorCode.InvalidContractId]:
+    "Permit was signed for a different contract",
+
   [VotesErrorCode.SimulationFailed]: "Simulation failed",
   [VotesErrorCode.TransactionFailed]: "Transaction failed",
   [VotesErrorCode.TransactionTimeout]: "Transaction timed out",
@@ -421,6 +452,104 @@ export function parseTreasuryError(
   );
 }
 
+// ─── Co-Sponsorship Errors ────────────────────────────────────────────────────
+
+/**
+ * Error codes for the CoSponsorship contract + SDK transport layer.
+ *
+ * Codes 1–99 mirror the on-chain CoSponsorshipError enum values
+ * (contracts/co-sponsorship/src/error.rs).
+ */
+export enum CoSponsorshipErrorCode {
+  AlreadyInitialized = 1,
+  DraftNotFound = 2,
+  DraftExpired = 3,
+  DraftClosed = 4,
+  AlreadyCoSponsored = 5,
+  NotCoSponsored = 6,
+  CoSponsorLimitReached = 7,
+  DraftThresholdNotMet = 8,
+  UnauthorizedDraftCreator = 9,
+  ZeroVotingPower = 10,
+  InvalidVectorLengths = 11,
+  NoTargets = 12,
+  CalldataTooLarge = 13,
+  TooManyCalldataEntries = 14,
+
+  // SDK-level codes
+  SimulationFailed = 100,
+  TransactionFailed = 101,
+  TransactionTimeout = 102,
+  MissingReturnValue = 103,
+}
+
+const CO_SPONSORSHIP_MESSAGES: Record<CoSponsorshipErrorCode, string> = {
+  [CoSponsorshipErrorCode.AlreadyInitialized]: "Contract is already initialized",
+  [CoSponsorshipErrorCode.DraftNotFound]: "Draft not found",
+  [CoSponsorshipErrorCode.DraftExpired]: "Draft has expired",
+  [CoSponsorshipErrorCode.DraftClosed]: "Draft has already been finalized or cancelled",
+  [CoSponsorshipErrorCode.AlreadyCoSponsored]: "Address has already co-sponsored this draft",
+  [CoSponsorshipErrorCode.NotCoSponsored]: "Address has not co-sponsored this draft",
+  [CoSponsorshipErrorCode.CoSponsorLimitReached]: "Draft has reached its maximum co-sponsor count",
+  [CoSponsorshipErrorCode.DraftThresholdNotMet]:
+    "Draft's accumulated co-sponsor power does not meet the proposal threshold",
+  [CoSponsorshipErrorCode.UnauthorizedDraftCreator]:
+    "Only the draft's creator (or admin, for cancellation) may perform this action",
+  [CoSponsorshipErrorCode.ZeroVotingPower]: "Account has zero voting power",
+  [CoSponsorshipErrorCode.InvalidVectorLengths]:
+    "Targets, function names, and calldatas must have the same length",
+  [CoSponsorshipErrorCode.NoTargets]: "At least one target is required",
+  [CoSponsorshipErrorCode.CalldataTooLarge]: "Calldata exceeds the maximum allowed size",
+  [CoSponsorshipErrorCode.TooManyCalldataEntries]: "Too many calldata entries",
+  [CoSponsorshipErrorCode.SimulationFailed]: "Simulation failed",
+  [CoSponsorshipErrorCode.TransactionFailed]: "Transaction failed",
+  [CoSponsorshipErrorCode.TransactionTimeout]: "Transaction timed out",
+  [CoSponsorshipErrorCode.MissingReturnValue]: "No return value from contract",
+};
+
+export class CoSponsorshipError extends Error {
+  readonly name = "CoSponsorshipError";
+
+  constructor(
+    public readonly code: CoSponsorshipErrorCode,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, CoSponsorshipError.prototype);
+  }
+}
+
+/**
+ * Parse a raw Soroban RPC error into a typed {@link CoSponsorshipError}.
+ */
+export function parseCoSponsorshipError(
+  raw: SorobanRpcError | string | null | undefined,
+  cause?: unknown,
+): CoSponsorshipError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null) {
+    const code = contractCode as CoSponsorshipErrorCode;
+    const message =
+      CO_SPONSORSHIP_MESSAGES[code] ?? `Co-sponsorship contract error #${contractCode}`;
+    return new CoSponsorshipError(code, message, cause);
+  }
+
+  if (hasErrorStatus(raw)) {
+    return new CoSponsorshipError(
+      CoSponsorshipErrorCode.TransactionFailed,
+      `${CO_SPONSORSHIP_MESSAGES[CoSponsorshipErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
+      cause,
+    );
+  }
+
+  return new CoSponsorshipError(
+    CoSponsorshipErrorCode.SimulationFailed,
+    `${CO_SPONSORSHIP_MESSAGES[CoSponsorshipErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
+    cause,
+  );
+}
+
 /**
  * Parse a raw Soroban RPC error into a typed {@link VotesError}.
  */
@@ -428,6 +557,12 @@ export function parseVotesError(
   raw: SorobanRpcError | string | null | undefined,
   cause?: unknown,
 ): VotesError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null && contractCode in VOTES_MESSAGES) {
+    const code = contractCode as VotesErrorCode;
+    return new VotesError(code, VOTES_MESSAGES[code], cause);
+  }
+
   if (hasErrorStatus(raw)) {
     return new VotesError(
       VotesErrorCode.TransactionFailed,

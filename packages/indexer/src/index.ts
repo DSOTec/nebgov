@@ -10,6 +10,8 @@ dotenv.config();
 
 const GOVERNOR_ADDRESS = process.env.GOVERNOR_ADDRESS ?? "";
 const WRAPPER_ADDRESS = process.env.WRAPPER_ADDRESS ?? "";
+const CO_SPONSORSHIP_ADDRESS = process.env.CO_SPONSORSHIP_ADDRESS ?? "";
+const TOKEN_VOTES_ADDRESS = process.env.TOKEN_VOTES_ADDRESS ?? "";
 const RPC_URL = process.env.STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.org";
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS ?? 5000);
 const PORT = Number(process.env.PORT ?? 3001);
@@ -50,6 +52,8 @@ async function runIndexer(): Promise<void> {
     rpcUrl: RPC_URL,
     governorAddress: GOVERNOR_ADDRESS,
     wrapperAddress: WRAPPER_ADDRESS,
+    coSponsorshipAddress: CO_SPONSORSHIP_ADDRESS,
+    tokenVotesAddress: TOKEN_VOTES_ADDRESS,
     pollIntervalMs: POLL_INTERVAL_MS,
   };
 

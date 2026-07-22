@@ -89,6 +89,44 @@ export interface ProposalInput {
   calldata: Buffer | Uint8Array;
 }
 
+/**
+ * A co-sponsorship pre-proposal, awaiting enough pledged voting power to
+ * meet the governor's proposal threshold before being promoted into a real
+ * governor proposal via `CoSponsorshipClient.finalizeDraft`.
+ */
+export interface ProposalDraft {
+  /** Unique numeric identifier assigned at creation. */
+  id: bigint;
+  /** Stellar address that created the draft. */
+  creator: string;
+  /** Human-readable summary. */
+  description: string;
+  /** SHA-256 hash of the off-chain description content. */
+  descriptionHash: string;
+  /** URI pointing to the full proposal description content. */
+  metadataUri: string;
+  /** Contract addresses that will be invoked if the draft is finalized. */
+  targets: string[];
+  /** Function names invoked on each target. */
+  fnNames: string[];
+  /** ABI-encoded calldata for each target. */
+  calldatas: (Buffer | Uint8Array)[];
+  /** Ledger sequence at which the draft was created. */
+  createdLedger: number;
+  /** Ledger sequence after which the draft can no longer be co-sponsored or finalized. */
+  expiryLedger: number;
+  /** Addresses that have pledged voting power to this draft. */
+  coSponsors: string[];
+  /** Voting power pledged by each address in `coSponsors`, same order. */
+  coSponsorPower: bigint[];
+  /** Sum of all pledged co-sponsor voting power. */
+  totalPower: bigint;
+  /** Whether the draft has been promoted into a real proposal. */
+  finalized: boolean;
+  /** Whether the draft was cancelled. */
+  cancelled: boolean;
+}
+
 /** Aggregated vote tallies for a proposal. */
 export interface ProposalVotes {
   /** Total tokens cast in favour. */
@@ -106,6 +144,8 @@ export interface GovernorConfig {
   timelockAddress: string;
   /** Contract address of the token-votes contract */
   votesAddress: string;
+  /** Contract address of the co-sponsorship registry, if deployed */
+  coSponsorshipAddress?: string;
   /** Stellar network to connect to */
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
@@ -195,6 +235,35 @@ export interface GuardianActivityEntry {
   ledger: number;
 }
 
+export interface DependencyEdge {
+  from: string;
+  to: string;
+}
+
+export interface DependencyGraph {
+  nodes: string[];
+  edges: DependencyEdge[];
+}
+
+export interface FailedOperation {
+  opId: string;
+  target: string;
+  fnName: string;
+  failureReason: string;
+  failedAtLedger: number;
+  retryCount: number;
+}
+
+export interface PartialBatchExecutionState {
+  batchOpId: string;
+  totalOps: number;
+  completedOps: string[];
+  failedOps: FailedOperation[];
+  pendingOps: string[];
+  recoveryMode: boolean;
+  recoveryDeadline: number;
+}
+
 export interface GovernorSettings {
   votingDelay: number;
   votingPeriod: number;
@@ -245,6 +314,20 @@ export interface DelegatorRecord {
   startLedger: number;
 }
 
+/**
+ * An off-chain-signed instruction to delegate voting power (issue #772).
+ * Mirrors `DelegationPermit` in contracts/token-votes/src/delegation_sig.rs.
+ */
+export interface DelegationPermit {
+  delegator: string;
+  delegatee: string;
+  nonce: bigint;
+  expiryLedger: number;
+  /** 32 raw bytes — the network ID (sha256 of the network passphrase). */
+  chainId: Buffer;
+  contractId: string;
+}
+
 export interface VoteGasEstimate {
   ok: boolean;
   cpuInsns?: string;
@@ -291,6 +374,51 @@ export interface DelegatorInfo {
   delegator: string;
   /** Voting power this delegator contributes to the delegate */
   power: bigint;
+}
+
+// ─── Delegation Registry Types (issue #769) ──────────────────────────────────
+//
+// These mirror the on-chain `delegation_registry` module in the token-votes
+// contract. `RegistryDelegatorInfo` is intentionally distinct from the
+// pre-existing `DelegatorInfo` above (which is event-scan-derived and used by
+// the legacy {@link VotesClient.getDelegators}) to avoid colliding with it.
+
+/** A single delegation record as returned by {@link VotesClient.getReceivedDelegations}. */
+export interface DelegationEntry {
+  delegator: string;
+  delegatee: string;
+  delegatedAtLedger: number;
+  votingPowerAtDelegation: bigint;
+  active: boolean;
+  revokedAtLedger: number | null;
+}
+
+/** One lifecycle entry (active or revoked) in a delegator's history, as returned by {@link VotesClient.getDelegationHistory}. */
+export interface DelegationHistoryEntry {
+  delegatee: string;
+  delegatedAtLedger: number;
+  revokedAtLedger: number | null;
+  powerAtDelegation: bigint;
+  sequence: number;
+}
+
+/** A current delegator of a delegatee, as returned by {@link VotesClient.getRegistryDelegators} and {@link VotesClient.getDelegationSnapshot}. */
+export interface RegistryDelegatorInfo {
+  address: string;
+  delegatedPower: bigint;
+  delegatedAtLedger: number;
+  chainDepth: number;
+}
+
+/** Comprehensive delegate summary as returned by {@link VotesClient.getDelegateProfile}. */
+export interface DelegateProfile {
+  address: string;
+  currentVotingPower: bigint;
+  baseVotingPower: bigint;
+  totalDelegators: number;
+  totalDelegatedPower: bigint;
+  delegationDepthLimit: number;
+  firstDelegatedAtLedger: number | null;
 }
 
 // ─── Treasury Types ───────────────────────────────────────────────────────────

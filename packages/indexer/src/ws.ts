@@ -11,7 +11,20 @@ export type WsEventType =
   | "config_updated"
   | "governor_upgraded"
   | "wrapper_deposit"
-  | "wrapper_withdrawal";
+  | "wrapper_withdrawal"
+  | "liquidity_added"
+  | "liquidity_removed"
+  | "swap"
+  | "pool_fee_updated"
+  | "draft_created"
+  | "co_sponsored"
+  | "co_sponsorship_withdrawn"
+  | "draft_finalized"
+  | "draft_cancelled"
+  | "draft_expired"
+  | "delegation_registered"
+  | "delegation_revoked"
+  | "delegation_depth_limit_updated";
 
 export interface WsEvent {
   type: WsEventType;

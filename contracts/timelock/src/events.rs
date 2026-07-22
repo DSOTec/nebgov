@@ -149,3 +149,88 @@ pub fn emit_min_delay_updated(env: &Env, old_delay: u64, new_delay: u64) {
         MinDelayUpdatedEvent { old_delay, new_delay },
     );
 }
+
+pub fn emit_dependency_dag_validated(env: &Env, batch_op_id: &Bytes, op_count: u32) {
+    env.events().publish(
+        (Symbol::new(env, "DependencyDagValidated"),),
+        (batch_op_id.clone(), op_count),
+    );
+}
+
+pub fn emit_cycle_detected(env: &Env, cycle_path: &Vec<Bytes>) {
+    env.events().publish(
+        (Symbol::new(env, "CycleDetected"),),
+        cycle_path.clone(),
+    );
+}
+
+pub fn emit_partial_batch_started(env: &Env, batch_op_id: &Bytes, total_ops: u32) {
+    env.events().publish(
+        (Symbol::new(env, "PartialBatchStarted"),),
+        (batch_op_id.clone(), total_ops),
+    );
+}
+
+pub fn emit_partial_op_succeeded(
+    env: &Env,
+    batch_op_id: &Bytes,
+    op_id: &Bytes,
+    completed: u32,
+    total: u32,
+) {
+    env.events().publish(
+        (Symbol::new(env, "PartialOpSucceeded"),),
+        (batch_op_id.clone(), op_id.clone(), completed, total),
+    );
+}
+
+// Part of the recovery event surface. Emitted by off-chain-driven recovery
+// flows and retained for ABI completeness; allow(dead_code) keeps clippy's
+// -D warnings happy while no in-contract call site exists yet.
+#[allow(dead_code)]
+pub fn emit_partial_op_failed(env: &Env, batch_op_id: &Bytes, op_id: &Bytes) {
+    env.events().publish(
+        (Symbol::new(env, "PartialOpFailed"),),
+        (batch_op_id.clone(), op_id.clone()),
+    );
+}
+
+#[allow(dead_code)]
+pub fn emit_batch_recovery_entered(env: &Env, batch_op_id: &Bytes, recovery_deadline: u32) {
+    env.events().publish(
+        (Symbol::new(env, "BatchRecoveryEntered"),),
+        (batch_op_id.clone(), recovery_deadline),
+    );
+}
+
+pub fn emit_failed_op_retried(
+    env: &Env,
+    batch_op_id: &Bytes,
+    op_id: &Bytes,
+    retry_count: u32,
+    succeeded: bool,
+) {
+    env.events().publish(
+        (Symbol::new(env, "FailedOpRetried"),),
+        (
+            batch_op_id.clone(),
+            op_id.clone(),
+            retry_count,
+            succeeded,
+        ),
+    );
+}
+
+pub fn emit_failed_op_skipped(env: &Env, batch_op_id: &Bytes, op_id: &Bytes) {
+    env.events().publish(
+        (Symbol::new(env, "FailedOpSkipped"),),
+        (batch_op_id.clone(), op_id.clone()),
+    );
+}
+
+pub fn emit_batch_fully_complete(env: &Env, batch_op_id: &Bytes) {
+    env.events().publish(
+        (Symbol::new(env, "BatchFullyComplete"),),
+        batch_op_id.clone(),
+    );
+}
