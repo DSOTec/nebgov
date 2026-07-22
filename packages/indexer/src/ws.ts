@@ -21,7 +21,10 @@ export type WsEventType =
   | "co_sponsorship_withdrawn"
   | "draft_finalized"
   | "draft_cancelled"
-  | "draft_expired";
+  | "draft_expired"
+  | "delegation_registered"
+  | "delegation_revoked"
+  | "delegation_depth_limit_updated";
 
 export interface WsEvent {
   type: WsEventType;

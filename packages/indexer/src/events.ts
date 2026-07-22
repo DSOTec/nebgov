@@ -42,6 +42,10 @@ const TOPIC_MAP: Record<string, string> = {
   DraftFinalized: "DraftFinalized",
   DraftCancelled: "DraftCancelled",
   DraftExpired: "DraftExpired",
+  // Delegation registry events (#769)
+  DelegationRegistered: "DelegationRegistered",
+  DelegationRevoked: "DelegationRevoked",
+  DelegationDepthLimitUpdated: "DelegationDepthLimitUpdated",
 };
 
 export interface IndexerConfig {
@@ -51,6 +55,7 @@ export interface IndexerConfig {
   treasuryAddress?: string;
   liquidityAddress?: string;
   coSponsorshipAddress?: string;
+  tokenVotesAddress?: string;
   pollIntervalMs: number;
 }
 
@@ -80,6 +85,7 @@ export async function processEvents(
     if (config.treasuryAddress) contractIds.push(config.treasuryAddress);
     if (config.liquidityAddress) contractIds.push(config.liquidityAddress);
     if (config.coSponsorshipAddress) contractIds.push(config.coSponsorshipAddress);
+    if (config.tokenVotesAddress) contractIds.push(config.tokenVotesAddress);
 
     const response = await server.getEvents({
       startLedger,
@@ -120,6 +126,11 @@ export async function processEvents(
         contractId &&
         config.coSponsorshipAddress &&
         contractId === config.coSponsorshipAddress
+      );
+      const isTokenVotes = !!(
+        contractId &&
+        config.tokenVotesAddress &&
+        contractId === config.tokenVotesAddress
       );
 
       try {
@@ -183,6 +194,23 @@ export async function processEvents(
               break;
             case "DraftExpired":
               await handleDraftExpired(event);
+              break;
+            default:
+              break;
+          }
+        } else if (isTokenVotes) {
+          switch (eventType) {
+            case "DelegateChanged":
+              await handleDelegateChanged(event, topics);
+              break;
+            case "DelegationRegistered":
+              await handleDelegationRegistered(event, topics);
+              break;
+            case "DelegationRevoked":
+              await handleDelegationRevoked(event, topics);
+              break;
+            case "DelegationDepthLimitUpdated":
+              await handleDelegationDepthLimitUpdated(event, topics);
               break;
             default:
               break;
@@ -353,6 +381,63 @@ async function handleDelegateChanged(
   broadcast({
     type: "delegate_changed",
     data: { delegator, old_delegatee: oldDelegatee, new_delegatee: newDelegatee, ledger: event.ledger },
+  });
+}
+
+async function handleDelegationRegistered(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+  const data = scValToNative(event.value) as [string, bigint, number];
+  const [delegatee, power, chainDepth] = data;
+
+  await pool.query(
+    `INSERT INTO delegation_entries
+       (delegator_address, delegatee_address, delegated_at_ledger, power_at_delegation, chain_depth, active)
+     VALUES ($1, $2, $3, $4, $5, TRUE)`,
+    [delegator, delegatee, event.ledger, String(power), chainDepth],
+  );
+  invalidatePattern("delegates:");
+  invalidate(`profile:${delegator}`, `profile:${delegatee}`);
+  broadcast({
+    type: "delegation_registered",
+    data: { delegator, delegatee, power: String(power), chain_depth: chainDepth, ledger: event.ledger },
+  });
+}
+
+async function handleDelegationRevoked(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+  const data = scValToNative(event.value) as [string, number];
+  const [previousDelegatee, atLedger] = data;
+
+  await pool.query(
+    `UPDATE delegation_entries
+     SET active = FALSE, revoked_at_ledger = $3
+     WHERE delegator_address = $1 AND delegatee_address = $2 AND active = TRUE`,
+    [delegator, previousDelegatee, atLedger],
+  );
+  invalidatePattern("delegates:");
+  invalidate(`profile:${delegator}`, `profile:${previousDelegatee}`);
+  broadcast({
+    type: "delegation_revoked",
+    data: { delegator, previous_delegatee: previousDelegatee, ledger: atLedger },
+  });
+}
+
+async function handleDelegationDepthLimitUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as [number, number];
+  const [oldLimit, newLimit] = data;
+
+  broadcast({
+    type: "delegation_depth_limit_updated",
+    data: { old_limit: oldLimit, new_limit: newLimit, ledger: event.ledger },
   });
 }
 

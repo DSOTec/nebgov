@@ -219,6 +219,7 @@ docker run --env-file packages/indexer/.env \
 | `STELLAR_RPC_URL` | Yes | `https://soroban-testnet.stellar.org` | Stellar Soroban RPC endpoint |
 | `GOVERNOR_ADDRESS` | Yes | - | Stellar contract address of the governor |
 | `WRAPPER_ADDRESS` | No | - | Stellar contract address of the token wrapper |
+| `TOKEN_VOTES_ADDRESS` | No | - | Stellar contract address of the token-votes contract (delegation registry events) |
 | `TREASURY_ADDRESS` | No | - | Stellar contract address of the treasury |
 | `LIQUIDITY_ADDRESS` | No | - | Stellar contract address of the liquidity pool |
 | `POLL_INTERVAL_MS` | No | `5000` | Milliseconds between event polling cycles |
@@ -237,6 +238,7 @@ STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 # Contract Addresses
 GOVERNOR_ADDRESS=CDLZFC3SYJYDZT7S64ZDSBLDV4G6N7JPPG2RLFHRXVJMPWI33YCH4HVD
 WRAPPER_ADDRESS=CA3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
+TOKEN_VOTES_ADDRESS=CBTOKENVOTESZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 TREASURY_ADDRESS=CB3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 LIQUIDITY_ADDRESS=CC3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 

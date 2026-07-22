@@ -9,6 +9,7 @@ import {
   ProposalState,
   Network,
   VoteSupport,
+  DelegationHistoryEntry,
 } from "@nebgov/sdk";
 import {
   LineChart,
@@ -20,6 +21,9 @@ import {
   CartesianGrid,
 } from "recharts";
 import { useGovernorConfig } from "@/hooks/useGovernorConfig";
+import { useDelegateProfile } from "@/hooks/useDelegateProfile";
+import { DelegationChain } from "@/components/DelegationChain";
+import { DelegatorList } from "@/components/DelegatorList";
 import { isValidStellarAddress, formatVotingPower } from "../../../lib/utils";
 
 interface VotingRecord {
@@ -72,6 +76,13 @@ function VoterProfilePageContent() {
   >([]);
   const [error, setError] = useState<string | null>(null);
   const [federatedName, setFederatedName] = useState<string | null>(null);
+
+  // Delegation registry (issue #769)
+  const { profile: delegateProfile } = useDelegateProfile(address);
+  const [registryTab, setRegistryTab] = useState<"history" | "received">("history");
+  const [delegationChain, setDelegationChain] = useState<string[]>([]);
+  const [delegationHistory, setDelegationHistory] = useState<DelegationHistoryEntry[]>([]);
+  const [registryLoading, setRegistryLoading] = useState(true);
 
   // Validate address
   const isValidAddress = address && isValidStellarAddress(String(address));
@@ -233,6 +244,55 @@ function VoterProfilePageContent() {
     fetchProfileData();
   }, [address, isValidAddress]);
 
+  useEffect(() => {
+    if (!isValidAddress) {
+      setRegistryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchRegistryData() {
+      setRegistryLoading(true);
+      try {
+        const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
+        const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
+        const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
+        const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
+        const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+
+        if (!governorAddress || !timelockAddress || !votesAddress) return;
+
+        const votesClient = new VotesClient({
+          governorAddress,
+          timelockAddress,
+          votesAddress,
+          network,
+          ...(rpcUrl && { rpcUrl }),
+        });
+
+        const [chain, history] = await Promise.all([
+          votesClient.getDelegationChain(address),
+          votesClient.getDelegationHistory(address),
+        ]);
+
+        if (!cancelled) {
+          setDelegationChain(chain);
+          setDelegationHistory(history);
+        }
+      } catch {
+        // Registry data is supplementary; fail silently and show empty state.
+      } finally {
+        if (!cancelled) setRegistryLoading(false);
+      }
+    }
+
+    fetchRegistryData();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, isValidAddress]);
+
   if (loading) {
     return (
       <div className="max-w-4xl mx-auto px-4 py-8">
@@ -390,6 +450,117 @@ function VoterProfilePageContent() {
           </div>
         </div>
       )}
+
+      {/* Delegation Registry (issue #769) */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-8">
+        <p className="text-sm font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wide mb-4">
+          Delegation Registry
+        </p>
+
+        {delegateProfile && (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 text-sm">
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Delegators</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">
+                {delegateProfile.totalDelegators}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Delegated power</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">
+                {formatVotingPower(delegateProfile.totalDelegatedPower)}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Depth limit</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">
+                {delegateProfile.delegationDepthLimit}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 dark:text-gray-400">First delegated</p>
+              <p className="font-semibold text-gray-900 dark:text-gray-100">
+                {delegateProfile.firstDelegatedAtLedger !== null
+                  ? `ledger #${delegateProfile.firstDelegatedAtLedger}`
+                  : "—"}
+              </p>
+            </div>
+          </div>
+        )}
+
+        <div className="mb-6">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Delegation chain</p>
+          {registryLoading ? (
+            <div className="h-5 w-48 bg-gray-200 dark:bg-gray-700 animate-pulse rounded" />
+          ) : (
+            <DelegationChain chain={delegationChain} />
+          )}
+        </div>
+
+        <div className="border-b border-gray-200 dark:border-gray-700 mb-4 flex gap-4">
+          <button
+            onClick={() => setRegistryTab("history")}
+            className={`pb-2 text-sm font-medium border-b-2 -mb-px ${
+              registryTab === "history"
+                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400"
+                : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700"
+            }`}
+          >
+            Delegation History
+          </button>
+          <button
+            onClick={() => setRegistryTab("received")}
+            className={`pb-2 text-sm font-medium border-b-2 -mb-px ${
+              registryTab === "received"
+                ? "border-indigo-600 text-indigo-600 dark:text-indigo-400"
+                : "border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700"
+            }`}
+          >
+            Received Delegations
+          </button>
+        </div>
+
+        {registryTab === "history" ? (
+          registryLoading ? (
+            <div className="space-y-2">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <div key={i} className="h-6 bg-gray-200 dark:bg-gray-700 animate-pulse rounded" />
+              ))}
+            </div>
+          ) : delegationHistory.length === 0 ? (
+            <p className="text-sm text-gray-500 dark:text-gray-400">No delegation history found.</p>
+          ) : (
+            <div className="space-y-2">
+              {delegationHistory.map((entry, i) => (
+                <div
+                  key={`${entry.delegatee}-${entry.sequence}-${i}`}
+                  className="flex items-center justify-between text-sm border-b border-gray-100 dark:border-gray-800 pb-2 last:border-0"
+                >
+                  <Link
+                    href={`/profile/${entry.delegatee}`}
+                    className="font-mono text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300"
+                  >
+                    {entry.delegatee}
+                  </Link>
+                  <div className="text-right text-gray-500 dark:text-gray-400">
+                    <span>{formatVotingPower(entry.powerAtDelegation)}</span>
+                    <span className="mx-1">·</span>
+                    <span>ledger #{entry.delegatedAtLedger}</span>
+                    <span className="mx-1">·</span>
+                    {entry.revokedAtLedger !== null ? (
+                      <span>revoked #{entry.revokedAtLedger}</span>
+                    ) : (
+                      <span className="text-green-600 dark:text-green-400">active</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
+          <DelegatorList delegatee={address} />
+        )}
+      </div>
 
       {/* Voting Power History */}
       <div className="bg-white border border-gray-200 rounded-xl p-6 mb-8">

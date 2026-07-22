@@ -4,17 +4,23 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Symbol, Vec,
 };
 
+mod delegation_registry;
 mod delegation_sig;
 mod error;
 mod events;
 
+pub use delegation_registry::{DelegateProfile, DelegationEntry, DelegationHistoryEntry, DelegatorInfo};
 pub use delegation_sig::DelegationPermit;
 pub use error::TokenVotesError;
 
 #[cfg(test)]
 mod delegation_sig_tests;
+
 #[cfg(test)]
 mod load_tests;
+
+#[cfg(test)]
+mod delegation_registry_tests;
 
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
@@ -51,6 +57,17 @@ pub enum DataKey {
     DelegationPermitExpiry(Address),  // delegator -> u32: latest permit expiry
     RelayerWhitelist(Address),        // relayer -> bool: optional whitelist
     RelayerWhitelistEnabled,          // bool
+
+    // --- Delegation registry (issue #769) ---
+    DelegationRecord(Address, Address), // (delegator, delegatee) -> DelegationEntry
+    DelegationHistory(Address),         // delegator -> Vec<DelegationHistoryEntry>
+    ReceivedDelegations(Address),       // delegatee -> Vec<Address> (all current delegators)
+    DelegationDepthLimit,               // u32: max chain depth (default 1, upgradeable)
+    TotalDelegatorsFor(Address),        // delegatee -> u32: count of current delegators
+    DelegationChain(Address),           // delegator -> Vec<Address>: full chain from delegator to tip
+    ChainDepth(Address),                // delegator -> u32: depth of delegation chain from this delegator
+    AllDelegators,                      // Vec<Address>: every address that has ever registered a delegation
+    IsKnownDelegator(Address),          // bool marker for O(1) AllDelegators membership check
 }
 
 #[contract]
@@ -176,6 +193,16 @@ impl TokenVotesContract {
             .persistent()
             .get(&DataKey::Delegate(delegator.clone()));
 
+        // A "registry" delegation is one that hands voting power to someone
+        // else (self-delegation is the revoke/no-delegate state, not tracked
+        // as a registry entry). Validate cycle/depth *before* any state
+        // mutation below so an invalid delegation reverts cleanly.
+        let will_register =
+            delegatee != delegator && previous_delegate.as_ref() != Some(&delegatee);
+        if will_register {
+            delegation_registry::validate_delegation(env, &delegator, &delegatee);
+        }
+
         let record: DelegatorRecord = env
             .storage()
             .persistent()
@@ -244,6 +271,28 @@ impl TokenVotesContract {
             .persistent()
             .set(&DataKey::DelegatorRecord(delegator.clone()), &new_record);
 
+        // Registry bookkeeping runs after the `Delegate` mapping above is
+        // written so that chain resolution sees the new edge.
+        if will_register {
+            delegation_registry::register_delegation(
+                env,
+                &delegator,
+                &delegatee,
+                new_record.balance,
+                current_ledger,
+            );
+        }
+        if let Some(old_delegatee) = previous_delegate.clone() {
+            if old_delegatee != delegator && old_delegatee != delegatee {
+                delegation_registry::revoke_registry_entry(
+                    env,
+                    &delegator,
+                    &old_delegatee,
+                    current_ledger,
+                );
+            }
+        }
+
         env.events().publish(
             (Symbol::new(env, "DelegateChanged"), delegator.clone()),
             (previous_delegate, delegatee),
@@ -284,6 +333,15 @@ impl TokenVotesContract {
             env.storage()
                 .persistent()
                 .remove(&DataKey::DelegatorRecord(delegator.clone()));
+
+            if old_delegatee != delegator {
+                delegation_registry::revoke_registry_entry(
+                    &env,
+                    &delegator,
+                    &old_delegatee,
+                    env.ledger().sequence(),
+                );
+            }
 
             env.events().publish(
                 (symbol_short!("del_revk"), delegator),
@@ -354,6 +412,84 @@ impl TokenVotesContract {
             .instance()
             .get(&DataKey::Admin)
             .expect("not initialized")
+    }
+
+    // --- Delegation registry queries/admin (issue #769) ---
+
+    /// Get full delegation history for a delegator.
+    pub fn get_delegation_history(env: Env, delegator: Address) -> Vec<DelegationHistoryEntry> {
+        delegation_registry::get_delegation_history(&env, delegator)
+    }
+
+    /// Get all current delegators of a delegatee with their power and depth.
+    pub fn get_delegators(
+        env: Env,
+        delegatee: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<DelegatorInfo> {
+        delegation_registry::get_delegators(&env, delegatee, offset, limit)
+    }
+
+    /// Get total number of current delegators.
+    pub fn get_delegator_count(env: Env, delegatee: Address) -> u32 {
+        delegation_registry::get_delegator_count(&env, delegatee)
+    }
+
+    /// Get the full delegation chain from delegator to the final tip.
+    pub fn get_delegation_chain(env: Env, delegator: Address) -> Vec<Address> {
+        delegation_registry::get_delegation_chain(&env, delegator)
+    }
+
+    /// Get depth of the delegation chain from this address.
+    pub fn get_chain_depth(env: Env, delegator: Address) -> u32 {
+        delegation_registry::get_chain_depth(&env, delegator)
+    }
+
+    /// Get comprehensive delegate profile.
+    pub fn get_delegate_profile(env: Env, address: Address) -> DelegateProfile {
+        delegation_registry::get_delegate_profile(&env, address)
+    }
+
+    /// Get all active delegations received by a delegatee (paginated).
+    pub fn get_received_delegations(
+        env: Env,
+        delegatee: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<DelegationEntry> {
+        delegation_registry::get_received_delegations(&env, delegatee, offset, limit)
+    }
+
+    /// Admin function to update the maximum delegation chain depth.
+    pub fn set_delegation_depth_limit(env: Env, admin: Address, new_limit: u32) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        assert_eq!(admin, stored_admin, "unauthorized");
+        admin.require_auth();
+        delegation_registry::set_delegation_depth_limit(&env, new_limit);
+    }
+
+    /// Get current delegation depth limit.
+    pub fn get_delegation_depth_limit(env: Env) -> u32 {
+        delegation_registry::get_delegation_depth_limit(&env)
+    }
+
+    /// Check whether delegating from `delegator` to `delegatee` would create a cycle.
+    pub fn would_create_cycle(env: Env, delegator: Address, delegatee: Address) -> bool {
+        delegation_registry::would_create_cycle(&env, delegator, delegatee)
+    }
+
+    /// Get a snapshot of the full delegation graph at a past ledger (for audit).
+    pub fn get_delegation_snapshot(
+        env: Env,
+        delegatee: Address,
+        at_ledger: u32,
+    ) -> Vec<DelegatorInfo> {
+        delegation_registry::get_delegation_snapshot(&env, delegatee, at_ledger)
     }
 
     /// Get voting power at a past ledger sequence (snapshot).

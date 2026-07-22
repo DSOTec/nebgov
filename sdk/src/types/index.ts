@@ -376,6 +376,51 @@ export interface DelegatorInfo {
   power: bigint;
 }
 
+// ─── Delegation Registry Types (issue #769) ──────────────────────────────────
+//
+// These mirror the on-chain `delegation_registry` module in the token-votes
+// contract. `RegistryDelegatorInfo` is intentionally distinct from the
+// pre-existing `DelegatorInfo` above (which is event-scan-derived and used by
+// the legacy {@link VotesClient.getDelegators}) to avoid colliding with it.
+
+/** A single delegation record as returned by {@link VotesClient.getReceivedDelegations}. */
+export interface DelegationEntry {
+  delegator: string;
+  delegatee: string;
+  delegatedAtLedger: number;
+  votingPowerAtDelegation: bigint;
+  active: boolean;
+  revokedAtLedger: number | null;
+}
+
+/** One lifecycle entry (active or revoked) in a delegator's history, as returned by {@link VotesClient.getDelegationHistory}. */
+export interface DelegationHistoryEntry {
+  delegatee: string;
+  delegatedAtLedger: number;
+  revokedAtLedger: number | null;
+  powerAtDelegation: bigint;
+  sequence: number;
+}
+
+/** A current delegator of a delegatee, as returned by {@link VotesClient.getRegistryDelegators} and {@link VotesClient.getDelegationSnapshot}. */
+export interface RegistryDelegatorInfo {
+  address: string;
+  delegatedPower: bigint;
+  delegatedAtLedger: number;
+  chainDepth: number;
+}
+
+/** Comprehensive delegate summary as returned by {@link VotesClient.getDelegateProfile}. */
+export interface DelegateProfile {
+  address: string;
+  currentVotingPower: bigint;
+  baseVotingPower: bigint;
+  totalDelegators: number;
+  totalDelegatedPower: bigint;
+  delegationDepthLimit: number;
+  firstDelegatedAtLedger: number | null;
+}
+
 // ─── Treasury Types ───────────────────────────────────────────────────────────
 
 /** Configuration for {@link TreasuryClient}. */

@@ -661,4 +661,247 @@ describe("VotesClient", () => {
       expect(top).toEqual([]);
     });
   });
+
+  describe("delegation registry (issue #769)", () => {
+    const delegatorAddr = "GBTESTDELEGATORADDRESSEXAMPLEFORUNITTESTSTESTING";
+    const delegateeAddr = "GBTESTDELEGATEEADDRESSEXAMPLEFORUNITTESTSTESTING";
+
+    it("getDelegationHistory() maps native history entries to camelCase", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue([
+        {
+          delegatee: delegateeAddr,
+          delegated_at_ledger: 10,
+          revoked_at_ledger: 20,
+          power_at_delegation: 500n,
+          sequence: 0,
+        },
+      ]);
+
+      const history = await client.getDelegationHistory(delegatorAddr);
+
+      expect(history).toEqual([
+        {
+          delegatee: delegateeAddr,
+          delegatedAtLedger: 10,
+          revokedAtLedger: 20,
+          powerAtDelegation: 500n,
+          sequence: 0,
+        },
+      ]);
+    });
+
+    it("getDelegationHistory() returns [] on simulation error", async () => {
+      mockIsSimulationError.mockReturnValue(true);
+      mockSimulate.mockResolvedValue({ error: "not found" });
+
+      const history = await client.getDelegationHistory(delegatorAddr);
+
+      expect(history).toEqual([]);
+    });
+
+    it("getRegistryDelegators() paginates and parses entries", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue([
+        {
+          address: delegatorAddr,
+          delegated_power: 750n,
+          delegated_at_ledger: 5,
+          chain_depth: 1,
+        },
+      ]);
+
+      const delegators = await client.getRegistryDelegators(delegateeAddr, 0, 50);
+
+      expect(delegators).toEqual([
+        {
+          address: delegatorAddr,
+          delegatedPower: 750n,
+          delegatedAtLedger: 5,
+          chainDepth: 1,
+        },
+      ]);
+      expect(mockNativeToScVal).toHaveBeenCalledWith(delegateeAddr, { type: "address" });
+      expect(mockNativeToScVal).toHaveBeenCalledWith(0, { type: "u32" });
+      expect(mockNativeToScVal).toHaveBeenCalledWith(50, { type: "u32" });
+    });
+
+    it("getDelegatorCount() returns the count", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue(3);
+
+      await expect(client.getDelegatorCount(delegateeAddr)).resolves.toBe(3);
+    });
+
+    it("getDelegatorCount() returns 0 on simulation error", async () => {
+      mockIsSimulationError.mockReturnValue(true);
+      mockSimulate.mockResolvedValue({ error: "not found" });
+
+      await expect(client.getDelegatorCount(delegateeAddr)).resolves.toBe(0);
+    });
+
+    it("getDelegationChain() returns the address chain", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue([delegatorAddr, delegateeAddr]);
+
+      await expect(client.getDelegationChain(delegatorAddr)).resolves.toEqual([
+        delegatorAddr,
+        delegateeAddr,
+      ]);
+    });
+
+    it("getChainDepth() returns the depth", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue(2);
+
+      await expect(client.getChainDepth(delegatorAddr)).resolves.toBe(2);
+    });
+
+    it("getDelegateProfile() maps all native fields to camelCase", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue({
+        address: delegateeAddr,
+        current_voting_power: 1000n,
+        base_voting_power: 1000n,
+        total_delegators: 2,
+        total_delegated_power: 1000n,
+        delegation_depth_limit: 1,
+        first_delegated_at_ledger: 5,
+      });
+
+      const profile = await client.getDelegateProfile(delegateeAddr);
+
+      expect(profile).toEqual({
+        address: delegateeAddr,
+        currentVotingPower: 1000n,
+        baseVotingPower: 1000n,
+        totalDelegators: 2,
+        totalDelegatedPower: 1000n,
+        delegationDepthLimit: 1,
+        firstDelegatedAtLedger: 5,
+      });
+    });
+
+    it("getDelegateProfile() returns a zeroed default on simulation error", async () => {
+      mockIsSimulationError.mockReturnValue(true);
+      mockSimulate.mockResolvedValue({ error: "not found" });
+
+      const profile = await client.getDelegateProfile(delegateeAddr);
+
+      expect(profile).toEqual({
+        address: delegateeAddr,
+        currentVotingPower: 0n,
+        baseVotingPower: 0n,
+        totalDelegators: 0,
+        totalDelegatedPower: 0n,
+        delegationDepthLimit: 1,
+        firstDelegatedAtLedger: null,
+      });
+    });
+
+    it("getReceivedDelegations() parses entries including null revokedAtLedger", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue([
+        {
+          delegator: delegatorAddr,
+          delegatee: delegateeAddr,
+          delegated_at_ledger: 1,
+          voting_power_at_delegation: 100n,
+          active: true,
+          revoked_at_ledger: null,
+        },
+      ]);
+
+      const received = await client.getReceivedDelegations(delegateeAddr);
+
+      expect(received).toEqual([
+        {
+          delegator: delegatorAddr,
+          delegatee: delegateeAddr,
+          delegatedAtLedger: 1,
+          votingPowerAtDelegation: 100n,
+          active: true,
+          revokedAtLedger: null,
+        },
+      ]);
+    });
+
+    it("wouldCreateCycle() returns the boolean result", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue(true);
+
+      await expect(
+        client.wouldCreateCycle(delegatorAddr, delegateeAddr),
+      ).resolves.toBe(true);
+    });
+
+    it("getDelegationSnapshot() parses a past-ledger snapshot", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue([
+        {
+          address: delegatorAddr,
+          delegated_power: 300n,
+          delegated_at_ledger: 8,
+          chain_depth: 0,
+        },
+      ]);
+
+      const snapshot = await client.getDelegationSnapshot(delegateeAddr, 15);
+
+      expect(snapshot).toEqual([
+        {
+          address: delegatorAddr,
+          delegatedPower: 300n,
+          delegatedAtLedger: 8,
+          chainDepth: 0,
+        },
+      ]);
+    });
+
+    it("getDelegationDepthLimit() returns the current limit", async () => {
+      mockSimulate.mockResolvedValue({ result: { retval: {} } });
+      mockScValToNative.mockReturnValue(1);
+
+      await expect(client.getDelegationDepthLimit()).resolves.toBe(1);
+    });
+
+    it("getDelegationDepthLimit() defaults to 1 on simulation error", async () => {
+      mockIsSimulationError.mockReturnValue(true);
+      mockSimulate.mockResolvedValue({ error: "not found" });
+
+      await expect(client.getDelegationDepthLimit()).resolves.toBe(1);
+    });
+
+    describe("setDelegationDepthLimit()", () => {
+      beforeEach(() => {
+        const mockTx = { sign: jest.fn() };
+        mockPrepareTransaction.mockResolvedValue(mockTx);
+        mockSendTransaction.mockResolvedValue({
+          status: "PENDING",
+          hash: "setDepthLimit123",
+        });
+      });
+
+      it("submits the admin transaction and returns the tx hash", async () => {
+        const hash = await client.setDelegationDepthLimit(mockKeypair, 3);
+
+        expect(hash).toBe("setDepthLimit123");
+        expect(mockNativeToScVal).toHaveBeenCalledWith(mockKeypair.publicKey(), {
+          type: "address",
+        });
+        expect(mockNativeToScVal).toHaveBeenCalledWith(3, { type: "u32" });
+      });
+
+      it("throws VotesError when the transaction fails", async () => {
+        mockSendTransaction.mockResolvedValue({
+          status: "ERROR",
+          error: "unauthorized",
+        });
+
+        await expect(
+          client.setDelegationDepthLimit(mockKeypair, 3),
+        ).rejects.toThrow(VotesError);
+      });
+    });
+  });
 });
