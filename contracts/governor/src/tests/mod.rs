@@ -1,6 +1,7 @@
 mod governance_cancel;
 mod integration;
 mod registry;
+mod reputation;
 
 // ── upgrade auth tests ────────────────────────────────────────────────────────
 // Note: a full end-to-end upgrade test (auth passes → WASM swapped) requires

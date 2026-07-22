@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   GovernorClient,
   VotesClient,
@@ -10,6 +10,7 @@ import {
   Network,
   VoteSupport,
   DelegationHistoryEntry,
+  ReputationScoreEntry,
 } from "@nebgov/sdk";
 import {
   LineChart,
@@ -22,8 +23,10 @@ import {
 } from "recharts";
 import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 import { useDelegateProfile } from "@/hooks/useDelegateProfile";
+import { useProposerReputation } from "@/hooks/useProposerReputation";
 import { DelegationChain } from "@/components/DelegationChain";
 import { DelegatorList } from "@/components/DelegatorList";
+import { ReputationBadge } from "@/components/ReputationBadge";
 import { isValidStellarAddress, formatVotingPower } from "../../../lib/utils";
 
 interface VotingRecord {
@@ -83,6 +86,23 @@ function VoterProfilePageContent() {
   const [delegationChain, setDelegationChain] = useState<string[]>([]);
   const [delegationHistory, setDelegationHistory] = useState<DelegationHistoryEntry[]>([]);
   const [registryLoading, setRegistryLoading] = useState(true);
+
+  // Proposer reputation (issue #771)
+  const { reputation } = useProposerReputation(address);
+  const [scoreHistory, setScoreHistory] = useState<ReputationScoreEntry[]>([]);
+  const [scoreHistoryLoading, setScoreHistoryLoading] = useState(true);
+  // Per-outcome tallies aren't kept on-chain (trimmed to stay under Soroban's
+  // WASM size budget) — derive them client-side from the indexed score
+  // history, which already carries a `reason` per entry.
+  const outcomeTally = useMemo(() => {
+    const tally = { succeeded: 0, executed: 0, defeated: 0, cancelled: 0, expired: 0 };
+    for (const entry of scoreHistory) {
+      if (entry.reason in tally) {
+        tally[entry.reason as keyof typeof tally] += 1;
+      }
+    }
+    return tally;
+  }, [scoreHistory]);
 
   // Validate address
   const isValidAddress = address && isValidStellarAddress(String(address));
@@ -288,6 +308,43 @@ function VoterProfilePageContent() {
     }
 
     fetchRegistryData();
+    return () => {
+      cancelled = true;
+    };
+  }, [address, isValidAddress]);
+
+  useEffect(() => {
+    if (!isValidAddress) {
+      setScoreHistoryLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function fetchScoreHistory() {
+      setScoreHistoryLoading(true);
+      try {
+        // Score history isn't an on-chain read (kept off the governor
+        // contract to stay under Soroban's WASM size budget) — the indexer
+        // mirrors it from ReputationUpdated events.
+        const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
+        if (!indexerUrl) return;
+
+        const resp = await fetch(`${indexerUrl}/reputation/${address}/history`, {
+          cache: "no-store",
+        });
+        if (resp.ok) {
+          const json = await resp.json();
+          if (!cancelled) setScoreHistory(json.history ?? []);
+        }
+      } catch {
+        // Reputation history is supplementary; fail silently.
+      } finally {
+        if (!cancelled) setScoreHistoryLoading(false);
+      }
+    }
+
+    fetchScoreHistory();
     return () => {
       cancelled = true;
     };
@@ -559,6 +616,111 @@ function VoterProfilePageContent() {
           )
         ) : (
           <DelegatorList delegatee={address} />
+        )}
+      </div>
+
+      {/* Proposer Reputation (issue #771) */}
+      <div className="bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded-xl p-6 mb-8">
+        <div className="flex items-center justify-between mb-4">
+          <p className="text-sm font-semibold text-gray-600 dark:text-gray-300 uppercase tracking-wide">
+            Proposer Reputation
+          </p>
+          {reputation && <ReputationBadge reputation={reputation} />}
+        </div>
+
+        {reputation && (
+          <>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 text-sm">
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Score</p>
+                <p className="font-semibold text-gray-900 dark:text-gray-100">
+                  {reputation.reputationScore}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Threshold multiplier</p>
+                <p className="font-semibold text-gray-900 dark:text-gray-100">
+                  {(reputation.thresholdMultiplierBps / 100).toFixed(0)}%
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Proposals</p>
+                <p className="font-semibold text-gray-900 dark:text-gray-100">
+                  {reputation.totalProposals}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Streak</p>
+                <p className="font-semibold text-gray-900 dark:text-gray-100">
+                  {reputation.consecutiveSuccessful > 0 ? (
+                    <span className="text-green-600 dark:text-green-400">
+                      {reputation.consecutiveSuccessful} succeeded
+                    </span>
+                  ) : reputation.consecutiveFailed > 0 ? (
+                    <span className="text-rose-600 dark:text-rose-400">
+                      {reputation.consecutiveFailed} failed
+                    </span>
+                  ) : (
+                    "—"
+                  )}
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6 text-xs text-gray-500 dark:text-gray-400">
+              <div>Succeeded: {outcomeTally.succeeded}</div>
+              <div>Executed: {outcomeTally.executed}</div>
+              <div>Defeated: {outcomeTally.defeated}</div>
+              <div>Cancelled: {outcomeTally.cancelled}</div>
+              <div>Expired: {outcomeTally.expired}</div>
+            </div>
+          </>
+        )}
+
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">Score history</p>
+        {scoreHistoryLoading ? (
+          <div className="h-48 rounded-xl bg-gray-100 dark:bg-gray-800 animate-pulse" />
+        ) : scoreHistory.length === 0 ? (
+          <p className="text-sm text-gray-500 dark:text-gray-400">No score history yet.</p>
+        ) : (
+          <div className="h-48">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart
+                data={scoreHistory}
+                margin={{ top: 10, right: 20, bottom: 0, left: -10 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+                <XAxis
+                  dataKey="ledger"
+                  tick={{ fontSize: 12, fill: "#6b7280" }}
+                  tickLine={false}
+                  axisLine={false}
+                  minTickGap={20}
+                  tickFormatter={(value) => `#${value}`}
+                />
+                <YAxis
+                  tick={{ fontSize: 12, fill: "#6b7280" }}
+                  tickLine={false}
+                  axisLine={false}
+                  width={40}
+                />
+                <Tooltip
+                  formatter={(value, _name, item) => [
+                    `${value} (${item.payload.reason})`,
+                    "Score",
+                  ]}
+                />
+                <Line
+                  type="monotone"
+                  dataKey="score"
+                  stroke="#6366f1"
+                  strokeWidth={3}
+                  dot={{ r: 4, strokeWidth: 0 }}
+                  activeDot={{ r: 6 }}
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
         )}
       </div>
 

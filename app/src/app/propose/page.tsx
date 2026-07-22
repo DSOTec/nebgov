@@ -24,6 +24,7 @@ import { Keypair } from "@stellar/stellar-sdk";
 import {
   GovernorClient,
   VotesClient,
+  ReputationClient,
   hashDescription,
   uploadProposalMetadata,
   type CanProposeResult,
@@ -137,6 +138,7 @@ function getClients() {
   return {
     governor: new GovernorClient(cfg),
     votes: new VotesClient(cfg),
+    reputation: new ReputationClient(cfg),
     governorAddress,
   };
 }
@@ -215,6 +217,12 @@ function ProposeWizardInner() {
   // Simulation / review data
   const [votes, setVotes] = useState<bigint | null>(null);
   const [threshold, setThreshold] = useState<bigint | null>(null);
+  // Reputation-adjusted threshold (Issue #771) — what propose() actually
+  // enforces. Falls back to the flat threshold if reputation is disabled or
+  // the fetch fails, so behavior degrades gracefully.
+  const [effectiveThreshold, setEffectiveThreshold] = useState<bigint | null>(
+    null,
+  );
   const [canProposeResult, setCanProposeResult] =
     useState<CanProposeResult | null>(null);
   const [estimate, setEstimate] = useState<{
@@ -422,13 +430,14 @@ function ProposeWizardInner() {
     setEstimate(null);
     setEstimateErr(null);
     try {
-      const [v, t, cp, bv, del, s] = await Promise.all([
+      const [v, t, cp, bv, del, s, et] = await Promise.all([
         clients.votes.getVotes(publicKey),
         clients.governor.proposalThreshold(),
         clients.governor.canPropose(publicKey),
         clients.votes.getBaseVotes(publicKey),
         clients.votes.getDelegatee(publicKey),
         clients.governor.getSettings(publicKey).catch(() => null),
+        clients.reputation.getEffectiveThreshold(publicKey).catch(() => null),
       ]);
       setVotes(v);
       setThreshold(t);
@@ -436,6 +445,7 @@ function ProposeWizardInner() {
       setBaseVotes(bv);
       setDelegatee(del);
       setSettings(s);
+      setEffectiveThreshold(et);
 
       const description = buildDescription(
         draft.title,
@@ -661,13 +671,14 @@ function ProposeWizardInner() {
         setStepErrors(["Still loading voting power. Try again in a moment."]);
         return;
       }
-      if (votes < threshold) {
+      const requiredThreshold = effectiveThreshold ?? threshold;
+      if (votes < requiredThreshold) {
         const shortfall = (
-          Number(threshold - votes) /
+          Number(requiredThreshold - votes) /
           10 ** 7
         ).toLocaleString();
         setStepErrors([
-          `Insufficient voting power — need ${(Number(threshold) / 10 ** 7).toLocaleString()} GOV, have ${(Number(votes) / 10 ** 7).toLocaleString()} GOV (shortfall: ${shortfall} GOV).`,
+          `Insufficient voting power — need ${(Number(requiredThreshold) / 10 ** 7).toLocaleString()} GOV, have ${(Number(votes) / 10 ** 7).toLocaleString()} GOV (shortfall: ${shortfall} GOV).`,
         ]);
         return;
       }
@@ -1285,14 +1296,44 @@ function ProposeWizardInner() {
                       <p className="text-xl font-bold text-gray-900 dark:text-white">
                         {threshold === null
                           ? "..."
-                          : (Number(threshold) / 10 ** 7).toLocaleString()}
+                          : (
+                              Number(effectiveThreshold ?? threshold) /
+                              10 ** 7
+                            ).toLocaleString()}
                       </p>
                     </div>
                   </div>
 
+                  {threshold !== null &&
+                    effectiveThreshold !== null &&
+                    effectiveThreshold !== threshold &&
+                    (() => {
+                      const pctChange =
+                        threshold === 0n
+                          ? 0
+                          : (Number(effectiveThreshold - threshold) /
+                              Number(threshold)) *
+                            100;
+                      const isDiscount = pctChange < 0;
+                      return (
+                        <div
+                          className={`text-sm p-3 rounded-xl border ${
+                            isDiscount
+                              ? "text-green-800 bg-green-50 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800"
+                              : "text-rose-800 bg-rose-50 border-rose-200 dark:bg-rose-900/20 dark:text-rose-300 dark:border-rose-800"
+                          }`}
+                        >
+                          Your reputation {isDiscount ? "discount" : "penalty"}:{" "}
+                          {isDiscount ? "" : "+"}
+                          {pctChange.toFixed(0)}% vs the flat threshold of{" "}
+                          {(Number(threshold) / 10 ** 7).toLocaleString()} GOV.
+                        </div>
+                      );
+                    })()}
+
                   {votes !== null &&
                     threshold !== null &&
-                    votes < threshold && (
+                    votes < (effectiveThreshold ?? threshold) && (
                       <div className="flex items-start gap-3 text-amber-800 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300 p-4 rounded-xl text-sm border border-amber-200 dark:border-amber-800">
                         <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                         <div>
@@ -1301,14 +1342,18 @@ function ProposeWizardInner() {
                           </p>
                           <p className="mt-1">
                             You need{" "}
-                            {(Number(threshold) / 10 ** 7).toLocaleString()} GOV
-                            to create a proposal. Your current voting power:{" "}
+                            {(
+                              Number(effectiveThreshold ?? threshold) /
+                              10 ** 7
+                            ).toLocaleString()}{" "}
+                            GOV to create a proposal. Your current voting
+                            power:{" "}
                             {(Number(votes) / 10 ** 7).toLocaleString()} GOV.
                           </p>
                           <p className="mt-2 text-sm font-medium">
                             Shortfall:{" "}
                             {(
-                              Number(threshold - votes) /
+                              Number((effectiveThreshold ?? threshold) - votes) /
                               10 ** 7
                             ).toLocaleString()}{" "}
                             GOV
@@ -1482,7 +1527,7 @@ function ProposeWizardInner() {
                   (!reviewDataReady ||
                     (votes !== null &&
                       threshold !== null &&
-                      votes < threshold)))
+                      votes < (effectiveThreshold ?? threshold))))
               }
               className="bg-indigo-600 text-white px-8 py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors min-w-[120px]"
             >

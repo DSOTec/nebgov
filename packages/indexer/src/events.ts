@@ -46,6 +46,9 @@ const TOPIC_MAP: Record<string, string> = {
   DelegationRegistered: "DelegationRegistered",
   DelegationRevoked: "DelegationRevoked",
   DelegationDepthLimitUpdated: "DelegationDepthLimitUpdated",
+  // Proposer reputation events (#771)
+  ReputationUpdated: "ReputationUpdated",
+  EffectiveThresholdChanged: "EffectiveThresholdChanged",
 };
 
 export interface IndexerConfig {
@@ -244,6 +247,12 @@ export async function processEvents(
             case "ProposalCancelled":
               await handleProposalCancelled(event, topics);
               break;
+            case "ReputationUpdated":
+              await handleReputationUpdated(event, topics);
+              break;
+            case "EffectiveThresholdChanged":
+              await handleEffectiveThresholdChanged(event, topics);
+              break;
             default:
               break;
           }
@@ -440,6 +449,64 @@ async function handleDelegationDepthLimitUpdated(
     data: { old_limit: oldLimit, new_limit: newLimit, ledger: event.ledger },
   });
 }
+
+// --- Proposer reputation events (#771) ---
+//
+// Backed by the `proposer_reputation` / `reputation_score_history` tables.
+// `proposer_reputation` is a running snapshot upserted on every
+// ReputationUpdated event, tracking just the score/ledger fields the event
+// itself carries. Per-outcome breakdown counts (succeeded/executed/
+// defeated/...) aren't tracked on-chain or here either — they're cheap to
+// derive client-side from `reputation_score_history`'s `reason` column
+// (see the profile page's outcome tally).
+
+async function handleReputationUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, number, number, string];
+  const [, oldScore, newScore, reason] = data;
+
+  await pool.query(
+    `INSERT INTO proposer_reputation (proposer_address, reputation_score, last_updated_ledger)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (proposer_address) DO UPDATE
+       SET reputation_score = $2, last_updated_ledger = $3, updated_at = NOW()`,
+    [proposer, newScore, event.ledger],
+  );
+  await pool.query(
+    `INSERT INTO reputation_score_history (proposer_address, ledger, score, change, reason)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [proposer, event.ledger, newScore, newScore - oldScore, reason],
+  );
+  invalidate(`reputation:${proposer}`);
+  invalidatePattern("reputation:leaderboard");
+  broadcast({
+    type: "reputation_updated",
+    data: { proposer, old_score: oldScore, new_score: newScore, reason, ledger: event.ledger },
+  });
+}
+
+async function handleEffectiveThresholdChanged(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, bigint, bigint];
+  const [, oldThreshold, newThreshold] = data;
+
+  broadcast({
+    type: "effective_threshold_changed",
+    data: {
+      proposer,
+      old_threshold: String(oldThreshold),
+      new_threshold: String(newThreshold),
+      ledger: event.ledger,
+    },
+  });
+}
+
 
 async function handleWrapperDeposit(
   event: SorobanRpc.Api.EventResponse,

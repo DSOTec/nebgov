@@ -24,7 +24,9 @@ export type WsEventType =
   | "draft_expired"
   | "delegation_registered"
   | "delegation_revoked"
-  | "delegation_depth_limit_updated";
+  | "delegation_depth_limit_updated"
+  | "reputation_updated"
+  | "effective_threshold_changed";
 
 export interface WsEvent {
   type: WsEventType;

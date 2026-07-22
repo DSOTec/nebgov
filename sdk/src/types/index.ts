@@ -617,3 +617,46 @@ export interface SimulateResult {
   /** Human-readable error message when `ok` is false. */
   error?: string;
 }
+
+// ─── Proposer Reputation Types (Issue #771) ──────────────────────────────────
+
+/** On-chain proposer reputation record, as returned by {@link ReputationClient.getProposerReputation}. */
+export interface ProposerReputation {
+  proposer: string;
+  totalProposals: number;
+  /** Sum of participation (in basis points) across every proposal this address created. */
+  totalParticipationBpsSum: bigint;
+  lastProposalLedger: number;
+  /** Rolling score, clamped to a fixed [-1000, 1000] range on-chain. */
+  reputationScore: number;
+  /** 10000 = no change, lower = discount, higher = penalty on the flat proposal threshold. */
+  thresholdMultiplierBps: number;
+  firstProposalLedger: number;
+  consecutiveSuccessful: number;
+  consecutiveFailed: number;
+}
+
+/**
+ * A single entry in a proposer's reputation score history, as returned by
+ * the indexer's `GET /reputation/:address/history` (built from
+ * `ReputationUpdated` events — not an on-chain read, to keep the governor
+ * contract's WASM size under budget).
+ */
+export interface ReputationScoreEntry {
+  ledger: number;
+  score: number;
+  change: number;
+  reason: string;
+}
+
+/**
+ * One row of the top-proposer leaderboard, as returned by the indexer's
+ * `GET /reputation/leaderboard` (computed off-chain from indexed
+ * `ReputationUpdated` events, not an on-chain read).
+ */
+export interface ProposerLeaderboardEntry {
+  rank: number;
+  proposer: string;
+  reputationScore: number;
+  lastUpdatedLedger: number | null;
+}
