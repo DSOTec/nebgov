@@ -14,7 +14,14 @@
     "build:cli": "pnpm --filter @nebgov/cli build",
     "dev": "pnpm --filter nebgov-app dev",
     "test:sdk": "pnpm --filter @nebgov/sdk test",
-    "test:app": "pnpm --filter nebgov-app test"
+    "test:app": "pnpm --filter nebgov-app test",
+    "simulate": "tsx scripts/simulate.ts"
+  },
+  "devDependencies": {
+    "@stellar/stellar-sdk": "^12.0.0",
+    "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
   },
   "packageManager": "pnpm@9.15.9",
   "pnpm": {
