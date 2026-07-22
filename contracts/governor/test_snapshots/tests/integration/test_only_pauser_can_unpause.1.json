@@ -392,30 +392,6 @@
                         "key": {
                           "vec": [
                             {
-                              "symbol": "DomainSeparator"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "bytes": "ac250f8b1bf2c9cc9b98a6178e77bfab675e071b79ed6e0c5221c0c927e82ad8"
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
-                              "symbol": "RelayerWhitelistEnabled"
-                            }
-                          ]
-                        },
-                        "val": {
-                          "bool": false
-                        }
-                      },
-                      {
-                        "key": {
-                          "vec": [
-                            {
                               "symbol": "TimeWeightEnabled"
                             }
                           ]
