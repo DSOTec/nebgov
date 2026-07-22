@@ -528,6 +528,10 @@ fn merge_settings(current: &GovernorSettings, overrides: &SimGovernorSettings) -
         proposal_cooldown: overrides.proposal_cooldown,
         max_proposals_per_period: overrides.max_proposals_per_period,
         proposal_period_duration: overrides.proposal_period_duration,
+        // Not modeled in the scenario DSL (no co-sponsorship concept in
+        // SimGovernorSettings) — carried through unchanged from whatever's
+        // currently configured, same treatment as `guardian`/`reflector_oracle`.
+        co_sponsorship_registry: current.co_sponsorship_registry.clone(),
     }
 }
 

@@ -1,6 +1,6 @@
 {
   "name": "delegation_cascade",
-  "description": "Exercises delegation chains and re-delegation. Note: token-votes delegation is not transitive — delegate() moves only the caller's own token balance to the new delegatee, so redelegating a downstream node does not carry upstream delegators' power with it. This scenario demonstrates that explicitly.",
+  "description": "Exercises delegation chains and re-delegation. Note: token-votes delegation is not transitive for voting power — delegate() moves only the caller's own token balance to the new delegatee, so redelegating a downstream node does not carry upstream delegators' power with it. The on-chain delegation registry (contracts/token-votes/src/delegation_registry.rs) does track the resulting delegatee graph, though, and rejects delegate() calls that would close a cycle in it (independent of the power-transitivity point above) — this scenario also exercises that guard via the two ExpectError steps below.",
   "seed": 5,
   "governor_settings": {
     "voting_delay": 1,
@@ -26,7 +26,9 @@
     { "type": "AdvanceLedger", "ledgers": 10 },
     { "type": "ExpectState", "proposal_id": 1, "expected_state": "Succeeded" },
     { "type": "Delegate", "actor": "bob", "delegatee": "alice" },
+    { "type": "ExpectError", "step_index": 5, "expected_error": "delegation would create a cycle" },
     { "type": "Delegate", "actor": "carol", "delegatee": "alice" },
+    { "type": "ExpectError", "step_index": 7, "expected_error": "delegation would create a cycle" },
     { "type": "TakeAnalyticsSnapshot" }
   ]
 }
