@@ -20,6 +20,18 @@ pub enum TimelockError {
     PredecessorNotFound = 2,
     /// Operation can no longer be executed because its execution window elapsed.
     OperationExpired = 3,
+    /// A cycle was detected in the dependency graph.
+    DependencyCycleDetected = 10,
+    /// A predecessor has not completed yet.
+    PredecessorNotComplete = 11,
+    /// Batch is in recovery mode.
+    BatchInRecoveryMode = 12,
+    /// Batch recovery deadline has expired.
+    BatchRecoveryExpired = 13,
+    /// Operation is already in a batch.
+    OperationAlreadyInBatch = 14,
+    /// Invalid predecessor list provided.
+    InvalidPredecessorList = 15,
 }
 
 /// A scheduled timelock operation.
@@ -53,6 +65,59 @@ pub struct BatchOperation {
     pub predecessor: Bytes,
 }
 
+/// Dependency edge in the DAG.
+#[contracttype]
+#[derive(Clone)]
+pub struct DependencyEdge {
+    pub from: Bytes,
+    pub to: Bytes,
+}
+
+/// Dependency graph structure for batch operations.
+#[contracttype]
+#[derive(Clone)]
+pub struct DependencyGraph {
+    pub nodes: Vec<Bytes>,
+    pub edges: Vec<DependencyEdge>,
+}
+
+/// Result of validating a dependency graph for cycles.
+///
+/// `valid` is true when the operations form a DAG. When false, `cycle_path`
+/// contains the operations that could not be topologically ordered (the nodes
+/// participating in, or blocked by, a cycle).
+#[contracttype]
+#[derive(Clone)]
+pub struct DagValidationResult {
+    pub valid: bool,
+    pub cycle_path: Vec<Bytes>,
+}
+
+/// Failed operation details for recovery.
+#[contracttype]
+#[derive(Clone)]
+pub struct FailedOperation {
+    pub op_id: Bytes,
+    pub target: Address,
+    pub fn_name: Symbol,
+    pub failure_reason: Symbol,
+    pub failed_at_ledger: u32,
+    pub retry_count: u32,
+}
+
+/// Partial batch execution state for recovery mode.
+#[contracttype]
+#[derive(Clone)]
+pub struct PartialBatchExecutionState {
+    pub batch_op_id: Bytes,
+    pub total_ops: u32,
+    pub completed_ops: Vec<Bytes>,
+    pub failed_ops: Vec<FailedOperation>,
+    pub pending_ops: Vec<Bytes>,
+    pub recovery_mode: bool,
+    pub recovery_deadline: u32,
+}
+
 #[contracttype]
 pub enum DataKey {
     Operation(Bytes),
@@ -61,6 +126,11 @@ pub enum DataKey {
     ExecutionWindow,
     Admin,
     Governor,
+    OperationPredecessors(Bytes),
+    OperationSuccessors(Bytes),
+    BatchDependencyGraph(Bytes),
+    PartialBatchState(Bytes),
+    FailedOpRetryCount(Bytes),
 }
 
 #[contract]
@@ -129,6 +199,250 @@ impl TimelockContract {
 
         let hash = env.crypto().sha256(&combined);
         Bytes::from_array(&env, &hash.to_array())
+    }
+
+    /// Schedule an operation with multiple predecessor dependencies.
+    #[allow(clippy::too_many_arguments)]
+    pub fn schedule_with_deps(
+        env: Env,
+        caller: Address,
+        target: Address,
+        data: Bytes,
+        fn_name: Symbol,
+        delay: u64,
+        predecessors: Vec<Bytes>,
+        salt: Bytes,
+    ) -> Bytes {
+        caller.require_auth();
+        Self::require_governor(&env, &caller);
+
+        for pred in predecessors.iter() {
+            Self::validate_predecessor(&env, &pred);
+        }
+
+        let op_id =
+            Self::schedule_operation(env.clone(), target, data, fn_name, delay, Bytes::new(&env), salt);
+
+        // Persist the predecessor set so all_predecessors_done() and the
+        // topological sort can resolve this operation's dependencies later.
+        if !predecessors.is_empty() {
+            env.storage()
+                .persistent()
+                .set(&DataKey::OperationPredecessors(op_id.clone()), &predecessors);
+        }
+
+        op_id
+    }
+
+    /// Check if all predecessors of an op_id are complete.
+    pub fn all_predecessors_done(env: Env, op_id: Bytes) -> bool {
+        let pred_key = DataKey::OperationPredecessors(op_id.clone());
+        let predecessors: Option<Vec<Bytes>> = env.storage().persistent().get(&pred_key);
+
+        match predecessors {
+            None => true,
+            Some(preds) => {
+                for pred in preds {
+                    let is_done =
+                        Self::is_done(env.clone(), pred.clone())
+                            || Self::is_batch_done(env.clone(), pred.clone());
+                    if !is_done {
+                        return false;
+                    }
+                }
+                true
+            }
+        }
+    }
+
+    /// Get the full dependency graph for a batch operation.
+    pub fn get_batch_dependency_graph(env: Env, batch_op_id: Bytes) -> Option<DependencyGraph> {
+        let graph_key = DataKey::BatchDependencyGraph(batch_op_id);
+        env.storage().persistent().get(&graph_key)
+    }
+
+    /// Validate that a set of operations forms a DAG (no cycles).
+    ///
+    /// Returns a [`DagValidationResult`] with `valid = true` and an empty
+    /// `cycle_path` when the operations can be topologically ordered. When a
+    /// cycle is present, `valid = false` and `cycle_path` lists the operations
+    /// that could not be ordered.
+    pub fn validate_dependency_dag(env: Env, op_ids: Vec<Bytes>) -> DagValidationResult {
+        match Self::kahn_topological_sort(&env, &op_ids) {
+            Ok(_) => {
+                emit_dependency_dag_validated(&env, &Bytes::new(&env), op_ids.len());
+                DagValidationResult {
+                    valid: true,
+                    cycle_path: Vec::new(&env),
+                }
+            }
+            Err(()) => {
+                emit_cycle_detected(&env, &op_ids);
+                DagValidationResult {
+                    valid: false,
+                    cycle_path: op_ids,
+                }
+            }
+        }
+    }
+
+    /// Execute a batch with partial completion tolerance (queues for recovery on any failure).
+    /// Note: Individual operation failures will cause the entire transaction to revert.
+    /// This function sets up recovery state that can be used to retry operations after investigation.
+    pub fn execute_batch_partial(env: Env, caller: Address, batch_op_id: Bytes) -> PartialBatchExecutionState {
+        caller.require_auth();
+        Self::require_governor(&env, &caller);
+
+        let batch: BatchOperation = env
+            .storage()
+            .persistent()
+            .get(&DataKey::BatchOperation(batch_op_id.clone()))
+            .expect("batch not found");
+
+        assert!(!batch.executed && !batch.cancelled, "invalid state");
+        assert!(env.ledger().timestamp() >= batch.ready_at, "not ready");
+
+        let mut completed_ops: Vec<Bytes> = Vec::new(&env);
+        // No failures accumulate here: any sub-call panic reverts the whole tx.
+        // The empty vec documents the shape of the state that gets persisted.
+        let failed_ops: Vec<FailedOperation> = Vec::new(&env);
+
+        // Execute all operations in order. If any fails, transaction reverts (standard Soroban behavior).
+        for i in 0..batch.targets.len() {
+            let op_id = Self::hash_op_in_batch(
+                &env,
+                &batch.targets.get(i).unwrap(),
+                &batch.datas.get(i).unwrap(),
+                &batch.fn_names.get(i).unwrap(),
+                i,
+            );
+
+            let target = batch.targets.get(i).unwrap();
+            let fn_name = batch.fn_names.get(i).unwrap();
+            let data = batch.datas.get(i).unwrap();
+            let args = Self::decode_invocation_args(&env, &data);
+
+            // Execute the contract invocation (will panic/revert if it fails)
+            env.invoke_contract::<()>(&target, &fn_name, args);
+            completed_ops.push_back(op_id.clone());
+            emit_partial_op_succeeded(
+                &env,
+                &batch_op_id,
+                &op_id,
+                completed_ops.len(),
+                batch.targets.len(),
+            );
+        }
+
+        let recovery_deadline = env.ledger().sequence() + 100_000;
+        let state = PartialBatchExecutionState {
+            batch_op_id: batch_op_id.clone(),
+            total_ops: batch.targets.len(),
+            completed_ops: completed_ops.clone(),
+            failed_ops: failed_ops.clone(),
+            pending_ops: Vec::new(&env),
+            recovery_mode: false,
+            recovery_deadline,
+        };
+
+        let state_key = DataKey::PartialBatchState(batch_op_id.clone());
+        env.storage().persistent().set(&state_key, &state);
+
+        emit_partial_batch_started(&env, &batch_op_id, batch.targets.len());
+
+        state
+    }
+
+    /// Retry a specific failed operation within a batch in recovery mode.
+    /// Note: This function attempts to invoke the operation. If it fails again, the transaction reverts.
+    pub fn retry_failed_operation(
+        env: Env,
+        caller: Address,
+        batch_op_id: Bytes,
+        op_id: Bytes,
+    ) {
+        caller.require_auth();
+        Self::require_governor(&env, &caller);
+
+        let state_key = DataKey::PartialBatchState(batch_op_id.clone());
+        let mut state: PartialBatchExecutionState = env
+            .storage()
+            .persistent()
+            .get(&state_key)
+            .expect("batch state not found");
+
+        assert!(state.recovery_mode, "not in recovery mode");
+        assert!(
+            env.ledger().sequence() < state.recovery_deadline,
+            "recovery deadline expired"
+        );
+
+        let failed_op_index = Self::failed_op_index(&state.failed_ops, &op_id)
+            .expect("operation not in failed list");
+
+        let failed_op = state.failed_ops.get(failed_op_index).unwrap().clone();
+        let mut retry_count: u32 = env
+            .storage()
+            .persistent()
+            .get(&DataKey::FailedOpRetryCount(op_id.clone()))
+            .unwrap_or(0);
+
+        retry_count += 1;
+        env.storage()
+            .persistent()
+            .set(&DataKey::FailedOpRetryCount(op_id.clone()), &retry_count);
+
+        // Invoke the contract. If it fails, the transaction reverts (standard behavior).
+        env.invoke_contract::<()>(&failed_op.target, &failed_op.fn_name, Vec::new(&env));
+
+        // If we reach here, invocation succeeded
+        state.failed_ops.remove(failed_op_index);
+        state.completed_ops.push_back(op_id.clone());
+        emit_failed_op_retried(&env, &batch_op_id, &op_id, retry_count, true);
+
+        if state.failed_ops.is_empty() {
+            state.recovery_mode = false;
+            emit_batch_fully_complete(&env, &batch_op_id);
+        }
+
+        env.storage().persistent().set(&state_key, &state);
+    }
+
+    /// Get current partial execution state for a batch.
+    pub fn get_partial_batch_state(env: Env, batch_op_id: Bytes) -> Option<PartialBatchExecutionState> {
+        let state_key = DataKey::PartialBatchState(batch_op_id);
+        env.storage().persistent().get(&state_key)
+    }
+
+    /// Mark a failed operation as permanently skipped.
+    pub fn skip_failed_operation(
+        env: Env,
+        caller: Address,
+        batch_op_id: Bytes,
+        op_id: Bytes,
+    ) {
+        caller.require_auth();
+        Self::require_governor(&env, &caller);
+
+        let state_key = DataKey::PartialBatchState(batch_op_id.clone());
+        let mut state: PartialBatchExecutionState = env
+            .storage()
+            .persistent()
+            .get(&state_key)
+            .expect("batch state not found");
+
+        let failed_op_index = Self::failed_op_index(&state.failed_ops, &op_id)
+            .expect("operation not in failed list");
+
+        state.failed_ops.remove(failed_op_index);
+        emit_failed_op_skipped(&env, &batch_op_id, &op_id);
+
+        if state.failed_ops.is_empty() {
+            state.recovery_mode = false;
+            emit_batch_fully_complete(&env, &batch_op_id);
+        }
+
+        env.storage().persistent().set(&state_key, &state);
     }
 
     /// Schedule a single operation.
@@ -590,7 +904,148 @@ impl TimelockContract {
         // no-arg calls before structured calldata decoding was implemented.
         Vec::new(env)
     }
+
+    fn hash_op_in_batch(
+        env: &Env,
+        target: &Address,
+        data: &Bytes,
+        fn_name: &Symbol,
+        index: u32,
+    ) -> Bytes {
+        let mut combined = Bytes::new(env);
+        combined.append(&target.to_xdr(env));
+        combined.append(data);
+        combined.append(&fn_name.to_xdr(env));
+        combined.append(&index.to_xdr(env));
+
+        let hash = env.crypto().sha256(&combined);
+        Bytes::from_array(env, &hash.to_array())
+    }
+
+    /// Find the index of `needle` within `haystack`, or `None` if absent.
+    ///
+    /// Soroban's `Vec` has no `iter_mut`/`position`, so index-based lookups
+    /// are used throughout the topological sort helper below.
+    fn index_of(haystack: &Vec<Bytes>, needle: &Bytes) -> Option<u32> {
+        let len = haystack.len();
+        let mut i = 0u32;
+        while i < len {
+            if &haystack.get(i).unwrap() == needle {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Find the index of the failed operation whose `op_id` matches, if any.
+    ///
+    /// Returns a `u32` index suitable for Soroban `Vec` get/remove, since the
+    /// standard iterator `position()` yields `usize`.
+    fn failed_op_index(failed_ops: &Vec<FailedOperation>, op_id: &Bytes) -> Option<u32> {
+        let len = failed_ops.len();
+        let mut i = 0u32;
+        while i < len {
+            if &failed_ops.get(i).unwrap().op_id == op_id {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Kahn's algorithm for topological sorting over `nodes`.
+    ///
+    /// Edges are derived from each node's stored predecessor list: an edge
+    /// `pred -> node` means `pred` must complete before `node`.  Returns the
+    /// sorted order on success, or an empty `Vec` wrapped in `Err` when a cycle
+    /// prevents a full ordering.  The caller reports the offending node set.
+    ///
+    /// Parallel index-aligned `Vec`s stand in for the `HashMap`s a std
+    /// implementation would use, since Soroban's `Vec` exposes only indexed
+    /// get/set access.
+    fn kahn_topological_sort(env: &Env, nodes: &Vec<Bytes>) -> Result<Vec<Bytes>, ()> {
+        let node_count = nodes.len();
+
+        // in_degree[i] corresponds to nodes.get(i).
+        let mut in_degree: Vec<u32> = Vec::new(env);
+        let mut i = 0u32;
+        while i < node_count {
+            in_degree.push_back(0);
+            i += 1;
+        }
+
+        // Build in-degrees. For each node, every stored predecessor that is also
+        // part of `nodes` contributes an incoming edge (pred -> node).
+        i = 0u32;
+        while i < node_count {
+            let node = nodes.get(i).unwrap();
+            let pred_key = DataKey::OperationPredecessors(node.clone());
+            if let Some(preds) = env.storage().persistent().get::<_, Vec<Bytes>>(&pred_key) {
+                let pred_len = preds.len();
+                let mut p = 0u32;
+                while p < pred_len {
+                    let pred = preds.get(p).unwrap();
+                    if Self::index_of(nodes, &pred).is_some() {
+                        let current = in_degree.get(i).unwrap();
+                        in_degree.set(i, current + 1);
+                    }
+                    p += 1;
+                }
+            }
+            i += 1;
+        }
+
+        // Seed the queue with all zero-in-degree nodes.
+        let mut queue: Vec<Bytes> = Vec::new(env);
+        i = 0u32;
+        while i < node_count {
+            if in_degree.get(i).unwrap() == 0 {
+                queue.push_back(nodes.get(i).unwrap());
+            }
+            i += 1;
+        }
+
+        // Process the queue, decrementing successor in-degrees as nodes are
+        // removed. A successor is any node listing the processed node as a
+        // predecessor.
+        let mut sorted: Vec<Bytes> = Vec::new(env);
+        while !queue.is_empty() {
+            let node = queue.get(0).unwrap();
+            queue.remove(0);
+            sorted.push_back(node.clone());
+
+            let mut j = 0u32;
+            while j < node_count {
+                let candidate = nodes.get(j).unwrap();
+                let pred_key = DataKey::OperationPredecessors(candidate.clone());
+                if let Some(preds) = env.storage().persistent().get::<_, Vec<Bytes>>(&pred_key) {
+                    if Self::index_of(&preds, &node).is_some() {
+                        let current = in_degree.get(j).unwrap();
+                        if current > 0 {
+                            let updated = current - 1;
+                            in_degree.set(j, updated);
+                            if updated == 0 {
+                                queue.push_back(candidate.clone());
+                            }
+                        }
+                    }
+                }
+                j += 1;
+            }
+        }
+
+        // If not every node was processed, a cycle exists.
+        if sorted.len() != node_count {
+            return Err(());
+        }
+
+        Ok(sorted)
+    }
 }
 
 #[cfg(test)]
 mod test;
+
+#[cfg(test)]
+mod test_dag;
