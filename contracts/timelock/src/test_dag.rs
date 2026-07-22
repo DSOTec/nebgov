@@ -1,8 +1,8 @@
 use super::*;
 use soroban_sdk::{
     contract, contractimpl,
-    testutils::{Address as _, Events, Ledger as _},
-    Address, Bytes, Env, IntoVal, Symbol, TryIntoVal, Val, Vec,
+    testutils::{Address as _, Ledger as _},
+    Address, Bytes, Env, Symbol, Vec,
 };
 
 /// Mock target contract for testing execution.
@@ -76,17 +76,17 @@ fn test_schedule_with_single_predecessor_blocks_until_predecessor_done() {
     );
 
     // Verify operation was scheduled
-    assert!(client.get_operation(op_id.clone()).is_some());
+    assert!(client.get_operation(&op_id).is_some());
 
     // Check that predecessor is not done yet
-    assert!(!client.is_done(pred_op_id.clone()));
+    assert!(!client.is_done(&pred_op_id));
 
     // Advance time and execute predecessor
     env.ledger().with_mut(|l| l.timestamp = 1);
     client.execute(&governor, &pred_op_id);
 
     // Now predecessor is done
-    assert!(client.is_done(pred_op_id.clone()));
+    assert!(client.is_done(&pred_op_id));
 }
 
 #[test]
@@ -138,86 +138,168 @@ fn test_schedule_with_multiple_predecessors_blocks_until_all_done() {
     );
 
     // Verify operation was scheduled
-    assert!(client.get_operation(op_id.clone()).is_some());
+    assert!(client.get_operation(&op_id).is_some());
 
     // Check that all_predecessors_done is false
-    assert!(!client.all_predecessors_done(op_id.clone()));
+    assert!(!client.all_predecessors_done(&op_id));
 
     // Advance time and execute first predecessor
     env.ledger().with_mut(|l| l.timestamp = 1);
     client.execute(&governor, &pred_op_id1);
-    assert!(client.is_done(pred_op_id1.clone()));
+    assert!(client.is_done(&pred_op_id1));
 
     // Still blocking since second predecessor not done
-    assert!(!client.all_predecessors_done(op_id.clone()));
+    assert!(!client.all_predecessors_done(&op_id));
 
     // Execute second predecessor
     client.execute(&governor, &pred_op_id2);
-    assert!(client.is_done(pred_op_id2.clone()));
+    assert!(client.is_done(&pred_op_id2));
 
     // Now all predecessors are done
-    assert!(client.all_predecessors_done(op_id.clone()));
+    assert!(client.all_predecessors_done(&op_id));
+}
+
+/// Directly store a predecessor edge (`node`'s predecessors include `pred`)
+/// so cycle-detection tests can construct arbitrary graphs the public API
+/// (which requires predecessors to already exist) would reject.
+fn set_predecessors(env: &Env, contract_id: &Address, node: &Bytes, preds: &Vec<Bytes>) {
+    env.as_contract(contract_id, || {
+        env.storage()
+            .persistent()
+            .set(&DataKey::OperationPredecessors(node.clone()), preds);
+    });
 }
 
 #[test]
 fn test_cycle_detection_direct_cycle_a_to_b_to_a() {
     let env = Env::default();
     env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
 
     let op_a = Bytes::from_slice(&env, b"op_a");
     let op_b = Bytes::from_slice(&env, b"op_b");
+
+    // A depends on B, and B depends on A -> direct cycle.
+    let mut a_preds = Vec::new(&env);
+    a_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_a, &a_preds);
+
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_a.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
 
     let mut op_ids = Vec::new(&env);
     op_ids.push_back(op_a.clone());
     op_ids.push_back(op_b.clone());
 
-    let result = TimelockContract::validate_dependency_dag(env.clone(), op_ids.clone());
+    let result = client.validate_dependency_dag(&op_ids);
+    assert!(!result.valid, "direct cycle should be detected");
+    assert_eq!(result.cycle_path.len(), 2);
+}
 
-    // No cycle if no edges are stored (both have zero in-degree)
-    assert!(result.is_ok());
+#[test]
+fn test_cycle_detection_transitive_cycle_a_b_c_a() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
 
-    // Now we'd need to store edges to create a cycle, but that requires storage setup
-    // This test verifies the function signature and basic behavior
+    let op_a = Bytes::from_slice(&env, b"op_a");
+    let op_b = Bytes::from_slice(&env, b"op_b");
+    let op_c = Bytes::from_slice(&env, b"op_c");
+
+    // A -> B -> C -> A transitive cycle.
+    let mut a_preds = Vec::new(&env);
+    a_preds.push_back(op_c.clone());
+    set_predecessors(&env, &contract_id, &op_a, &a_preds);
+
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_a.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
+
+    let mut c_preds = Vec::new(&env);
+    c_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_c, &c_preds);
+
+    let mut op_ids = Vec::new(&env);
+    op_ids.push_back(op_a.clone());
+    op_ids.push_back(op_b.clone());
+    op_ids.push_back(op_c.clone());
+
+    let result = client.validate_dependency_dag(&op_ids);
+    assert!(!result.valid, "transitive cycle should be detected");
 }
 
 #[test]
 fn test_dag_without_cycle_validates_successfully() {
     let env = Env::default();
     env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
 
     let op_a = Bytes::from_slice(&env, b"op_a");
     let op_b = Bytes::from_slice(&env, b"op_b");
     let op_c = Bytes::from_slice(&env, b"op_c");
+
+    // Linear chain A -> B -> C, no cycle.
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_a.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
+
+    let mut c_preds = Vec::new(&env);
+    c_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_c, &c_preds);
 
     let mut op_ids = Vec::new(&env);
     op_ids.push_back(op_a.clone());
     op_ids.push_back(op_b.clone());
     op_ids.push_back(op_c.clone());
 
-    let result = TimelockContract::validate_dependency_dag(env.clone(), op_ids);
-
-    // Valid DAG with no edges
-    assert!(result.is_ok());
+    let result = client.validate_dependency_dag(&op_ids);
+    assert!(result.valid, "acyclic graph should validate");
+    assert_eq!(result.cycle_path.len(), 0);
 }
 
 #[test]
 fn test_topological_sort_returns_correct_execution_order() {
     let env = Env::default();
     env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
 
     let op_a = Bytes::from_slice(&env, b"op_a");
     let op_b = Bytes::from_slice(&env, b"op_b");
     let op_c = Bytes::from_slice(&env, b"op_c");
 
+    // C depends on B depends on A -> a valid linear order exists.
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_a.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
+
+    let mut c_preds = Vec::new(&env);
+    c_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_c, &c_preds);
+
     let mut op_ids = Vec::new(&env);
-    op_ids.push_back(op_a.clone());
-    op_ids.push_back(op_b.clone());
     op_ids.push_back(op_c.clone());
+    op_ids.push_back(op_b.clone());
+    op_ids.push_back(op_a.clone());
 
-    let result = TimelockContract::validate_dependency_dag(env.clone(), op_ids.clone());
-
-    // Should succeed with a linear DAG
-    assert!(result.is_ok());
+    let result = client.validate_dependency_dag(&op_ids);
+    assert!(result.valid, "linear dependency chain should be orderable");
 }
 
 #[test]
@@ -509,8 +591,8 @@ fn test_all_predecessors_done_false_when_predecessor_pending() {
     );
 
     // Predecessor should not be done yet (delay hasn't passed)
-    assert!(!client.is_done(pred_op_id.clone()));
+    assert!(!client.is_done(&pred_op_id));
 
     // all_predecessors_done should return false
-    assert!(!client.all_predecessors_done(op_id));
+    assert!(!client.all_predecessors_done(&op_id));
 }

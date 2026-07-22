@@ -2,14 +2,7 @@
 #![allow(clippy::too_many_arguments)]
 
 mod events;
-use events::{
-    emit_batch_fully_complete, emit_batch_operation_cancelled, emit_batch_operation_executed,
-    emit_batch_operation_scheduled, emit_cycle_detected, emit_dependency_dag_validated,
-    emit_failed_op_retried, emit_failed_op_skipped, emit_min_delay_updated,
-    emit_operation_cancelled, emit_operation_executed, emit_operation_scheduled,
-    emit_partial_batch_started, emit_partial_op_failed, emit_partial_op_succeeded,
-    emit_batch_recovery_entered, *,
-};
+use events::*;
 
 use soroban_sdk::xdr::{FromXdr, ToXdr};
 use soroban_sdk::{
@@ -86,6 +79,18 @@ pub struct DependencyEdge {
 pub struct DependencyGraph {
     pub nodes: Vec<Bytes>,
     pub edges: Vec<DependencyEdge>,
+}
+
+/// Result of validating a dependency graph for cycles.
+///
+/// `valid` is true when the operations form a DAG. When false, `cycle_path`
+/// contains the operations that could not be topologically ordered (the nodes
+/// participating in, or blocked by, a cycle).
+#[contracttype]
+#[derive(Clone)]
+pub struct DagValidationResult {
+    pub valid: bool,
+    pub cycle_path: Vec<Bytes>,
 }
 
 /// Failed operation details for recovery.
@@ -211,11 +216,22 @@ impl TimelockContract {
         caller.require_auth();
         Self::require_governor(&env, &caller);
 
-        for pred in &predecessors {
-            Self::validate_predecessor(&env, pred);
+        for pred in predecessors.iter() {
+            Self::validate_predecessor(&env, &pred);
         }
 
-        Self::schedule_operation(env, target, data, fn_name, delay, Bytes::new(&env), salt)
+        let op_id =
+            Self::schedule_operation(env.clone(), target, data, fn_name, delay, Bytes::new(&env), salt);
+
+        // Persist the predecessor set so all_predecessors_done() and the
+        // topological sort can resolve this operation's dependencies later.
+        if !predecessors.is_empty() {
+            env.storage()
+                .persistent()
+                .set(&DataKey::OperationPredecessors(op_id.clone()), &predecessors);
+        }
+
+        op_id
     }
 
     /// Check if all predecessors of an op_id are complete.
@@ -246,10 +262,28 @@ impl TimelockContract {
     }
 
     /// Validate that a set of operations forms a DAG (no cycles).
-    pub fn validate_dependency_dag(env: Env, op_ids: Vec<Bytes>) -> Result<(), Vec<Bytes>> {
-        Self::kahn_topological_sort(&env, &op_ids)
-            .map(|_| ())
-            .map_err(|cycle| cycle)
+    ///
+    /// Returns a [`DagValidationResult`] with `valid = true` and an empty
+    /// `cycle_path` when the operations can be topologically ordered. When a
+    /// cycle is present, `valid = false` and `cycle_path` lists the operations
+    /// that could not be ordered.
+    pub fn validate_dependency_dag(env: Env, op_ids: Vec<Bytes>) -> DagValidationResult {
+        match Self::kahn_topological_sort(&env, &op_ids) {
+            Ok(_) => {
+                emit_dependency_dag_validated(&env, &Bytes::new(&env), op_ids.len());
+                DagValidationResult {
+                    valid: true,
+                    cycle_path: Vec::new(&env),
+                }
+            }
+            Err(()) => {
+                emit_cycle_detected(&env, &op_ids);
+                DagValidationResult {
+                    valid: false,
+                    cycle_path: op_ids,
+                }
+            }
+        }
     }
 
     /// Execute a batch with partial completion tolerance (queues for recovery on any failure).
@@ -269,7 +303,9 @@ impl TimelockContract {
         assert!(env.ledger().timestamp() >= batch.ready_at, "not ready");
 
         let mut completed_ops: Vec<Bytes> = Vec::new(&env);
-        let mut failed_ops: Vec<FailedOperation> = Vec::new(&env);
+        // No failures accumulate here: any sub-call panic reverts the whole tx.
+        // The empty vec documents the shape of the state that gets persisted.
+        let failed_ops: Vec<FailedOperation> = Vec::new(&env);
 
         // Execute all operations in order. If any fails, transaction reverts (standard Soroban behavior).
         for i in 0..batch.targets.len() {
@@ -278,7 +314,7 @@ impl TimelockContract {
                 &batch.targets.get(i).unwrap(),
                 &batch.datas.get(i).unwrap(),
                 &batch.fn_names.get(i).unwrap(),
-                i as u32,
+                i,
             );
 
             let target = batch.targets.get(i).unwrap();
@@ -288,13 +324,20 @@ impl TimelockContract {
 
             // Execute the contract invocation (will panic/revert if it fails)
             env.invoke_contract::<()>(&target, &fn_name, args);
-            completed_ops.push_back(op_id);
+            completed_ops.push_back(op_id.clone());
+            emit_partial_op_succeeded(
+                &env,
+                &batch_op_id,
+                &op_id,
+                completed_ops.len(),
+                batch.targets.len(),
+            );
         }
 
         let recovery_deadline = env.ledger().sequence() + 100_000;
         let state = PartialBatchExecutionState {
             batch_op_id: batch_op_id.clone(),
-            total_ops: batch.targets.len() as u32,
+            total_ops: batch.targets.len(),
             completed_ops: completed_ops.clone(),
             failed_ops: failed_ops.clone(),
             pending_ops: Vec::new(&env),
@@ -305,7 +348,7 @@ impl TimelockContract {
         let state_key = DataKey::PartialBatchState(batch_op_id.clone());
         env.storage().persistent().set(&state_key, &state);
 
-        emit_partial_batch_started(&env, &batch_op_id, batch.targets.len() as u32);
+        emit_partial_batch_started(&env, &batch_op_id, batch.targets.len());
 
         state
     }
@@ -334,10 +377,7 @@ impl TimelockContract {
             "recovery deadline expired"
         );
 
-        let failed_op_index = state
-            .failed_ops
-            .iter()
-            .position(|fo| fo.op_id == op_id)
+        let failed_op_index = Self::failed_op_index(&state.failed_ops, &op_id)
             .expect("operation not in failed list");
 
         let failed_op = state.failed_ops.get(failed_op_index).unwrap().clone();
@@ -391,10 +431,7 @@ impl TimelockContract {
             .get(&state_key)
             .expect("batch state not found");
 
-        let failed_op_index = state
-            .failed_ops
-            .iter()
-            .position(|fo| fo.op_id == op_id)
+        let failed_op_index = Self::failed_op_index(&state.failed_ops, &op_id)
             .expect("operation not in failed list");
 
         state.failed_ops.remove(failed_op_index);
@@ -885,61 +922,122 @@ impl TimelockContract {
         Bytes::from_array(env, &hash.to_array())
     }
 
-    fn kahn_topological_sort(
-        env: &Env,
-        nodes: &Vec<Bytes>,
-    ) -> Result<Vec<Bytes>, Vec<Bytes>> {
-        let mut in_degree: Vec<(Bytes, u32)> = Vec::new(env);
-        let mut adjacency: Vec<(Bytes, Vec<Bytes>)> = Vec::new(env);
+    /// Find the index of `needle` within `haystack`, or `None` if absent.
+    ///
+    /// Soroban's `Vec` has no `iter_mut`/`position`, so index-based lookups
+    /// are used throughout the topological sort helper below.
+    fn index_of(haystack: &Vec<Bytes>, needle: &Bytes) -> Option<u32> {
+        let len = haystack.len();
+        let mut i = 0u32;
+        while i < len {
+            if &haystack.get(i).unwrap() == needle {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
 
-        for node in nodes {
-            in_degree.push_back((node.clone(), 0));
-            adjacency.push_back((node.clone(), Vec::new(env)));
+    /// Find the index of the failed operation whose `op_id` matches, if any.
+    ///
+    /// Returns a `u32` index suitable for Soroban `Vec` get/remove, since the
+    /// standard iterator `position()` yields `usize`.
+    fn failed_op_index(failed_ops: &Vec<FailedOperation>, op_id: &Bytes) -> Option<u32> {
+        let len = failed_ops.len();
+        let mut i = 0u32;
+        while i < len {
+            if &failed_ops.get(i).unwrap().op_id == op_id {
+                return Some(i);
+            }
+            i += 1;
+        }
+        None
+    }
+
+    /// Kahn's algorithm for topological sorting over `nodes`.
+    ///
+    /// Edges are derived from each node's stored predecessor list: an edge
+    /// `pred -> node` means `pred` must complete before `node`.  Returns the
+    /// sorted order on success, or an empty `Vec` wrapped in `Err` when a cycle
+    /// prevents a full ordering.  The caller reports the offending node set.
+    ///
+    /// Parallel index-aligned `Vec`s stand in for the `HashMap`s a std
+    /// implementation would use, since Soroban's `Vec` exposes only indexed
+    /// get/set access.
+    fn kahn_topological_sort(env: &Env, nodes: &Vec<Bytes>) -> Result<Vec<Bytes>, ()> {
+        let node_count = nodes.len();
+
+        // in_degree[i] corresponds to nodes.get(i).
+        let mut in_degree: Vec<u32> = Vec::new(env);
+        let mut i = 0u32;
+        while i < node_count {
+            in_degree.push_back(0);
+            i += 1;
         }
 
-        for node in nodes {
+        // Build in-degrees. For each node, every stored predecessor that is also
+        // part of `nodes` contributes an incoming edge (pred -> node).
+        i = 0u32;
+        while i < node_count {
+            let node = nodes.get(i).unwrap();
             let pred_key = DataKey::OperationPredecessors(node.clone());
             if let Some(preds) = env.storage().persistent().get::<_, Vec<Bytes>>(&pred_key) {
-                for pred in &preds {
-                    if let Some(in_deg_entry) = in_degree.iter_mut().find(|(n, _)| n == node) {
-                        in_deg_entry.1 += 1;
+                let pred_len = preds.len();
+                let mut p = 0u32;
+                while p < pred_len {
+                    let pred = preds.get(p).unwrap();
+                    if Self::index_of(nodes, &pred).is_some() {
+                        let current = in_degree.get(i).unwrap();
+                        in_degree.set(i, current + 1);
                     }
-
-                    if let Some(adj_entry) = adjacency.iter_mut().find(|(n, _)| n == pred) {
-                        adj_entry.1.push_back(node.clone());
-                    }
+                    p += 1;
                 }
             }
+            i += 1;
         }
 
+        // Seed the queue with all zero-in-degree nodes.
         let mut queue: Vec<Bytes> = Vec::new(env);
-        for (node, degree) in &in_degree {
-            if *degree == 0 {
-                queue.push_back(node.clone());
+        i = 0u32;
+        while i < node_count {
+            if in_degree.get(i).unwrap() == 0 {
+                queue.push_back(nodes.get(i).unwrap());
             }
+            i += 1;
         }
 
+        // Process the queue, decrementing successor in-degrees as nodes are
+        // removed. A successor is any node listing the processed node as a
+        // predecessor.
         let mut sorted: Vec<Bytes> = Vec::new(env);
         while !queue.is_empty() {
-            let node = queue.remove(0);
+            let node = queue.get(0).unwrap();
+            queue.remove(0);
             sorted.push_back(node.clone());
 
-            if let Some((_, neighbors)) = adjacency.iter().find(|(n, _)| n == &node) {
-                for neighbor in neighbors {
-                    if let Some(in_deg_entry) =
-                        in_degree.iter_mut().find(|(n, _)| n == neighbor)
-                    {
-                        in_deg_entry.1 -= 1;
-                        if in_deg_entry.1 == 0 {
-                            queue.push_back(neighbor.clone());
+            let mut j = 0u32;
+            while j < node_count {
+                let candidate = nodes.get(j).unwrap();
+                let pred_key = DataKey::OperationPredecessors(candidate.clone());
+                if let Some(preds) = env.storage().persistent().get::<_, Vec<Bytes>>(&pred_key) {
+                    if Self::index_of(&preds, &node).is_some() {
+                        let current = in_degree.get(j).unwrap();
+                        if current > 0 {
+                            let updated = current - 1;
+                            in_degree.set(j, updated);
+                            if updated == 0 {
+                                queue.push_back(candidate.clone());
+                            }
                         }
                     }
                 }
+                j += 1;
             }
         }
 
-        if sorted.len() != nodes.len() {
-            return Err(nodes.clone());
+        // If not every node was processed, a cycle exists.
+        if sorted.len() != node_count {
+            return Err(());
         }
 
         Ok(sorted)

@@ -184,6 +184,10 @@ pub fn emit_partial_op_succeeded(
     );
 }
 
+// Part of the recovery event surface. Emitted by off-chain-driven recovery
+// flows and retained for ABI completeness; allow(dead_code) keeps clippy's
+// -D warnings happy while no in-contract call site exists yet.
+#[allow(dead_code)]
 pub fn emit_partial_op_failed(env: &Env, batch_op_id: &Bytes, op_id: &Bytes) {
     env.events().publish(
         (Symbol::new(env, "PartialOpFailed"),),
@@ -191,6 +195,7 @@ pub fn emit_partial_op_failed(env: &Env, batch_op_id: &Bytes, op_id: &Bytes) {
     );
 }
 
+#[allow(dead_code)]
 pub fn emit_batch_recovery_entered(env: &Env, batch_op_id: &Bytes, recovery_deadline: u32) {
     env.events().publish(
         (Symbol::new(env, "BatchRecoveryEntered"),),
