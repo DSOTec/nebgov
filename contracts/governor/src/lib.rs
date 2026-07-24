@@ -383,6 +383,7 @@ impl GovernorContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::ProposalExpiredEmitted(proposal.id), &true);
+
             // Reputation: this branch is reached exactly when a proposal
             // concludes without succeeding (fails quorum and/or the vote),
             // i.e. the Defeated classification in state() below. Guarded by

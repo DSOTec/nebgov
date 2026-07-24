@@ -115,6 +115,7 @@ const TTL = {
   profile: 30_000, // 30 seconds
   stats: 60_000, // 60 seconds
   delegationRegistry: 30_000, // 30 seconds
+  analytics: 30_000, // 30 seconds
   reputation: 30_000, // 30 seconds
 };
 
@@ -799,6 +800,242 @@ export function createApp(server: SorobanRpc.Server): express.Application {
               address: r.address,
               delegator_count: r.delegator_count,
               total_delegated_power: String(r.total_delegated_power),
+            })),
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // --- Governance analytics endpoints (issue #765) ---
+  //
+  // Entirely indexer-side — there's no on-chain analytics module (no room
+  // in the governor's WASM budget alongside proposer reputation). `/analytics/
+  // snapshots*` are backed by `governance_snapshots`, a votes-cast-over-time
+  // series computed periodically from the indexer's own `votes` table (see
+  // `maybeTakeGovernanceSnapshot` in events.ts). `/analytics/all-time-stats`,
+  // `/analytics/proposals/:id/participation`, `/analytics/voters/:address/history`,
+  // and `/analytics/top-voters` are all derived live from the existing
+  // `proposals`/`votes` tables, since those are already event-sourced and
+  // give an always-current answer.
+
+  // GET /analytics/snapshots?limit=30&offset=0
+  // GET /analytics/snapshots?ledger=12345 — single snapshot by ledger.
+  app.get(
+    "/analytics/snapshots",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 30), 1), 200);
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const ledger = req.query.ledger !== undefined ? Number(req.query.ledger) : undefined;
+      const key = ledger !== undefined
+        ? `analytics:snapshots:ledger:${ledger}`
+        : `analytics:snapshots:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.analytics, async () => {
+          if (ledger !== undefined) {
+            const result = await pool.query(
+              `SELECT * FROM governance_snapshots WHERE ledger = $1`,
+              [ledger],
+            );
+            return { data: result.rows };
+          }
+          const result = await pool.query(
+            `SELECT * FROM governance_snapshots ORDER BY ledger DESC LIMIT $1 OFFSET $2`,
+            [limit, offset],
+          );
+          return {
+            data: result.rows,
+            pagination: { limit, offset, hasMore: result.rows.length === limit },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /analytics/snapshots/latest
+  app.get(
+    "/analytics/snapshots/latest",
+    async (_req: Request, res: Response): Promise<void> => {
+      try {
+        const data = await cached("analytics:snapshots:latest", TTL.analytics, async () => {
+          const result = await pool.query(
+            `SELECT * FROM governance_snapshots ORDER BY ledger DESC LIMIT 1`,
+          );
+          return result.rows[0] ?? null;
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /analytics/all-time-stats — live from proposals/votes.
+  //
+  // `quorum_hit_count`/`quorum_miss_count`/`pass_rate_bps` are always 0:
+  // determining them requires the eligible supply (and, for dynamic
+  // quorum, a live oracle price) at each proposal's start ledger, which
+  // the indexer doesn't track and no on-chain function exposes anymore
+  // (cut for WASM-size budget — see git history for
+  // contracts/governor/src/analytics.rs).
+  app.get(
+    "/analytics/all-time-stats",
+    async (_req: Request, res: Response): Promise<void> => {
+      try {
+        const data = await cached("analytics:all-time-stats", TTL.analytics, async () => {
+          const [proposalsResult, votesResult] = await Promise.all([
+            pool.query(`SELECT COUNT(*)::int AS count FROM proposals`),
+            pool.query(
+              `SELECT COALESCE(SUM(weight), 0) AS total_weight_cast,
+                      COUNT(DISTINCT voter)::int AS unique_voters
+               FROM votes`,
+            ),
+          ]);
+          return {
+            total_proposals: String(proposalsResult.rows[0]?.count ?? 0),
+            total_votes_cast: String(votesResult.rows[0]?.total_weight_cast ?? 0),
+            unique_voters: votesResult.rows[0]?.unique_voters ?? 0,
+            quorum_hit_count: "0",
+            quorum_miss_count: "0",
+            pass_rate_bps: 0,
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /analytics/proposals/:id/participation — live from proposals/votes.
+  app.get(
+    "/analytics/proposals/:id/participation",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const key = `analytics:participation:${id}`;
+      try {
+        const data = await cached(key, TTL.proposalVotes, async () => {
+          const proposalResult = await pool.query(
+            `SELECT votes_for, votes_against, votes_abstain FROM proposals WHERE id = $1`,
+            [id],
+          );
+          const proposal = proposalResult.rows[0];
+          if (!proposal) return null;
+
+          const votersResult = await pool.query(
+            `SELECT COUNT(DISTINCT voter)::int AS unique_voters FROM votes WHERE proposal_id = $1`,
+            [id],
+          );
+          const uniqueVoters = Number(votersResult.rows[0]?.unique_voters ?? 0);
+
+          const votesFor = Number(proposal.votes_for);
+          const votesAgainst = Number(proposal.votes_against);
+          const votesAbstain = Number(proposal.votes_abstain);
+          const totalVotesCast = votesFor + votesAgainst + votesAbstain;
+          const bpsOf = (part: number) =>
+            totalVotesCast > 0 ? Math.round((part * 10_000) / totalVotesCast) : 0;
+
+          return {
+            proposal_id: id,
+            total_votes_cast: String(totalVotesCast),
+            unique_voters: uniqueVoters,
+            for_bps: bpsOf(votesFor),
+            against_bps: bpsOf(votesAgainst),
+            abstain_bps: bpsOf(votesAbstain),
+          };
+        });
+        if (!data) {
+          res.status(404).json({ error: "Proposal not found" });
+          return;
+        }
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /analytics/voters/:address/history — live from votes.
+  app.get(
+    "/analytics/voters/:address/history",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const key = `analytics:voter-history:${address}`;
+      try {
+        const data = await cached(key, TTL.proposalVotes, async () => {
+          const [voteResult, proposalsResult] = await Promise.all([
+            pool.query(
+              `SELECT
+                 COUNT(*)::int AS proposals_voted,
+                 COALESCE(SUM(weight), 0) AS total_weight_cast,
+                 COUNT(*) FILTER (WHERE support = 1)::int AS for_count,
+                 COUNT(*) FILTER (WHERE support = 0)::int AS against_count,
+                 COUNT(*) FILTER (WHERE support = 2)::int AS abstain_count,
+                 COALESCE(MAX(ledger), 0)::int AS last_voted_ledger
+               FROM votes WHERE voter = $1`,
+              [address],
+            ),
+            pool.query(`SELECT COUNT(*)::int AS count FROM proposals`),
+          ]);
+          const row = voteResult.rows[0];
+          const proposalsVoted = row?.proposals_voted ?? 0;
+          const proposalsEligible = proposalsResult.rows[0]?.count ?? 0;
+          const participationRateBps =
+            proposalsEligible > 0
+              ? Math.round((proposalsVoted / proposalsEligible) * 10_000)
+              : 0;
+          return {
+            voter: address,
+            proposals_voted: proposalsVoted,
+            proposals_eligible: proposalsEligible,
+            participation_rate_bps: participationRateBps,
+            total_weight_cast: String(row?.total_weight_cast ?? 0),
+            for_count: row?.for_count ?? 0,
+            against_count: row?.against_count ?? 0,
+            abstain_count: row?.abstain_count ?? 0,
+            last_voted_ledger: row?.last_voted_ledger ?? 0,
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /analytics/top-voters?limit=20 — live from votes, ordered by total weight cast.
+  app.get(
+    "/analytics/top-voters",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 20), 1), 100);
+      const key = `analytics:top-voters:${limit}`;
+      try {
+        const data = await cached(key, TTL.analytics, async () => {
+          const result = await pool.query(
+            `SELECT
+               voter,
+               COUNT(*)::int AS proposals_voted,
+               COALESCE(SUM(weight), 0) AS total_weight_cast
+             FROM votes
+             GROUP BY voter
+             ORDER BY total_weight_cast DESC
+             LIMIT $1`,
+            [limit],
+          );
+          return {
+            top_voters: result.rows.map((r, i) => ({
+              rank: i + 1,
+              voter: r.voter,
+              proposals_voted: r.proposals_voted,
+              total_weight_cast: String(r.total_weight_cast),
             })),
           };
         });

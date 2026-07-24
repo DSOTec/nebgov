@@ -748,6 +748,42 @@ async function handleProposalCancelled(
   });
 }
 
+// --- Governance analytics snapshots (issue #765) ---
+//
+// Backed by the `governance_snapshots` table: a pure votes-cast-over-time
+// series computed entirely from the indexer's own already-indexed `votes`
+// table — no on-chain analytics module needed (there isn't WASM-size
+// budget for one alongside the proposer reputation module; see the
+// removed `contracts/governor/src/analytics.rs` in git history). Called
+// periodically from the poll loop in `index.ts`, throttled by
+// `SNAPSHOT_INTERVAL_LEDGERS` so continuous polling doesn't produce a row
+// per poll cycle.
+const SNAPSHOT_INTERVAL_LEDGERS = 100;
+
+export async function maybeTakeGovernanceSnapshot(currentLedger: number): Promise<void> {
+  const lastResult = await pool.query(
+    `SELECT ledger FROM governance_snapshots ORDER BY ledger DESC LIMIT 1`,
+  );
+  const lastLedger = lastResult.rows[0]?.ledger ?? 0;
+  if (currentLedger - lastLedger < SNAPSHOT_INTERVAL_LEDGERS) return;
+
+  const votesResult = await pool.query(`SELECT COALESCE(SUM(weight), 0) AS total FROM votes`);
+  const totalVotesCast = String(votesResult.rows[0]?.total ?? 0);
+
+  await pool.query(
+    `INSERT INTO governance_snapshots (ledger, total_votes_cast)
+     VALUES ($1, $2)
+     ON CONFLICT (ledger) DO NOTHING`,
+    [currentLedger, totalVotesCast],
+  );
+
+  invalidatePattern("analytics:");
+  broadcast({
+    type: "analytics_snapshot_taken",
+    data: { ledger: currentLedger, total_votes_cast: totalVotesCast },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Liquidity event handlers (#602)
 // ---------------------------------------------------------------------------

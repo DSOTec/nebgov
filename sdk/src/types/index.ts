@@ -618,6 +618,38 @@ export interface SimulateResult {
   error?: string;
 }
 
+/**
+ * A captured point-in-time governance activity reading (Issue #765),
+ * computed periodically by the indexer from its own indexed `votes` table
+ * — there's no on-chain analytics module (no room in the governor
+ * contract's WASM budget alongside proposer reputation).
+ */
+export interface GovernanceSnapshot {
+  ledger: number;
+  totalVotesCast: bigint;
+}
+
+export interface AllTimeStats {
+  totalProposals: bigint;
+  totalVotesCast: bigint;
+  uniqueVoters: bigint;
+  quorumHitCount: bigint;
+  quorumMissCount: bigint;
+  passRateBps: number;
+}
+
+export interface VoterHistory {
+  voter: string;
+  proposalsVoted: number;
+  proposalsEligible: number;
+  participationRateBps: number;
+  totalWeightCast: bigint;
+  forCount: number;
+  againstCount: number;
+  abstainCount: number;
+  lastVotedLedger: number;
+}
+
 // ─── Proposer Reputation Types (Issue #771) ──────────────────────────────────
 
 /** On-chain proposer reputation record, as returned by {@link ReputationClient.getProposerReputation}. */

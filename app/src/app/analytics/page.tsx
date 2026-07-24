@@ -17,9 +17,13 @@ import {
   Legend,
 } from "recharts";
 import { useTheme } from "../../hooks/useTheme";
+import { useAnalytics } from "../../hooks/useAnalytics";
 import { useEffect, useMemo, useState } from "react";
 import { Network, VotesClient } from "@nebgov/sdk";
 import { Skeleton } from "../../components/ui/Skeleton";
+import { GovernanceHealthScore } from "../../components/GovernanceHealthScore";
+import { TopVotersTable } from "../../components/TopVotersTable";
+import { VoterHistoryCard } from "../../components/VoterHistoryCard";
 
 const COLORS = ["#60a5fa", "#34d399", "#f97316", "#f87171", "#a78bfa"];
 
@@ -28,6 +32,7 @@ type TimeRange = "7d" | "30d" | "all";
 export default function AnalyticsPage() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
+  const { allTimeStats, topVoters, loading: analyticsLoading } = useAnalytics();
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -298,6 +303,19 @@ export default function AnalyticsPage() {
           <p className="text-red-700 dark:text-red-300 text-sm mt-1">{error}</p>
         </div>
       )}
+
+      <div className="mb-8">
+        <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+          On-Chain Governance Health
+        </h2>
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+          <GovernanceHealthScore stats={allTimeStats} loading={analyticsLoading} />
+        </div>
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <TopVotersTable voters={topVoters} loading={analyticsLoading} />
+          <VoterHistoryCard />
+        </div>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">

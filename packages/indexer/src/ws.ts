@@ -25,6 +25,7 @@ export type WsEventType =
   | "delegation_registered"
   | "delegation_revoked"
   | "delegation_depth_limit_updated"
+  | "analytics_snapshot_taken"
   | "reputation_updated"
   | "effective_threshold_changed";
 
