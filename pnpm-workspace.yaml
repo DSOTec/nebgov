@@ -4,3 +4,4 @@ packages:
   - 'packages/cli'
   - 'packages/indexer'
   - 'backend'
+  - 'tools/simulation'
