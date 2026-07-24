@@ -7,6 +7,7 @@
 mod analytics;
 pub mod error;
 mod events;
+mod reputation;
 
 use crate::error::GovernorError;
 use soroban_sdk::xdr::FromXdr;
@@ -630,14 +631,17 @@ impl GovernorContract {
         // Get the voting power of the proposer (strategy-aware)
         let proposer_votes = Self::compute_proposer_votes(&env, &proposer);
 
-        // Enforce proposal threshold
+        // Enforce proposal threshold, adjusted by the proposer's reputation
+        // score (Issue #771). Degrades to the flat threshold when reputation
+        // is disabled or the proposer has no history yet.
         let threshold: i128 = env
             .storage()
             .instance()
             .get(&DataKey::ProposalThreshold)
             .unwrap_or(0);
+        let effective_threshold = reputation::get_effective_threshold(&env, &proposer, threshold);
 
-        if proposer_votes < threshold {
+        if proposer_votes < effective_threshold {
             env.panic_with_error(GovernorError::ProposalThresholdNotMet);
         }
 
@@ -1282,6 +1286,16 @@ impl GovernorContract {
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal);
 
+        // Reputation: record an Executed outcome (Issue #771). Naturally
+        // idempotent — a second execute() call would panic above on the
+        // `proposal.executed` check.
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal.proposer,
+            reputation::ReputationOutcome::Executed,
+            None,
+        );
+
         events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
 
@@ -1336,6 +1350,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal);
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal.proposer,
+            reputation::ReputationOutcome::Cancelled,
+            None,
+        );
         events::emit_proposal_cancelled(&env, proposal_id, &caller);
     }
 
@@ -1360,6 +1380,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal_mut);
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal_mut);
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal_mut.proposer,
+            reputation::ReputationOutcome::Cancelled,
+            None,
+        );
 
         // If the proposal was queued, cancel its timelock operations
         if proposal_mut.queued {
@@ -1436,6 +1462,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal_mut);
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal_mut);
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal_mut.proposer,
+            reputation::ReputationOutcome::Cancelled,
+            None,
+        );
 
         // Cancel all timelock operations associated with this proposal
         let gov_addr = env.current_contract_address();

@@ -4,13 +4,38 @@ on:
   push:
     paths:
       - 'sdk/**'
+      - 'contracts/**'
+      - 'tools/simulation/**'
   pull_request:
     paths:
       - 'sdk/**'
+      - 'contracts/**'
+      - 'tools/simulation/**'
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    outputs:
+      sdk: ${{ steps.filter.outputs.sdk }}
+      simulation: ${{ steps.filter.outputs.simulation }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            sdk:
+              - 'sdk/**'
+            simulation:
+              - 'contracts/**'
+              - 'sdk/**'
+              - 'tools/simulation/**'
+
   js-security-audit:
     name: JavaScript Security Audit
+    needs: changes
+    if: needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -39,6 +64,8 @@ jobs:
 
   test:
     name: SDK Test & Build
+    needs: changes
+    if: needs.changes.outputs.sdk == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -110,3 +137,34 @@ jobs:
         with:
           name: sdk-docs
           path: sdk/docs/
+
+  simulation-test:
+    name: Simulation Tests
+    needs: changes
+    if: needs.changes.outputs.simulation == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build SDK
+        run: pnpm --filter @nebgov/sdk run build
+
+      - name: Type check simulation harness
+        run: pnpm --filter @nebgov/simulation exec tsc --noEmit
+
+      - name: Run governance simulation tests (mock runtime, no network)
+        run: pnpm --filter @nebgov/simulation test
