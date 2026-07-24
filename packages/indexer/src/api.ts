@@ -811,24 +811,37 @@ export function createApp(server: SorobanRpc.Server): express.Application {
 
   // --- Governance analytics endpoints (issue #765) ---
   //
-  // `/analytics/snapshots*` and `/analytics/all-time-stats` are backed by
-  // `governance_snapshots`, populated from the governor's permissionless
-  // `AnalyticsSnapshotTaken` event (see events.ts) — the contract computes
-  // participation/quorum-hit/pass-rate math on-chain, so this is purely a
-  // fast, paginated read of that history. `/analytics/proposals/:id/participation`
-  // and `/analytics/voters/:address/history` are instead derived live from
-  // the existing `proposals`/`votes` tables, since those are already
-  // event-sourced and give an always-current (not snapshot-lagged) answer.
+  // `/analytics/snapshots*` are backed by `governance_snapshots`, populated
+  // from the governor's permissionless `AnalyticsSnapshotTaken` event (see
+  // events.ts) — a pure participation-over-time series (the on-chain
+  // `GovernanceSnapshot` struct was trimmed to just `ledger`+
+  // `participation_bps` to stay under Soroban's WASM size cap; see
+  // contracts/governor/src/analytics.rs). `/analytics/all-time-stats`,
+  // `/analytics/proposals/:id/participation`, `/analytics/voters/:address/history`,
+  // and `/analytics/top-voters` are instead derived live from the existing
+  // `proposals`/`votes` tables, since those are already event-sourced and
+  // give an always-current (not snapshot-lagged) answer.
 
   // GET /analytics/snapshots?limit=30&offset=0
+  // GET /analytics/snapshots?ledger=12345 — single snapshot by ledger.
   app.get(
     "/analytics/snapshots",
     async (req: Request, res: Response): Promise<void> => {
       const limit = Math.min(Math.max(Number(req.query.limit ?? 30), 1), 200);
       const offset = Math.max(Number(req.query.offset ?? 0), 0);
-      const key = `analytics:snapshots:${limit}:${offset}`;
+      const ledger = req.query.ledger !== undefined ? Number(req.query.ledger) : undefined;
+      const key = ledger !== undefined
+        ? `analytics:snapshots:ledger:${ledger}`
+        : `analytics:snapshots:${limit}:${offset}`;
       try {
         const data = await cached(key, TTL.analytics, async () => {
+          if (ledger !== undefined) {
+            const result = await pool.query(
+              `SELECT * FROM governance_snapshots WHERE ledger = $1`,
+              [ledger],
+            );
+            return { data: result.rows };
+          }
           const result = await pool.query(
             `SELECT * FROM governance_snapshots ORDER BY ledger DESC LIMIT $1 OFFSET $2`,
             [limit, offset],
@@ -863,35 +876,34 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
-  // GET /analytics/all-time-stats — derived from the most recent snapshot.
+  // GET /analytics/all-time-stats — live from proposals/votes.
+  //
+  // `quorum_hit_count`/`quorum_miss_count`/`pass_rate_bps` are always 0
+  // here: determining them requires the eligible supply (and, for dynamic
+  // quorum, a live oracle price) at each proposal's start ledger, which
+  // the indexer doesn't track. Use `AnalyticsClient.getAllTimeStats()`
+  // (a direct contract read) for those — the governor already computes
+  // them on-chain in `contracts/governor/src/analytics.rs`.
   app.get(
     "/analytics/all-time-stats",
     async (_req: Request, res: Response): Promise<void> => {
       try {
         const data = await cached("analytics:all-time-stats", TTL.analytics, async () => {
-          const result = await pool.query(
-            `SELECT total_proposals, total_votes_cast, unique_voters,
-                    quorum_hit_rate_bps, proposal_pass_rate_bps, ledger
-             FROM governance_snapshots ORDER BY ledger DESC LIMIT 1`,
-          );
-          const row = result.rows[0];
-          if (!row) {
-            return {
-              total_proposals: "0",
-              total_votes_cast: "0",
-              unique_voters: "0",
-              quorum_hit_rate_bps: 0,
-              pass_rate_bps: 0,
-              as_of_ledger: null,
-            };
-          }
+          const [proposalsResult, votesResult] = await Promise.all([
+            pool.query(`SELECT COUNT(*)::int AS count FROM proposals`),
+            pool.query(
+              `SELECT COALESCE(SUM(weight), 0) AS total_weight_cast,
+                      COUNT(DISTINCT voter)::int AS unique_voters
+               FROM votes`,
+            ),
+          ]);
           return {
-            total_proposals: row.total_proposals,
-            total_votes_cast: row.total_votes_cast,
-            unique_voters: row.unique_voters,
-            quorum_hit_rate_bps: row.quorum_hit_rate_bps,
-            pass_rate_bps: row.proposal_pass_rate_bps,
-            as_of_ledger: row.ledger,
+            total_proposals: String(proposalsResult.rows[0]?.count ?? 0),
+            total_votes_cast: String(votesResult.rows[0]?.total_weight_cast ?? 0),
+            unique_voters: votesResult.rows[0]?.unique_voters ?? 0,
+            quorum_hit_count: "0",
+            quorum_miss_count: "0",
+            pass_rate_bps: 0,
           };
         });
         res.json(data);
@@ -959,21 +971,32 @@ export function createApp(server: SorobanRpc.Server): express.Application {
       const key = `analytics:voter-history:${address}`;
       try {
         const data = await cached(key, TTL.proposalVotes, async () => {
-          const result = await pool.query(
-            `SELECT
-               COUNT(*)::int AS proposals_voted,
-               COALESCE(SUM(weight), 0) AS total_weight_cast,
-               COUNT(*) FILTER (WHERE support = 1)::int AS for_count,
-               COUNT(*) FILTER (WHERE support = 0)::int AS against_count,
-               COUNT(*) FILTER (WHERE support = 2)::int AS abstain_count,
-               COALESCE(MAX(ledger), 0)::int AS last_voted_ledger
-             FROM votes WHERE voter = $1`,
-            [address],
-          );
-          const row = result.rows[0];
+          const [voteResult, proposalsResult] = await Promise.all([
+            pool.query(
+              `SELECT
+                 COUNT(*)::int AS proposals_voted,
+                 COALESCE(SUM(weight), 0) AS total_weight_cast,
+                 COUNT(*) FILTER (WHERE support = 1)::int AS for_count,
+                 COUNT(*) FILTER (WHERE support = 0)::int AS against_count,
+                 COUNT(*) FILTER (WHERE support = 2)::int AS abstain_count,
+                 COALESCE(MAX(ledger), 0)::int AS last_voted_ledger
+               FROM votes WHERE voter = $1`,
+              [address],
+            ),
+            pool.query(`SELECT COUNT(*)::int AS count FROM proposals`),
+          ]);
+          const row = voteResult.rows[0];
+          const proposalsVoted = row?.proposals_voted ?? 0;
+          const proposalsEligible = proposalsResult.rows[0]?.count ?? 0;
+          const participationRateBps =
+            proposalsEligible > 0
+              ? Math.round((proposalsVoted / proposalsEligible) * 10_000)
+              : 0;
           return {
             voter: address,
-            proposals_voted: row?.proposals_voted ?? 0,
+            proposals_voted: proposalsVoted,
+            proposals_eligible: proposalsEligible,
+            participation_rate_bps: participationRateBps,
             total_weight_cast: String(row?.total_weight_cast ?? 0),
             for_count: row?.for_count ?? 0,
             against_count: row?.against_count ?? 0,

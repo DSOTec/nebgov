@@ -689,64 +689,35 @@ async function handleProposalCancelled(
 // --- Governance analytics events (#765) ---
 //
 // Backed by the `governance_snapshots` table, populated exclusively from the
-// governor's permissionless `AnalyticsSnapshotTaken` event. Per-proposal
-// participation and per-voter history are *not* event-sourced here — they're
-// derived on demand from the existing `proposals`/`votes` tables in the
-// `/analytics/*` route handlers, since those already carry everything needed.
+// governor's permissionless `AnalyticsSnapshotTaken` event. The on-chain
+// event (and this table) is a pure participation-over-time series —
+// `ledger` + `participation_bps` — trimmed to just that to stay under
+// Soroban's WASM size cap (see contracts/governor/src/analytics.rs). The
+// current composite totals (proposals, votes cast, unique voters, pass/
+// quorum rates) live on `/analytics/all-time-stats` instead, computed live
+// from the governor contract. Per-proposal participation and per-voter
+// history are similarly *not* event-sourced here — they're derived on
+// demand from the existing `proposals`/`votes` tables in the `/analytics/*`
+// route handlers, since those already carry everything needed.
 async function handleAnalyticsSnapshotTaken(
   event: SorobanRpc.Api.EventResponse,
 ): Promise<void> {
   const data = scValToNative(event.value) as Record<string, unknown>;
 
   const ledger = Number(data.ledger);
-  const timestampApprox = String(data.timestamp_approx ?? 0);
-  const totalProposals = String(data.total_proposals ?? 0);
-  const activeProposals = String(data.active_proposals ?? 0);
-  const totalVotesCast = String(data.total_votes_cast ?? 0);
-  const uniqueVoters = String(data.unique_voters ?? 0);
   const participationBps = Number(data.participation_bps ?? 0);
-  const quorumHitRateBps = Number(data.quorum_hit_rate_bps ?? 0);
-  const topDelegateShareBps = Number(data.top_delegate_share_bps ?? 0);
-  const delegationRateBps = Number(data.delegation_rate_bps ?? 0);
-  const avgVoteWeight = String(data.avg_vote_weight ?? 0);
-  const proposalPassRateBps = Number(data.proposal_pass_rate_bps ?? 0);
 
   await pool.query(
-    `INSERT INTO governance_snapshots (
-       ledger, timestamp_approx, total_proposals, active_proposals,
-       total_votes_cast, unique_voters, participation_bps, quorum_hit_rate_bps,
-       top_delegate_share_bps, delegation_rate_bps, avg_vote_weight, proposal_pass_rate_bps
-     ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    `INSERT INTO governance_snapshots (ledger, participation_bps)
+     VALUES ($1, $2)
      ON CONFLICT (ledger) DO NOTHING`,
-    [
-      ledger,
-      timestampApprox,
-      totalProposals,
-      activeProposals,
-      totalVotesCast,
-      uniqueVoters,
-      participationBps,
-      quorumHitRateBps,
-      topDelegateShareBps,
-      delegationRateBps,
-      avgVoteWeight,
-      proposalPassRateBps,
-    ],
+    [ledger, participationBps],
   );
 
   invalidatePattern("analytics:");
   broadcast({
     type: "analytics_snapshot_taken",
-    data: {
-      ledger,
-      total_proposals: totalProposals,
-      active_proposals: activeProposals,
-      total_votes_cast: totalVotesCast,
-      unique_voters: uniqueVoters,
-      participation_bps: participationBps,
-      quorum_hit_rate_bps: quorumHitRateBps,
-      proposal_pass_rate_bps: proposalPassRateBps,
-    },
+    data: { ledger, participation_bps: participationBps },
   });
 }
 

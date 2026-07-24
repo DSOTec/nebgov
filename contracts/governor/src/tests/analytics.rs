@@ -179,16 +179,13 @@ fn test_take_snapshot_after_zero_proposals_returns_zeroed_fields() {
 
     let snapshot = h.governor.take_analytics_snapshot(&caller);
 
-    assert_eq!(snapshot.total_proposals, 0);
-    assert_eq!(snapshot.active_proposals, 0);
-    assert_eq!(snapshot.total_votes_cast, 0);
-    assert_eq!(snapshot.unique_voters, 0);
     assert_eq!(snapshot.participation_bps, 0);
-    assert_eq!(snapshot.quorum_hit_rate_bps, 0);
-    assert_eq!(snapshot.proposal_pass_rate_bps, 0);
-    assert_eq!(snapshot.avg_vote_weight, 0);
-    assert_eq!(snapshot.top_delegate_share_bps, 0);
-    assert_eq!(snapshot.delegation_rate_bps, 0);
+
+    let stats = h.governor.get_all_time_stats();
+    assert_eq!(stats.total_proposals, 0);
+    assert_eq!(stats.total_votes_cast, 0);
+    assert_eq!(stats.unique_voters, 0);
+    assert_eq!(stats.pass_rate_bps, 0);
 }
 
 #[test]
@@ -209,45 +206,35 @@ fn test_take_snapshot_captures_correct_participation() {
     let caller = Address::generate(&h.env);
     let snapshot = h.governor.take_analytics_snapshot(&caller);
 
-    assert_eq!(snapshot.total_proposals, 1);
-    assert_eq!(snapshot.active_proposals, 1);
-    assert_eq!(snapshot.total_votes_cast, 3_000);
-    assert_eq!(snapshot.unique_voters, 2);
     // 3000 / 10000 supply = 3000 bps.
     assert_eq!(snapshot.participation_bps, 3_000);
-    assert_eq!(snapshot.avg_vote_weight, 1_500);
+
+    let stats = h.governor.get_all_time_stats();
+    assert_eq!(stats.total_proposals, 1);
+    assert_eq!(stats.total_votes_cast, 3_000);
+    assert_eq!(stats.unique_voters, 2);
 }
 
 #[test]
-fn test_analytics_snapshot_list_is_ordered_by_ledger() {
+fn test_take_snapshot_reflects_ledger_it_was_taken_at() {
+    // The on-chain snapshot mechanism doesn't persist history (the indexer
+    // materializes it from the AnalyticsSnapshotTaken event instead) — this
+    // just verifies take_analytics_snapshot reports the current ledger each
+    // time it's called, independently of call order/count.
     let h = setup(10, 20, 20, 120_960);
     let caller = Address::generate(&h.env);
 
     h.env.ledger().with_mut(|l| l.sequence_number = 100);
     let snap1 = h.governor.take_analytics_snapshot(&caller);
+    assert_eq!(snap1.ledger, 100);
 
     h.env.ledger().with_mut(|l| l.sequence_number = 200);
     let snap2 = h.governor.take_analytics_snapshot(&caller);
-
-    h.env.ledger().with_mut(|l| l.sequence_number = 150);
-    let snap3 = h.governor.take_analytics_snapshot(&caller);
-
-    let list = h.governor.get_snapshot_list();
-    assert_eq!(list.len(), 3);
-    assert_eq!(list.get(0).unwrap(), snap1.ledger);
-    assert_eq!(list.get(1).unwrap(), snap2.ledger);
-    assert_eq!(list.get(2).unwrap(), snap3.ledger);
-
-    // Latest is defined as most-recently-appended, not highest ledger.
-    let latest = h.governor.get_latest_snapshot().unwrap();
-    assert_eq!(latest.ledger, snap3.ledger);
-
-    let fetched = h.governor.get_snapshot(&snap2.ledger).unwrap();
-    assert_eq!(fetched.ledger, snap2.ledger);
+    assert_eq!(snap2.ledger, 200);
 }
 
 #[test]
-fn test_voter_history_increments_on_every_cast_vote() {
+fn test_all_time_stats_accumulates_votes_across_multiple_proposals() {
     let h = setup(10, 20, 0, 120_960);
     let proposer = Address::generate(&h.env);
     h.votes.set_votes(&proposer, &100_000i128);
@@ -258,13 +245,9 @@ fn test_voter_history_increments_on_every_cast_vote() {
     h.env.ledger().with_mut(|l| l.sequence_number = 11);
     h.governor.cast_vote(&voter, &proposal_id1, &VoteSupport::For);
 
-    let history = h.governor.get_voter_history(&voter);
-    assert_eq!(history.proposals_voted, 1);
-    assert_eq!(history.for_count, 1);
-    assert_eq!(history.against_count, 0);
-    assert_eq!(history.total_weight_cast, 500);
-    assert_eq!(history.proposals_eligible, 1);
-    assert_eq!(history.participation_rate_bps, 10_000);
+    let stats = h.governor.get_all_time_stats();
+    assert_eq!(stats.total_votes_cast, 500);
+    assert_eq!(stats.unique_voters, 1);
 
     // Advance past the default 100-ledger proposal cooldown before the same
     // proposer can create a second proposal.
@@ -274,13 +257,10 @@ fn test_voter_history_increments_on_every_cast_vote() {
     h.governor
         .cast_vote(&voter, &proposal_id2, &VoteSupport::Against);
 
-    let history = h.governor.get_voter_history(&voter);
-    assert_eq!(history.proposals_voted, 2);
-    assert_eq!(history.for_count, 1);
-    assert_eq!(history.against_count, 1);
-    assert_eq!(history.total_weight_cast, 1_000);
-    assert_eq!(history.proposals_eligible, 2);
-    assert_eq!(history.participation_rate_bps, 10_000);
+    let stats = h.governor.get_all_time_stats();
+    assert_eq!(stats.total_votes_cast, 1_000);
+    // Same voter across both proposals — still counted once.
+    assert_eq!(stats.unique_voters, 1);
 }
 
 #[test]
@@ -303,15 +283,12 @@ fn test_proposal_participation_reflects_quorum_reached() {
     assert_eq!(participation.quorum_required, 2_000);
     assert_eq!(participation.total_votes_cast, 1_500);
     assert!(!participation.quorum_reached);
-    assert_eq!(participation.for_bps, 10_000);
 
     h.governor.cast_vote(&voter_b, &proposal_id, &VoteSupport::Abstain);
 
     let participation = h.governor.get_proposal_participation(&proposal_id);
     assert_eq!(participation.total_votes_cast, 2_500);
     assert!(participation.quorum_reached);
-    assert_eq!(participation.for_bps, 6_000);
-    assert_eq!(participation.abstain_bps, 4_000);
 }
 
 #[test]
@@ -445,10 +422,7 @@ fn test_zero_weight_vote_still_counts_as_participation() {
     h.env.ledger().with_mut(|l| l.sequence_number = 11);
     h.governor.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
-    let history = h.governor.get_voter_history(&voter);
-    assert_eq!(history.proposals_voted, 1);
-    assert_eq!(history.total_weight_cast, 0);
-
     let stats = h.governor.get_all_time_stats();
     assert_eq!(stats.unique_voters, 1);
+    assert_eq!(stats.total_votes_cast, 0);
 }

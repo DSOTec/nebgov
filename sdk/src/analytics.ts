@@ -37,20 +37,19 @@ const NETWORK_PASSPHRASES: Record<Network, string> = {
   futurenet: Networks.FUTURENET,
 };
 
+/**
+ * Maps a `GovernanceSnapshot` — from either a direct on-chain read (the
+ * value returned by `take_analytics_snapshot`) or an indexer
+ * `/analytics/snapshots*` row — to the SDK's public type. Both sources
+ * carry the same minimal shape: the on-chain struct was trimmed to just
+ * `ledger`/`participation_bps` to stay under Soroban's WASM size cap (see
+ * `contracts/governor/src/analytics.rs`), and the indexer table mirrors it
+ * exactly since it's populated from the same `AnalyticsSnapshotTaken` event.
+ */
 function mapGovernanceSnapshot(raw: any): GovernanceSnapshot {
   return {
     ledger: Number(raw.ledger),
-    timestampApprox: BigInt(raw.timestamp_approx ?? 0),
-    totalProposals: BigInt(raw.total_proposals ?? 0),
-    activeProposals: BigInt(raw.active_proposals ?? 0),
-    totalVotesCast: BigInt(raw.total_votes_cast ?? 0),
-    uniqueVoters: BigInt(raw.unique_voters ?? 0),
-    participationBps: Number(raw.participation_bps),
-    quorumHitRateBps: Number(raw.quorum_hit_rate_bps),
-    topDelegateShareBps: Number(raw.top_delegate_share_bps),
-    delegationRateBps: Number(raw.delegation_rate_bps),
-    avgVoteWeight: BigInt(raw.avg_vote_weight ?? 0),
-    proposalPassRateBps: Number(raw.proposal_pass_rate_bps),
+    participationBps: Number(raw.participation_bps ?? 0),
   };
 }
 
@@ -61,8 +60,7 @@ function mapAllTimeStats(raw: any): AllTimeStats {
     uniqueVoters: BigInt(raw.unique_voters ?? 0),
     quorumHitCount: BigInt(raw.quorum_hit_count ?? 0),
     quorumMissCount: BigInt(raw.quorum_miss_count ?? 0),
-    passRateBps: Number(raw.pass_rate_bps),
-    avgParticipationBps: Number(raw.avg_participation_bps),
+    passRateBps: Number(raw.pass_rate_bps ?? 0),
   };
 }
 
@@ -71,13 +69,9 @@ function mapProposalParticipation(raw: any): ProposalParticipation {
     proposalId: BigInt(raw.proposal_id ?? 0),
     totalEligibleSupply: BigInt(raw.total_eligible_supply ?? 0),
     totalVotesCast: BigInt(raw.total_votes_cast ?? 0),
-    participationBps: Number(raw.participation_bps),
+    participationBps: Number(raw.participation_bps ?? 0),
     quorumRequired: BigInt(raw.quorum_required ?? 0),
     quorumReached: Boolean(raw.quorum_reached),
-    uniqueVoters: Number(raw.unique_voters),
-    forBps: Number(raw.for_bps),
-    againstBps: Number(raw.against_bps),
-    abstainBps: Number(raw.abstain_bps),
   };
 }
 
@@ -101,7 +95,7 @@ function mapVoterHistory(raw: any): VoterHistory {
  *
  * The analytics functions live directly on the governor contract (not a
  * separate deployment), so this client targets `config.governorAddress`
- * just like {@link GovernorClient} and {@link ReputationClient}.
+ * just like {@link GovernorClient}.
  *
  * @example
  * const client = new AnalyticsClient({
@@ -138,6 +132,31 @@ export class AnalyticsClient {
 
   private readAccount(): string {
     return this.config.simulationAccount ?? this.config.governorAddress;
+  }
+
+  /**
+   * Fetches JSON from the configured indexer. Used by the methods below
+   * that read data the contract no longer exposes directly (trimmed to
+   * stay under Soroban's WASM size cap — see
+   * `contracts/governor/src/analytics.rs`).
+   */
+  private async indexerRequest<T>(path: string): Promise<T> {
+    if (!this.config.indexerUrl) {
+      throw new GovernorError(
+        GovernorErrorCode.SimulationFailed,
+        `AnalyticsClient.${path} requires config.indexerUrl to be set`,
+      );
+    }
+    return this.retry(async () => {
+      const resp = await fetch(`${this.config.indexerUrl}${path}`);
+      if (!resp.ok) {
+        throw new GovernorError(
+          GovernorErrorCode.SimulationFailed,
+          `Indexer request failed: ${resp.status}`,
+        );
+      }
+      return resp.json() as Promise<T>;
+    });
   }
 
   private async simulate(fnName: string, ...args: xdr.ScVal[]): Promise<unknown> {
@@ -225,22 +244,32 @@ export class AnalyticsClient {
     });
   }
 
-  /** Get a specific snapshot by the ledger it was taken at, or `null` if none exists. */
+  /**
+   * Get a specific snapshot by the ledger it was taken at, or `null` if
+   * none exists. Reads from the indexer (`config.indexerUrl` required) —
+   * there's no on-chain `get_snapshot` function; snapshots aren't
+   * persisted on-chain at all, only emitted as an event and materialized
+   * by the indexer (see module docs in `contracts/governor/src/analytics.rs`).
+   */
   async getSnapshot(ledger: number): Promise<GovernanceSnapshot | null> {
-    const raw = await this.simulate("get_snapshot", nativeToScVal(ledger, { type: "u32" }));
-    return raw ? mapGovernanceSnapshot(raw) : null;
+    const { data } = await this.indexerRequest<{ data: any[] }>(
+      `/analytics/snapshots?ledger=${ledger}`,
+    );
+    return data[0] ? mapGovernanceSnapshot(data[0]) : null;
   }
 
   /** Get the most recently captured snapshot, or `null` if none has been taken yet. */
   async getLatestSnapshot(): Promise<GovernanceSnapshot | null> {
-    const raw = await this.simulate("get_latest_snapshot");
+    const raw = await this.indexerRequest<any>("/analytics/snapshots/latest");
     return raw ? mapGovernanceSnapshot(raw) : null;
   }
 
-  /** Bounded (most-recent-N) ordered list of ledgers with a stored snapshot. */
-  async getSnapshotList(): Promise<number[]> {
-    const raw = (await this.simulate("get_snapshot_list")) as any[];
-    return raw.map((l) => Number(l));
+  /** Most-recent-first list of ledgers with a captured snapshot. */
+  async getSnapshotList(limit = 200): Promise<number[]> {
+    const { data } = await this.indexerRequest<{ data: Array<{ ledger: number }> }>(
+      `/analytics/snapshots?limit=${limit}`,
+    );
+    return data.map((row) => Number(row.ledger));
   }
 
   /** Running all-time governance totals (votes cast, proposals, quorum hit/miss, participation). */
@@ -258,12 +287,15 @@ export class AnalyticsClient {
     return mapProposalParticipation(raw);
   }
 
-  /** Lifetime voting participation record for a single voter. */
+  /**
+   * Lifetime voting participation record for a single voter. Reads from
+   * the indexer (`config.indexerUrl` required) — there's no on-chain
+   * `get_voter_history` function; the indexer already derives this live
+   * and more cheaply from indexed `VoteCast` events (see
+   * `GET /analytics/voters/:address/history` in `packages/indexer/src/api.ts`).
+   */
   async getVoterHistory(voter: string): Promise<VoterHistory> {
-    const raw = await this.simulate(
-      "get_voter_history",
-      nativeToScVal(voter, { type: "address" }),
-    );
+    const raw = await this.indexerRequest<any>(`/analytics/voters/${voter}/history`);
     return mapVoterHistory(raw);
   }
 

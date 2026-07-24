@@ -276,20 +276,12 @@ pub enum DataKey {
     /// Address of the trusted co-sponsorship registry contract authorized
     /// to call `propose_via_registry`, if one has been configured.
     CoSponsorshipRegistry,
-    /// A captured point-in-time governance analytics snapshot, keyed by the
-    /// ledger it was taken at (Issue #765).
-    AnalyticsSnapshot(u32),
-    /// Bounded (most-recent-`N`) ordered list of ledgers with a stored
-    /// `AnalyticsSnapshot`, used for pagination without an iterable map.
-    AnalyticsSnapshotLedgerList,
     /// Running all-time governance totals (votes cast, proposals, quorum
     /// hit/miss, participation) used to derive `AllTimeStats`.
     AnalyticsTotals,
     /// Whether `voter` has ever cast a vote, used to count unique voters
     /// exactly once each.
     AnalyticsUniqueVoter(Address),
-    /// Per-voter lifetime participation record.
-    AnalyticsVoterHistory(Address),
     /// Idempotency guard so a proposal that concludes via grace-period
     /// expiry (succeeded but not executed in time) only records its
     /// analytics resolution once, no matter how many times `state()` is read.
@@ -400,20 +392,7 @@ impl GovernorContract {
             // concludes without succeeding (fails quorum and/or the vote),
             // i.e. the Defeated classification in state() below. Guarded by
             // the flag above so it fires at most once (Issue #765).
-            let strategy: VotingStrategy = env
-                .storage()
-                .instance()
-                .get(&DataKey::VotingStrategy)
-                .unwrap_or(VotingStrategy::Single);
-            let supply = Self::compute_quorum_supply(env, &proposal.start_ledger, &strategy);
-            let total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
-            let participation_bps = if supply > 0 {
-                let bps = total_votes.checked_mul(10_000).unwrap_or(0) / supply;
-                Some(bps.clamp(0, i128::from(u32::MAX)) as u32)
-            } else {
-                None
-            };
-            analytics::record_proposal_resolved(env, quorum_met, false, participation_bps);
+            analytics::record_proposal_resolved(env, quorum_met, false);
         }
     }
 
@@ -980,7 +959,7 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
-        analytics::record_vote_cast(&env, &voter, &support, weight);
+        analytics::record_vote_cast(&env, &voter, weight);
 
         // Emit VoteCast event including the weighted vote power.
         events::emit_vote_cast(&env, &voter, proposal_id, &support, weight);
@@ -1065,7 +1044,7 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
-        analytics::record_vote_cast(&env, &voter, &support, weight);
+        analytics::record_vote_cast(&env, &voter, weight);
 
         // Emit VoteCastWithReason event
         events::emit_vote_cast_with_reason(&env, &voter, proposal_id, &support, weight, reason);
@@ -1116,20 +1095,7 @@ impl GovernorContract {
         // (Issue #765). queue() can only run once per proposal — a second
         // call would find state() != Succeeded and panic above — so this
         // fires exactly once.
-        let strategy: VotingStrategy = env
-            .storage()
-            .instance()
-            .get(&DataKey::VotingStrategy)
-            .unwrap_or(VotingStrategy::Single);
-        let supply = Self::compute_quorum_supply(&env, &proposal.start_ledger, &strategy);
-        let total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
-        let participation_bps = if supply > 0 {
-            let bps = total_votes.checked_mul(10_000).unwrap_or(0) / supply;
-            Some(bps.clamp(0, i128::from(u32::MAX)) as u32)
-        } else {
-            None
-        };
-        analytics::record_proposal_resolved(&env, true, true, participation_bps);
+        analytics::record_proposal_resolved(&env, true, true);
 
         let timelock_addr: Address = env
             .storage()
@@ -1315,8 +1281,6 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal);
-
-        analytics::record_proposal_executed(&env);
 
         events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
@@ -1541,7 +1505,7 @@ impl GovernorContract {
                     .get(&DataKey::AnalyticsExpiredRecorded(proposal_id))
                     .unwrap_or(false);
                 if !already_recorded {
-                    analytics::record_proposal_resolved(&env, true, false, None);
+                    analytics::record_proposal_resolved(&env, true, false);
                     env.storage()
                         .persistent()
                         .set(&DataKey::AnalyticsExpiredRecorded(proposal_id), &true);
@@ -2321,26 +2285,11 @@ impl GovernorContract {
     // Governance Analytics Module (Issue #765)
     // ============================================================================
 
-    /// Permissionless keeper function — any authenticated caller may trigger
-    /// a snapshot capture. `active_proposals` is computed by scanning the
-    /// full proposal list, so cost grows with total proposal count (bounded
-    /// in practice by proposal volume, mirroring `refresh_proposer_leaderboard`'s
-    /// tradeoff for the proposer list).
+    /// Permissionless keeper function — any caller may trigger a snapshot.
+    /// Emits `AnalyticsSnapshotTaken` but isn't itself persisted on-chain;
+    /// the indexer materializes historical snapshots from that event.
     pub fn take_analytics_snapshot(env: Env, caller: Address) -> analytics::GovernanceSnapshot {
         caller.require_auth();
-
-        let proposal_list: Vec<u64> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::ProposalList)
-            .unwrap_or(Vec::new(&env));
-
-        let mut active_proposals: u64 = 0;
-        for id in proposal_list.iter() {
-            if Self::state(env.clone(), id) == ProposalState::Active {
-                active_proposals += 1;
-            }
-        }
 
         let strategy: VotingStrategy = env
             .storage()
@@ -2350,24 +2299,7 @@ impl GovernorContract {
         let current_ledger = env.ledger().sequence();
         let total_eligible_supply = Self::compute_quorum_supply(&env, &current_ledger, &strategy);
 
-        analytics::take_snapshot(
-            &env,
-            proposal_list.len() as u64,
-            active_proposals,
-            total_eligible_supply,
-        )
-    }
-
-    pub fn get_snapshot(env: Env, ledger: u32) -> Option<analytics::GovernanceSnapshot> {
-        analytics::get_snapshot(&env, ledger)
-    }
-
-    pub fn get_latest_snapshot(env: Env) -> Option<analytics::GovernanceSnapshot> {
-        analytics::get_latest_snapshot(&env)
-    }
-
-    pub fn get_snapshot_list(env: Env) -> Vec<u32> {
-        analytics::get_snapshot_list(&env)
+        analytics::take_snapshot(&env, total_eligible_supply)
     }
 
     pub fn get_all_time_stats(env: Env) -> analytics::AllTimeStats {
@@ -2385,10 +2317,6 @@ impl GovernorContract {
         let total_eligible_supply =
             Self::compute_quorum_supply(&env, &proposal.start_ledger, &strategy);
         analytics::compute_proposal_participation(&proposal, total_eligible_supply, quorum_required)
-    }
-
-    pub fn get_voter_history(env: Env, voter: Address) -> analytics::VoterHistory {
-        analytics::get_voter_history(&env, &voter)
     }
 
     // ============================================================================

@@ -619,25 +619,17 @@ export interface SimulateResult {
 }
 
 /**
- * A captured point-in-time governance analytics snapshot (Issue #765).
- * `topDelegateShareBps`/`delegationRateBps` are always 0 when read directly
- * from the contract — the governor has no cross-contract visibility into
- * the token-votes contract's full delegator set. The indexer populates
- * those two fields from delegation events when serving `/analytics/snapshots`.
+ * A captured point-in-time governance participation reading (Issue #765).
+ * Deliberately minimal — `participationBps` is the one metric that's
+ * inherently point-in-time and can't be reconstructed later from
+ * {@link AllTimeStats} alone. Every other all-time counter was cut from
+ * the on-chain struct to stay under Soroban's WASM size cap; use
+ * {@link AllTimeStats} for current totals instead. See
+ * `contracts/governor/src/analytics.rs` for the full rationale.
  */
 export interface GovernanceSnapshot {
   ledger: number;
-  timestampApprox: bigint;
-  totalProposals: bigint;
-  activeProposals: bigint;
-  totalVotesCast: bigint;
-  uniqueVoters: bigint;
   participationBps: number;
-  quorumHitRateBps: number;
-  topDelegateShareBps: number;
-  delegationRateBps: number;
-  avgVoteWeight: bigint;
-  proposalPassRateBps: number;
 }
 
 export interface AllTimeStats {
@@ -647,7 +639,6 @@ export interface AllTimeStats {
   quorumHitCount: bigint;
   quorumMissCount: bigint;
   passRateBps: number;
-  avgParticipationBps: number;
 }
 
 export interface ProposalParticipation {
@@ -657,10 +648,6 @@ export interface ProposalParticipation {
   participationBps: number;
   quorumRequired: bigint;
   quorumReached: boolean;
-  uniqueVoters: number;
-  forBps: number;
-  againstBps: number;
-  abstainBps: number;
 }
 
 export interface VoterHistory {
