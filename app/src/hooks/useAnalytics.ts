@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { AllTimeStats, AnalyticsClient, GovernanceSnapshot, Network } from "@nebgov/sdk";
+import { AllTimeStats, AnalyticsClient, Network } from "@nebgov/sdk";
 
 export interface TopVoter {
   rank: number;
@@ -12,21 +12,18 @@ export interface TopVoter {
 
 interface UseAnalyticsResult {
   allTimeStats: AllTimeStats | null;
-  latestSnapshot: GovernanceSnapshot | null;
   topVoters: TopVoter[];
   loading: boolean;
   error: string | null;
 }
 
 /**
- * Governance analytics module (issue #765): all-time stats and the latest
- * snapshot are read directly on-chain via {@link AnalyticsClient} (the
- * authoritative source); the top-voters ranking comes from the indexer,
- * since ranking across every voter isn't something the contract tracks.
+ * Governance analytics (issue #765): entirely indexer-backed — there's no
+ * on-chain analytics module (no room in the governor contract's WASM
+ * budget alongside proposer reputation).
  */
 export function useAnalytics(): UseAnalyticsResult {
   const [allTimeStats, setAllTimeStats] = useState<AllTimeStats | null>(null);
-  const [latestSnapshot, setLatestSnapshot] = useState<GovernanceSnapshot | null>(null);
   const [topVoters, setTopVoters] = useState<TopVoter[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,8 +42,10 @@ export function useAnalytics(): UseAnalyticsResult {
         const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
         const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
-        if (!governorAddress || !timelockAddress || !votesAddress) {
-          throw new Error("Missing required environment variables for AnalyticsClient");
+        if (!governorAddress || !timelockAddress || !votesAddress || !indexerUrl) {
+          throw new Error(
+            "Missing required environment variables for AnalyticsClient (including NEXT_PUBLIC_INDEXER_URL)",
+          );
         }
 
         const client = new AnalyticsClient({
@@ -54,23 +53,20 @@ export function useAnalytics(): UseAnalyticsResult {
           timelockAddress,
           votesAddress,
           network,
+          indexerUrl,
           ...(rpcUrl && { rpcUrl }),
         });
 
-        const [stats, snapshot, topVotersResp] = await Promise.all([
+        const [stats, topVotersResp] = await Promise.all([
           client.getAllTimeStats(),
-          client.getLatestSnapshot(),
-          indexerUrl
-            ? fetch(`${indexerUrl}/analytics/top-voters?limit=10`, { cache: "no-store" })
-            : Promise.resolve(null),
+          fetch(`${indexerUrl}/analytics/top-voters?limit=10`, { cache: "no-store" }),
         ]);
 
         if (cancelled) return;
 
         setAllTimeStats(stats);
-        setLatestSnapshot(snapshot);
 
-        if (topVotersResp && topVotersResp.ok) {
+        if (topVotersResp.ok) {
           const json = await topVotersResp.json();
           const voters = (json.top_voters ?? []).map((v: any) => ({
             rank: Number(v.rank),
@@ -95,5 +91,5 @@ export function useAnalytics(): UseAnalyticsResult {
     };
   }, []);
 
-  return { allTimeStats, latestSnapshot, topVoters, loading, error };
+  return { allTimeStats, topVoters, loading, error };
 }

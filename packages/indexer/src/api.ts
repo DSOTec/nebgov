@@ -116,6 +116,7 @@ const TTL = {
   stats: 60_000, // 60 seconds
   delegationRegistry: 30_000, // 30 seconds
   analytics: 30_000, // 30 seconds
+  reputation: 30_000, // 30 seconds
 };
 
 const HEALTH_LAG_THRESHOLD = Number(process.env.HEALTH_LAG_THRESHOLD ?? 100);
@@ -811,16 +812,15 @@ export function createApp(server: SorobanRpc.Server): express.Application {
 
   // --- Governance analytics endpoints (issue #765) ---
   //
-  // `/analytics/snapshots*` are backed by `governance_snapshots`, populated
-  // from the governor's permissionless `AnalyticsSnapshotTaken` event (see
-  // events.ts) — a pure participation-over-time series (the on-chain
-  // `GovernanceSnapshot` struct was trimmed to just `ledger`+
-  // `participation_bps` to stay under Soroban's WASM size cap; see
-  // contracts/governor/src/analytics.rs). `/analytics/all-time-stats`,
+  // Entirely indexer-side — there's no on-chain analytics module (no room
+  // in the governor's WASM budget alongside proposer reputation). `/analytics/
+  // snapshots*` are backed by `governance_snapshots`, a votes-cast-over-time
+  // series computed periodically from the indexer's own `votes` table (see
+  // `maybeTakeGovernanceSnapshot` in events.ts). `/analytics/all-time-stats`,
   // `/analytics/proposals/:id/participation`, `/analytics/voters/:address/history`,
-  // and `/analytics/top-voters` are instead derived live from the existing
+  // and `/analytics/top-voters` are all derived live from the existing
   // `proposals`/`votes` tables, since those are already event-sourced and
-  // give an always-current (not snapshot-lagged) answer.
+  // give an always-current answer.
 
   // GET /analytics/snapshots?limit=30&offset=0
   // GET /analytics/snapshots?ledger=12345 — single snapshot by ledger.
@@ -878,12 +878,12 @@ export function createApp(server: SorobanRpc.Server): express.Application {
 
   // GET /analytics/all-time-stats — live from proposals/votes.
   //
-  // `quorum_hit_count`/`quorum_miss_count`/`pass_rate_bps` are always 0
-  // here: determining them requires the eligible supply (and, for dynamic
+  // `quorum_hit_count`/`quorum_miss_count`/`pass_rate_bps` are always 0:
+  // determining them requires the eligible supply (and, for dynamic
   // quorum, a live oracle price) at each proposal's start ledger, which
-  // the indexer doesn't track. Use `AnalyticsClient.getAllTimeStats()`
-  // (a direct contract read) for those — the governor already computes
-  // them on-chain in `contracts/governor/src/analytics.rs`.
+  // the indexer doesn't track and no on-chain function exposes anymore
+  // (cut for WASM-size budget — see git history for
+  // contracts/governor/src/analytics.rs).
   app.get(
     "/analytics/all-time-stats",
     async (_req: Request, res: Response): Promise<void> => {
@@ -1036,6 +1036,97 @@ export function createApp(server: SorobanRpc.Server): express.Application {
               voter: r.voter,
               proposals_voted: r.proposals_voted,
               total_weight_cast: String(r.total_weight_cast),
+            })),
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // --- Proposer reputation endpoints (issue #771) ---
+  //
+  // Backed by `proposer_reputation` / `reputation_score_history`, populated
+  // from the governor's ReputationUpdated and EffectiveThresholdChanged
+  // events. Scoring parameters are fixed contract-side constants (not
+  // governance-tunable, to stay under Soroban's WASM size budget), so
+  // there's no config endpoint to mirror. The authoritative source for an
+  // individual address is always the on-chain contract (see
+  // ReputationClient in the SDK) — these endpoints exist for fast,
+  // aggregate reads such as the leaderboard and score history timeline.
+
+  // GET /reputation/:address
+  app.get(
+    "/reputation/:address",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const key = `reputation:${address}`;
+      try {
+        const data = await cached(key, TTL.reputation, async () => {
+          const result = await pool.query(
+            `SELECT proposer_address, reputation_score, last_updated_ledger
+             FROM proposer_reputation WHERE proposer_address = $1`,
+            [address],
+          );
+          const row = result.rows[0];
+          return {
+            address,
+            reputation_score: row?.reputation_score ?? 0,
+            last_updated_ledger: row?.last_updated_ledger ?? null,
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /reputation/:address/history
+  app.get(
+    "/reputation/:address/history",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT ledger, score, change, reason
+           FROM reputation_score_history
+           WHERE proposer_address = $1
+           ORDER BY ledger ASC`,
+          [address],
+        );
+        res.json({ history: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /reputation/leaderboard?limit=50
+  app.get(
+    "/reputation/leaderboard",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+      const key = `reputation:leaderboard:${limit}`;
+      try {
+        const data = await cached(key, TTL.reputation, async () => {
+          const result = await pool.query(
+            `SELECT proposer_address, reputation_score, last_updated_ledger
+             FROM proposer_reputation
+             ORDER BY reputation_score DESC
+             LIMIT $1`,
+            [limit],
+          );
+          return {
+            leaderboard: result.rows.map((r, i) => ({
+              rank: i + 1,
+              address: r.proposer_address,
+              reputation_score: r.reputation_score,
+              last_updated_ledger: r.last_updated_ledger,
             })),
           };
         });

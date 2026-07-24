@@ -22,7 +22,6 @@ import { useEffect, useMemo, useState } from "react";
 import { Network, VotesClient } from "@nebgov/sdk";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { GovernanceHealthScore } from "../../components/GovernanceHealthScore";
-import { ProposalOutcomeBreakdown } from "../../components/ProposalOutcomeBreakdown";
 import { TopVotersTable } from "../../components/TopVotersTable";
 import { VoterHistoryCard } from "../../components/VoterHistoryCard";
 
@@ -33,12 +32,7 @@ type TimeRange = "7d" | "30d" | "all";
 export default function AnalyticsPage() {
   const { theme } = useTheme();
   const isDark = theme === "dark";
-  const {
-    allTimeStats,
-    latestSnapshot,
-    topVoters,
-    loading: analyticsLoading,
-  } = useAnalytics();
+  const { allTimeStats, topVoters, loading: analyticsLoading } = useAnalytics();
   const [timeRange, setTimeRange] = useState<TimeRange>("30d");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -315,18 +309,7 @@ export default function AnalyticsPage() {
           On-Chain Governance Health
         </h2>
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
-          <GovernanceHealthScore
-            stats={allTimeStats}
-            snapshot={latestSnapshot}
-            loading={analyticsLoading}
-          />
-          <div className="lg:col-span-2">
-            <ProposalOutcomeBreakdown
-              stats={allTimeStats}
-              loading={analyticsLoading}
-              isDark={isDark}
-            />
-          </div>
+          <GovernanceHealthScore stats={allTimeStats} loading={analyticsLoading} />
         </div>
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           <TopVotersTable voters={topVoters} loading={analyticsLoading} />

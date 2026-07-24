@@ -1,17 +1,17 @@
 -- Up Migration
 
--- Governance analytics snapshots (issue #765). Populated exclusively from
--- the governor's permissionless `AnalyticsSnapshotTaken` event. Deliberately
--- a pure participation-over-time series (ledger + participation_bps) — the
--- on-chain `GovernanceSnapshot` struct was trimmed to just these fields to
--- stay under Soroban's WASM size cap (see
--- contracts/governor/src/analytics.rs). Current composite totals (proposals,
--- votes cast, unique voters, pass/quorum rates) are served live from
+-- Governance analytics snapshots (issue #765). A votes-cast-over-time
+-- series, computed periodically by the indexer's poll loop entirely from
+-- its own already-indexed `votes` table (see `maybeTakeGovernanceSnapshot`
+-- in `packages/indexer/src/events.ts`) — there's no on-chain analytics
+-- module to source this from; it doesn't fit alongside the proposer
+-- reputation module's own WASM-size budget. Current composite totals
+-- (proposals, votes cast, unique voters) are served live from
 -- `/analytics/all-time-stats` instead, not materialized here.
 CREATE TABLE IF NOT EXISTS governance_snapshots (
     id SERIAL PRIMARY KEY,
     ledger INTEGER NOT NULL UNIQUE,
-    participation_bps INTEGER NOT NULL,
+    total_votes_cast NUMERIC NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

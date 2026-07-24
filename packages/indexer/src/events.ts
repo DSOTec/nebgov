@@ -46,8 +46,9 @@ const TOPIC_MAP: Record<string, string> = {
   DelegationRegistered: "DelegationRegistered",
   DelegationRevoked: "DelegationRevoked",
   DelegationDepthLimitUpdated: "DelegationDepthLimitUpdated",
-  // Governance analytics events (#765)
-  AnalyticsSnapshotTaken: "AnalyticsSnapshotTaken",
+  // Proposer reputation events (#771)
+  ReputationUpdated: "ReputationUpdated",
+  EffectiveThresholdChanged: "EffectiveThresholdChanged",
 };
 
 export interface IndexerConfig {
@@ -246,8 +247,11 @@ export async function processEvents(
             case "ProposalCancelled":
               await handleProposalCancelled(event, topics);
               break;
-            case "AnalyticsSnapshotTaken":
-              await handleAnalyticsSnapshotTaken(event);
+            case "ReputationUpdated":
+              await handleReputationUpdated(event, topics);
+              break;
+            case "EffectiveThresholdChanged":
+              await handleEffectiveThresholdChanged(event, topics);
               break;
             default:
               break;
@@ -445,6 +449,64 @@ async function handleDelegationDepthLimitUpdated(
     data: { old_limit: oldLimit, new_limit: newLimit, ledger: event.ledger },
   });
 }
+
+// --- Proposer reputation events (#771) ---
+//
+// Backed by the `proposer_reputation` / `reputation_score_history` tables.
+// `proposer_reputation` is a running snapshot upserted on every
+// ReputationUpdated event, tracking just the score/ledger fields the event
+// itself carries. Per-outcome breakdown counts (succeeded/executed/
+// defeated/...) aren't tracked on-chain or here either — they're cheap to
+// derive client-side from `reputation_score_history`'s `reason` column
+// (see the profile page's outcome tally).
+
+async function handleReputationUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, number, number, string];
+  const [, oldScore, newScore, reason] = data;
+
+  await pool.query(
+    `INSERT INTO proposer_reputation (proposer_address, reputation_score, last_updated_ledger)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (proposer_address) DO UPDATE
+       SET reputation_score = $2, last_updated_ledger = $3, updated_at = NOW()`,
+    [proposer, newScore, event.ledger],
+  );
+  await pool.query(
+    `INSERT INTO reputation_score_history (proposer_address, ledger, score, change, reason)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [proposer, event.ledger, newScore, newScore - oldScore, reason],
+  );
+  invalidate(`reputation:${proposer}`);
+  invalidatePattern("reputation:leaderboard");
+  broadcast({
+    type: "reputation_updated",
+    data: { proposer, old_score: oldScore, new_score: newScore, reason, ledger: event.ledger },
+  });
+}
+
+async function handleEffectiveThresholdChanged(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, bigint, bigint];
+  const [, oldThreshold, newThreshold] = data;
+
+  broadcast({
+    type: "effective_threshold_changed",
+    data: {
+      proposer,
+      old_threshold: String(oldThreshold),
+      new_threshold: String(newThreshold),
+      ledger: event.ledger,
+    },
+  });
+}
+
 
 async function handleWrapperDeposit(
   event: SorobanRpc.Api.EventResponse,
@@ -686,38 +748,39 @@ async function handleProposalCancelled(
   });
 }
 
-// --- Governance analytics events (#765) ---
+// --- Governance analytics snapshots (issue #765) ---
 //
-// Backed by the `governance_snapshots` table, populated exclusively from the
-// governor's permissionless `AnalyticsSnapshotTaken` event. The on-chain
-// event (and this table) is a pure participation-over-time series —
-// `ledger` + `participation_bps` — trimmed to just that to stay under
-// Soroban's WASM size cap (see contracts/governor/src/analytics.rs). The
-// current composite totals (proposals, votes cast, unique voters, pass/
-// quorum rates) live on `/analytics/all-time-stats` instead, computed live
-// from the governor contract. Per-proposal participation and per-voter
-// history are similarly *not* event-sourced here — they're derived on
-// demand from the existing `proposals`/`votes` tables in the `/analytics/*`
-// route handlers, since those already carry everything needed.
-async function handleAnalyticsSnapshotTaken(
-  event: SorobanRpc.Api.EventResponse,
-): Promise<void> {
-  const data = scValToNative(event.value) as Record<string, unknown>;
+// Backed by the `governance_snapshots` table: a pure votes-cast-over-time
+// series computed entirely from the indexer's own already-indexed `votes`
+// table — no on-chain analytics module needed (there isn't WASM-size
+// budget for one alongside the proposer reputation module; see the
+// removed `contracts/governor/src/analytics.rs` in git history). Called
+// periodically from the poll loop in `index.ts`, throttled by
+// `SNAPSHOT_INTERVAL_LEDGERS` so continuous polling doesn't produce a row
+// per poll cycle.
+const SNAPSHOT_INTERVAL_LEDGERS = 100;
 
-  const ledger = Number(data.ledger);
-  const participationBps = Number(data.participation_bps ?? 0);
+export async function maybeTakeGovernanceSnapshot(currentLedger: number): Promise<void> {
+  const lastResult = await pool.query(
+    `SELECT ledger FROM governance_snapshots ORDER BY ledger DESC LIMIT 1`,
+  );
+  const lastLedger = lastResult.rows[0]?.ledger ?? 0;
+  if (currentLedger - lastLedger < SNAPSHOT_INTERVAL_LEDGERS) return;
+
+  const votesResult = await pool.query(`SELECT COALESCE(SUM(weight), 0) AS total FROM votes`);
+  const totalVotesCast = String(votesResult.rows[0]?.total ?? 0);
 
   await pool.query(
-    `INSERT INTO governance_snapshots (ledger, participation_bps)
+    `INSERT INTO governance_snapshots (ledger, total_votes_cast)
      VALUES ($1, $2)
      ON CONFLICT (ledger) DO NOTHING`,
-    [ledger, participationBps],
+    [currentLedger, totalVotesCast],
   );
 
   invalidatePattern("analytics:");
   broadcast({
     type: "analytics_snapshot_taken",
-    data: { ledger, participation_bps: participationBps },
+    data: { ledger: currentLedger, total_votes_cast: totalVotesCast },
   });
 }
 

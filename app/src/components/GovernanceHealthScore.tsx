@@ -1,36 +1,21 @@
 "use client";
 
-import { AllTimeStats, GovernanceSnapshot } from "@nebgov/sdk";
+import { AllTimeStats } from "@nebgov/sdk";
 import { Skeleton } from "./ui/Skeleton";
 
 interface GovernanceHealthScoreProps {
   stats: AllTimeStats | null;
-  snapshot: GovernanceSnapshot | null;
   loading?: boolean;
 }
 
 /**
- * Composite governance health score (0-100), issue #765: an equal-weighted
- * blend of quorum-hit rate, proposal pass rate, and the most recent
- * snapshot's participation rate. All three inputs come straight from the
- * on-chain analytics module — see contracts/governor/src/analytics.rs.
+ * Governance activity summary (issue #765). Entirely indexer-derived —
+ * there's no on-chain analytics module, so quorum-hit/pass-rate figures
+ * aren't available (they'd need the eligible supply, and for dynamic
+ * quorum a live oracle price, at each proposal's start ledger). This
+ * shows what the indexer *can* compute live from its own indexed data.
  */
-function computeHealthScore(stats: AllTimeStats, snapshot: GovernanceSnapshot | null): number {
-  const totalResolved = stats.quorumHitCount + stats.quorumMissCount;
-  const quorumScore = totalResolved > 0n ? Number(stats.quorumHitCount) / Number(totalResolved) : 0;
-  const passScore = stats.passRateBps / 10_000;
-  const participationScore = snapshot ? snapshot.participationBps / 10_000 : 0;
-  const blended = (quorumScore + passScore + participationScore) / 3;
-  return Math.round(Math.min(1, Math.max(0, blended)) * 100);
-}
-
-function scoreColor(score: number): string {
-  if (score >= 66) return "text-green-600 dark:text-green-400";
-  if (score >= 33) return "text-yellow-600 dark:text-yellow-400";
-  return "text-red-600 dark:text-red-400";
-}
-
-export function GovernanceHealthScore({ stats, snapshot, loading }: GovernanceHealthScoreProps) {
+export function GovernanceHealthScore({ stats, loading }: GovernanceHealthScoreProps) {
   if (loading || !stats) {
     return (
       <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
@@ -40,26 +25,21 @@ export function GovernanceHealthScore({ stats, snapshot, loading }: GovernanceHe
     );
   }
 
-  const score = computeHealthScore(stats, snapshot);
-
   return (
     <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-4">
-      <p className="text-sm text-gray-500 dark:text-gray-400">Governance health score</p>
-      <p className={`text-3xl font-bold mt-1 ${scoreColor(score)}`}>{score}</p>
+      <p className="text-sm text-gray-500 dark:text-gray-400">Governance activity</p>
+      <p className="text-3xl font-bold mt-1 text-gray-900 dark:text-white">
+        {String(stats.totalProposals)}
+      </p>
+      <p className="text-xs text-gray-500 dark:text-gray-400">total proposals</p>
       <div className="mt-3 space-y-1 text-xs text-gray-500 dark:text-gray-400">
         <div className="flex justify-between">
-          <span>Pass rate</span>
-          <span>{(stats.passRateBps / 100).toFixed(1)}%</span>
+          <span>Total votes cast</span>
+          <span>{String(stats.totalVotesCast)}</span>
         </div>
         <div className="flex justify-between">
-          <span>Quorum hits</span>
-          <span>
-            {String(stats.quorumHitCount)} / {String(stats.quorumHitCount + stats.quorumMissCount)}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span>Latest participation</span>
-          <span>{snapshot ? (snapshot.participationBps / 100).toFixed(1) : "0.0"}%</span>
+          <span>Unique voters</span>
+          <span>{String(stats.uniqueVoters)}</span>
         </div>
       </div>
     </div>

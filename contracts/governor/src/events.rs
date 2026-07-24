@@ -1,6 +1,5 @@
 use soroban_sdk::{Address, Bytes, BytesN, Env, String, Symbol, Vec};
 
-use crate::analytics::GovernanceSnapshot;
 use crate::{GovernorSettings, Proposal, VoteSupport};
 
 pub const PROPOSAL_CREATED_TOPIC: &str = "ProposalCreated";
@@ -15,7 +14,8 @@ pub const PROPOSAL_EXPIRED_TOPIC: &str = "ProposalExpired";
 pub const GOVERNOR_UPGRADED_TOPIC: &str = "GovernorUpgraded";
 pub const CONFIG_UPDATED_TOPIC: &str = "ConfigUpdated";
 pub const GUARDIAN_CHANGED_TOPIC: &str = "GuardianChanged";
-pub const ANALYTICS_SNAPSHOT_TAKEN_TOPIC: &str = "AnalyticsSnapshotTaken";
+pub const REPUTATION_UPDATED_TOPIC: &str = "ReputationUpdated";
+pub const EFFECTIVE_THRESHOLD_CHANGED_TOPIC: &str = "EffectiveThresholdChanged";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -282,9 +282,56 @@ pub fn emit_pauser_changed(env: &Env, old_pauser: &Address, new_pauser: &Address
     );
 }
 
-pub fn emit_analytics_snapshot_taken(env: &Env, snapshot: &GovernanceSnapshot) {
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct ReputationUpdatedEvent {
+    pub proposer: Address,
+    pub old_score: i32,
+    pub new_score: i32,
+    pub reason: Symbol,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct EffectiveThresholdChangedEvent {
+    pub proposer: Address,
+    pub old_threshold: i128,
+    pub new_threshold: i128,
+}
+
+pub fn emit_reputation_updated(
+    env: &Env,
+    proposer: &Address,
+    old_score: i32,
+    new_score: i32,
+    reason: &Symbol,
+) {
     env.events().publish(
-        (Symbol::new(env, ANALYTICS_SNAPSHOT_TAKEN_TOPIC),),
-        snapshot.clone(),
+        (Symbol::new(env, REPUTATION_UPDATED_TOPIC), proposer.clone()),
+        ReputationUpdatedEvent {
+            proposer: proposer.clone(),
+            old_score,
+            new_score,
+            reason: reason.clone(),
+        },
+    );
+}
+
+pub fn emit_effective_threshold_changed(
+    env: &Env,
+    proposer: &Address,
+    old_threshold: i128,
+    new_threshold: i128,
+) {
+    env.events().publish(
+        (
+            Symbol::new(env, EFFECTIVE_THRESHOLD_CHANGED_TOPIC),
+            proposer.clone(),
+        ),
+        EffectiveThresholdChangedEvent {
+            proposer: proposer.clone(),
+            old_threshold,
+            new_threshold,
+        },
     );
 }

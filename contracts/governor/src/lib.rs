@@ -4,9 +4,9 @@
 // state machine (issue #439).
 #![deny(unreachable_patterns)]
 
-mod analytics;
 pub mod error;
 mod events;
+mod reputation;
 
 use crate::error::GovernorError;
 use soroban_sdk::xdr::FromXdr;
@@ -276,16 +276,12 @@ pub enum DataKey {
     /// Address of the trusted co-sponsorship registry contract authorized
     /// to call `propose_via_registry`, if one has been configured.
     CoSponsorshipRegistry,
-    /// Running all-time governance totals (votes cast, proposals, quorum
-    /// hit/miss, participation) used to derive `AllTimeStats`.
-    AnalyticsTotals,
-    /// Whether `voter` has ever cast a vote, used to count unique voters
-    /// exactly once each.
-    AnalyticsUniqueVoter(Address),
+    /// Per-address proposer reputation record (Issue #771).
+    ProposerReputation(Address),
     /// Idempotency guard so a proposal that concludes via grace-period
     /// expiry (succeeded but not executed in time) only records its
-    /// analytics resolution once, no matter how many times `state()` is read.
-    AnalyticsExpiredRecorded(u64),
+    /// reputation penalty once, no matter how many times `state()` is read.
+    ReputationExpiredRecorded(u64),
 }
 
 #[contract]
@@ -388,11 +384,16 @@ impl GovernorContract {
                 .persistent()
                 .set(&DataKey::ProposalExpiredEmitted(proposal.id), &true);
 
-            // Analytics: this branch is reached exactly when a proposal
+            // Reputation: this branch is reached exactly when a proposal
             // concludes without succeeding (fails quorum and/or the vote),
             // i.e. the Defeated classification in state() below. Guarded by
-            // the flag above so it fires at most once (Issue #765).
-            analytics::record_proposal_resolved(env, quorum_met, false);
+            // the flag above so it fires at most once (Issue #771).
+            reputation::record_proposal_terminal(
+                env,
+                &proposal.proposer,
+                reputation::ReputationOutcome::Defeated,
+                None,
+            );
         }
     }
 
@@ -630,14 +631,17 @@ impl GovernorContract {
         // Get the voting power of the proposer (strategy-aware)
         let proposer_votes = Self::compute_proposer_votes(&env, &proposer);
 
-        // Enforce proposal threshold
+        // Enforce proposal threshold, adjusted by the proposer's reputation
+        // score (Issue #771). Degrades to the flat threshold when reputation
+        // is disabled or the proposer has no history yet.
         let threshold: i128 = env
             .storage()
             .instance()
             .get(&DataKey::ProposalThreshold)
             .unwrap_or(0);
+        let effective_threshold = reputation::get_effective_threshold(&env, &proposer, threshold);
 
-        if proposer_votes < threshold {
+        if proposer_votes < effective_threshold {
             env.panic_with_error(GovernorError::ProposalThresholdNotMet);
         }
 
@@ -842,7 +846,7 @@ impl GovernorContract {
             period_duration.saturating_add(1000),
         );
 
-        analytics::record_proposal_created(env);
+        reputation::record_proposal_created(env, proposer);
 
         events::emit_proposal_created(env, &proposal);
 
@@ -959,8 +963,6 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
-        analytics::record_vote_cast(&env, &voter, weight);
-
         // Emit VoteCast event including the weighted vote power.
         events::emit_vote_cast(&env, &voter, proposal_id, &support, weight);
     }
@@ -1044,8 +1046,6 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
 
-        analytics::record_vote_cast(&env, &voter, weight);
-
         // Emit VoteCastWithReason event
         events::emit_vote_cast_with_reason(&env, &voter, proposal_id, &support, weight, reason);
     }
@@ -1090,12 +1090,29 @@ impl GovernorContract {
             env.panic_with_error(GovernorError::ProposalNotSucceeded);
         }
 
-        // Analytics: record a resolved (quorum-met, passed) outcome now that
-        // quorum + vote direction have been independently re-verified above
-        // (Issue #765). queue() can only run once per proposal — a second
-        // call would find state() != Succeeded and panic above — so this
-        // fires exactly once.
-        analytics::record_proposal_resolved(&env, true, true);
+        // Reputation: record a Succeeded outcome now that quorum + vote
+        // direction have been independently re-verified above (Issue #771).
+        // queue() can only run once per proposal (a second call would find
+        // state() == Queued and panic above), so this fires exactly once.
+        let strategy: VotingStrategy = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotingStrategy)
+            .unwrap_or(VotingStrategy::Single);
+        let supply = Self::compute_quorum_supply(&env, &proposal.start_ledger, &strategy);
+        let total_votes = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
+        let participation_bps = if supply > 0 {
+            let bps = total_votes.checked_mul(10_000).unwrap_or(0) / supply;
+            Some(bps.max(0).min(i128::from(u32::MAX)) as u32)
+        } else {
+            None
+        };
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal.proposer,
+            reputation::ReputationOutcome::Succeeded,
+            participation_bps,
+        );
 
         let timelock_addr: Address = env
             .storage()
@@ -1282,6 +1299,16 @@ impl GovernorContract {
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal);
 
+        // Reputation: record an Executed outcome (Issue #771). Naturally
+        // idempotent — a second execute() call would panic above on the
+        // `proposal.executed` check.
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal.proposer,
+            reputation::ReputationOutcome::Executed,
+            None,
+        );
+
         events::emit_proposal_executed(&env, proposal_id, &gov_addr);
     }
 
@@ -1336,6 +1363,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal);
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal);
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal.proposer,
+            reputation::ReputationOutcome::Cancelled,
+            None,
+        );
         events::emit_proposal_cancelled(&env, proposal_id, &caller);
     }
 
@@ -1360,6 +1393,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal_mut);
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal_mut);
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal_mut.proposer,
+            reputation::ReputationOutcome::Cancelled,
+            None,
+        );
 
         // If the proposal was queued, cancel its timelock operations
         if proposal_mut.queued {
@@ -1436,6 +1475,12 @@ impl GovernorContract {
             .set(&DataKey::Proposal(proposal_id), &proposal_mut);
         // Extend TTL to cover full proposal lifecycle
         Self::extend_proposal_ttl(&env, proposal_id, &proposal_mut);
+        reputation::record_proposal_terminal(
+            &env,
+            &proposal_mut.proposer,
+            reputation::ReputationOutcome::Cancelled,
+            None,
+        );
 
         // Cancel all timelock operations associated with this proposal
         let gov_addr = env.current_contract_address();
@@ -1495,20 +1540,25 @@ impl GovernorContract {
                 .unwrap_or(120_960); // Default ~7 days
             let grace_end = proposal.end_ledger + grace_period;
             if current > grace_end {
-                // Analytics: a proposal that succeeded but was never
+                // Reputation: a proposal that succeeded but was never
                 // executed within the grace period is a distinct terminal
-                // outcome from Defeated. Guarded separately so repeated
-                // state() reads don't double-record it (Issue #765).
+                // outcome from Defeated. Guard separately so repeated
+                // state() reads don't double-record it (Issue #771).
                 let already_recorded: bool = env
                     .storage()
                     .persistent()
-                    .get(&DataKey::AnalyticsExpiredRecorded(proposal_id))
+                    .get(&DataKey::ReputationExpiredRecorded(proposal_id))
                     .unwrap_or(false);
                 if !already_recorded {
-                    analytics::record_proposal_resolved(&env, true, false);
+                    reputation::record_proposal_terminal(
+                        &env,
+                        &proposal.proposer,
+                        reputation::ReputationOutcome::Expired,
+                        None,
+                    );
                     env.storage()
                         .persistent()
-                        .set(&DataKey::AnalyticsExpiredRecorded(proposal_id), &true);
+                        .set(&DataKey::ReputationExpiredRecorded(proposal_id), &true);
                 }
                 ProposalState::Expired
             } else {
@@ -2282,41 +2332,29 @@ impl GovernorContract {
     }
 
     // ============================================================================
-    // Governance Analytics Module (Issue #765)
+    // Proposer Reputation System (Issue #771)
     // ============================================================================
 
-    /// Permissionless keeper function — any caller may trigger a snapshot.
-    /// Emits `AnalyticsSnapshotTaken` but isn't itself persisted on-chain;
-    /// the indexer materializes historical snapshots from that event.
-    pub fn take_analytics_snapshot(env: Env, caller: Address) -> analytics::GovernanceSnapshot {
-        caller.require_auth();
-
-        let strategy: VotingStrategy = env
-            .storage()
-            .instance()
-            .get(&DataKey::VotingStrategy)
-            .unwrap_or(VotingStrategy::Single);
-        let current_ledger = env.ledger().sequence();
-        let total_eligible_supply = Self::compute_quorum_supply(&env, &current_ledger, &strategy);
-
-        analytics::take_snapshot(&env, total_eligible_supply)
+    pub fn get_proposer_reputation(env: Env, proposer: Address) -> reputation::ProposerReputation {
+        reputation::get_reputation(&env, &proposer)
     }
 
-    pub fn get_all_time_stats(env: Env) -> analytics::AllTimeStats {
-        analytics::get_all_time_stats(&env)
-    }
-
-    pub fn get_proposal_participation(env: Env, proposal_id: u64) -> analytics::ProposalParticipation {
-        let proposal = Self::must_get_proposal(&env, proposal_id);
-        let quorum_required = Self::quorum(env.clone(), proposal_id);
-        let strategy: VotingStrategy = env
+    /// Governance-only: only callable via an executed proposal (the governor
+    /// contract calling itself), matching the pattern used by `update_config`
+    /// and friends elsewhere in this file.
+    pub fn get_effective_threshold(env: Env, proposer: Address) -> i128 {
+        let flat: i128 = env
             .storage()
             .instance()
-            .get(&DataKey::VotingStrategy)
-            .unwrap_or(VotingStrategy::Single);
-        let total_eligible_supply =
-            Self::compute_quorum_supply(&env, &proposal.start_ledger, &strategy);
-        analytics::compute_proposal_participation(&proposal, total_eligible_supply, quorum_required)
+            .get(&DataKey::ProposalThreshold)
+            .unwrap_or(0);
+        reputation::get_effective_threshold(&env, &proposer, flat)
+    }
+
+    /// Permissionless — decays `proposer`'s score a step back toward zero
+    /// based on ledgers elapsed since it was last touched.
+    pub fn apply_reputation_decay(env: Env, proposer: Address) {
+        reputation::apply_decay(&env, &proposer);
     }
 
     // ============================================================================

@@ -619,17 +619,14 @@ export interface SimulateResult {
 }
 
 /**
- * A captured point-in-time governance participation reading (Issue #765).
- * Deliberately minimal — `participationBps` is the one metric that's
- * inherently point-in-time and can't be reconstructed later from
- * {@link AllTimeStats} alone. Every other all-time counter was cut from
- * the on-chain struct to stay under Soroban's WASM size cap; use
- * {@link AllTimeStats} for current totals instead. See
- * `contracts/governor/src/analytics.rs` for the full rationale.
+ * A captured point-in-time governance activity reading (Issue #765),
+ * computed periodically by the indexer from its own indexed `votes` table
+ * — there's no on-chain analytics module (no room in the governor
+ * contract's WASM budget alongside proposer reputation).
  */
 export interface GovernanceSnapshot {
   ledger: number;
-  participationBps: number;
+  totalVotesCast: bigint;
 }
 
 export interface AllTimeStats {
@@ -639,15 +636,6 @@ export interface AllTimeStats {
   quorumHitCount: bigint;
   quorumMissCount: bigint;
   passRateBps: number;
-}
-
-export interface ProposalParticipation {
-  proposalId: bigint;
-  totalEligibleSupply: bigint;
-  totalVotesCast: bigint;
-  participationBps: number;
-  quorumRequired: bigint;
-  quorumReached: boolean;
 }
 
 export interface VoterHistory {
@@ -660,4 +648,47 @@ export interface VoterHistory {
   againstCount: number;
   abstainCount: number;
   lastVotedLedger: number;
+}
+
+// ─── Proposer Reputation Types (Issue #771) ──────────────────────────────────
+
+/** On-chain proposer reputation record, as returned by {@link ReputationClient.getProposerReputation}. */
+export interface ProposerReputation {
+  proposer: string;
+  totalProposals: number;
+  /** Sum of participation (in basis points) across every proposal this address created. */
+  totalParticipationBpsSum: bigint;
+  lastProposalLedger: number;
+  /** Rolling score, clamped to a fixed [-1000, 1000] range on-chain. */
+  reputationScore: number;
+  /** 10000 = no change, lower = discount, higher = penalty on the flat proposal threshold. */
+  thresholdMultiplierBps: number;
+  firstProposalLedger: number;
+  consecutiveSuccessful: number;
+  consecutiveFailed: number;
+}
+
+/**
+ * A single entry in a proposer's reputation score history, as returned by
+ * the indexer's `GET /reputation/:address/history` (built from
+ * `ReputationUpdated` events — not an on-chain read, to keep the governor
+ * contract's WASM size under budget).
+ */
+export interface ReputationScoreEntry {
+  ledger: number;
+  score: number;
+  change: number;
+  reason: string;
+}
+
+/**
+ * One row of the top-proposer leaderboard, as returned by the indexer's
+ * `GET /reputation/leaderboard` (computed off-chain from indexed
+ * `ReputationUpdated` events, not an on-chain read).
+ */
+export interface ProposerLeaderboardEntry {
+  rank: number;
+  proposer: string;
+  reputationScore: number;
+  lastUpdatedLedger: number | null;
 }
