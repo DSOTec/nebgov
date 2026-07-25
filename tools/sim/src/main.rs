@@ -93,6 +93,9 @@ fn run_one(scenario_path: &Path, output: &Path, verbose: bool) {
     if report.failed_steps > 0 {
         std::process::exit(1);
     }
+    if report.compute_budget_warnings.iter().any(|w| w.utilization_pct >= 100.0) {
+        std::process::exit(1);
+    }
 }
 
 fn run_all(scenarios_dir: &Path, output_dir: &Path) {
@@ -127,7 +130,7 @@ fn run_all(scenarios_dir: &Path, output_dir: &Path) {
         let report = runner.get_report().clone();
 
         print_summary(&report, false);
-        if report.failed_steps > 0 {
+        if report.failed_steps > 0 || report.compute_budget_warnings.iter().any(|w| w.utilization_pct >= 100.0) {
             any_failed = true;
         }
 
