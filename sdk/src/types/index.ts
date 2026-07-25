@@ -137,6 +137,26 @@ export interface ProposalVotes {
   votesAbstain: bigint;
 }
 
+/** Draft proposal stored off-chain or in a cosponsorship contract. */
+export interface ProposalDraft {
+  /** Unique identifier for this draft. */
+  id: bigint;
+  /** Original proposer address. */
+  proposer: string;
+  /** Human-readable description hash. */
+  descriptionHash: string;
+  /** List of target contract addresses. */
+  targets: string[];
+  /** List of function names to call on targets. */
+  fnNames: string[];
+  /** List of encoded call arguments. */
+  calldatas: Uint8Array[];
+  /** Start ledger for voting. */
+  startLedger: number;
+  /** End ledger for voting. */
+  endLedger: number;
+}
+
 export interface GovernorConfig {
   /** Contract address of the governor */
   governorAddress: string;

@@ -25,9 +25,8 @@ export { TreasuryClient } from "./treasury";
 export { LiquidityClient } from "./liquidity";
 export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
-export { CoSponsorshipClient } from "./coSponsorship";
-export { AnalyticsClient } from "./analytics";
-export { ReputationClient } from "./reputation";
+export { CoSponsorshipClient } from "./cosponsor";
+export type { CoSponsorshipConfig } from "./cosponsor";
 export {
   GovernorError,
   GovernorErrorCode,

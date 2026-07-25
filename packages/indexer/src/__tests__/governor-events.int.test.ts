@@ -45,6 +45,11 @@ describe("governor event indexing (integration)", () => {
     await initDb();
     await pool.query("DELETE FROM config_updates");
     await pool.query("DELETE FROM governor_upgrades");
+    try {
+      await pool.query("DELETE FROM proposer_reputation");
+    } catch {
+      // Table may not exist if migration hasn't run
+    }
   });
 
   afterAll(async () => {
@@ -266,5 +271,65 @@ describe("governor event indexing (integration)", () => {
     );
     expect(rows.rows.length).toBe(1);
     expect(rows.rows[0].cancelled).toBe(true);
+  });
+
+  it("includes treasuryAddress in contractIds when configured", async () => {
+    const TREASURY = "CTREASURYTESTADDRESS000000000000000000000000000000000000";
+    let capturedContractIds: string[] = [];
+
+    class ServerWithCapture {
+      async getEvents(opts: any) {
+        capturedContractIds = opts.filters[0].contractIds;
+        return { events: [] };
+      }
+    }
+
+    const server = new ServerWithCapture() as unknown as SorobanRpc.Server;
+    await processEvents(
+      server,
+      {
+        rpcUrl: "http://fake",
+        governorAddress: GOVERNOR,
+        treasuryAddress: TREASURY,
+        pollIntervalMs: 1,
+      },
+      1,
+    );
+
+    expect(capturedContractIds).toContain(GOVERNOR);
+    expect(capturedContractIds).toContain(TREASURY);
+  });
+
+  it("indexes ReputationUpdated event into proposer_reputation", async () => {
+    const proposer = "GPROPOSER111111111111111111111111111111111";
+    const reputationUpdated = makeEvent({
+      contractId: GOVERNOR,
+      ledger: 204,
+      type: "ReputationUpdated",
+      topicArgs: [proposer],
+      value: {
+        old_score: 100n,
+        new_score: 150n,
+        reason: "active_proposal_passed",
+      },
+    });
+
+    const server = new FakeServer([reputationUpdated]) as unknown as SorobanRpc.Server;
+    const latest = await processEvents(
+      server,
+      { rpcUrl: "http://fake", governorAddress: GOVERNOR, pollIntervalMs: 1 },
+      1,
+    );
+
+    expect(latest).toBe(204);
+
+    const rows = await pool.query(
+      "SELECT proposer, old_score, new_score, reason FROM proposer_reputation WHERE ledger = 204",
+    );
+    expect(rows.rows.length).toBe(1);
+    expect(rows.rows[0].proposer).toBe(proposer);
+    expect(rows.rows[0].old_score).toBe(100);
+    expect(rows.rows[0].new_score).toBe(150);
+    expect(rows.rows[0].reason).toBe("active_proposal_passed");
   });
 });
