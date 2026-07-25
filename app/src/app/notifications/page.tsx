@@ -98,7 +98,12 @@ export default function NotificationsPage() {
       <h1 className="text-3xl font-bold text-gray-900">Notifications</h1>
       <p className="text-gray-500 mt-1 mb-6">
         Browser alerts for governance lifecycle events. Everything stays in
-        your browser—no server.
+        your browser—no server. Want email, webhook, or Telegram alerts
+        instead?{" "}
+        <Link href="/notifications/rules" className="text-indigo-600 hover:text-indigo-800">
+          Set up notification rules
+        </Link>
+        .
       </p>
 
       <div className="rounded-xl border border-gray-200 bg-white p-4 mb-8">
