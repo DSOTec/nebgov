@@ -558,9 +558,10 @@ export function parseVotesError(
   cause?: unknown,
 ): VotesError {
   const contractCode = extractContractErrorCode(raw);
-  if (contractCode !== null && contractCode in VOTES_MESSAGES) {
+  if (contractCode !== null) {
     const code = contractCode as VotesErrorCode;
-    return new VotesError(code, VOTES_MESSAGES[code], cause);
+    const message = VOTES_MESSAGES[code] ?? `Votes contract error #${contractCode}`;
+    return new VotesError(code, message, cause);
   }
 
   if (hasErrorStatus(raw)) {
