@@ -87,11 +87,36 @@ export const governorExecutor = {
     if (caller !== proposer) {
       throw new MockContractError(100, "propose: proposer must authorize this call");
     }
-    if (targets.length === 0 || targets.length !== fnNames.length || targets.length !== calldatas.length) {
-      throw new MockContractError(GovernorErrorCode.InvalidVectorLengths, "propose: targets/fnNames/calldatas length mismatch");
-    }
 
     const gov = store.governor;
+
+    // Check if contract is paused (Issue #885)
+    if (gov.settings.isPaused) {
+      throw new MockContractError(GovernorErrorCode.ContractPaused, "propose: contract is paused");
+    }
+
+    // Split vector validation to match real contract behavior (Issue #883)
+    // First check: length mismatch
+    if (targets.length !== fnNames.length || targets.length !== calldatas.length) {
+      throw new MockContractError(GovernorErrorCode.InvalidVectorLengths, "propose: length mismatch");
+    }
+    // Second check: empty targets (must come AFTER length check)
+    if (targets.length === 0) {
+      throw new MockContractError(GovernorErrorCode.NoTargets, "propose: no targets");
+    }
+
+    // Validate calldata size and count (Issue #884)
+    const maxCalldataSize = gov.settings.maxCalldataSize;
+    for (let i = 0; i < calldatas.length; i++) {
+      if (calldatas[i].length > maxCalldataSize) {
+        throw new MockContractError(GovernorErrorCode.CalldataTooLarge, "propose: calldata exceeds maximum size");
+      }
+    }
+
+    const MAX_CALLDATA_COUNT = 10;
+    if (calldatas.length > MAX_CALLDATA_COUNT) {
+      throw new MockContractError(GovernorErrorCode.TooManyCalldataEntries, "propose: too many calldata entries");
+    }
     const proposerVotes = tokenVotesExecutor.get_votes(store.votes, clock, proposer, [proposer]);
     if (proposerVotes < gov.settings.proposalThreshold) {
       throw new MockContractError(GovernorErrorCode.ProposalThresholdNotMet, "propose: proposal threshold not met");
@@ -146,8 +171,15 @@ export const governorExecutor = {
     if (caller !== voter) {
       throw new MockContractError(100, "cast_vote: voter must authorize this call");
     }
-    const support = supportVariant[0];
+
     const gov = store.governor;
+
+    // Check if contract is paused (Issue #885)
+    if (gov.settings.isPaused) {
+      throw new MockContractError(GovernorErrorCode.ContractPaused, "cast_vote: contract is paused");
+    }
+
+    const support = supportVariant[0];
     const proposal = mustGetProposal(store, proposalId);
 
     if (proposal.hasVoted[voter]) {
@@ -314,6 +346,24 @@ export const governorExecutor = {
 
   proposal_count(store: MockLedgerStore): bigint {
     return store.governor.proposalCount;
+  },
+
+  pause(store: MockLedgerStore, _clock: LedgerClock, caller: string, _args: unknown[]): null {
+    const gov = store.governor;
+    if (caller !== gov.settings.pauser) {
+      throw new MockContractError(GovernorErrorCode.UnauthorizedPause, "pause: only pauser can pause");
+    }
+    gov.settings.isPaused = true;
+    return null;
+  },
+
+  unpause(store: MockLedgerStore, _clock: LedgerClock, caller: string, _args: unknown[]): null {
+    const gov = store.governor;
+    if (caller !== gov.settings.pauser) {
+      throw new MockContractError(GovernorErrorCode.UnauthorizedPause, "unpause: only pauser can unpause");
+    }
+    gov.settings.isPaused = false;
+    return null;
   },
 };
 

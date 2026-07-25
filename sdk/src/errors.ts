@@ -18,7 +18,7 @@
  * code you receive matches what is written in the Rust contract.
  */
 export enum GovernorErrorCode {
-  // On-chain contract errors (match contracts/governor/src/lib.rs)
+  // On-chain contract errors (match contracts/governor/src/error.rs exactly)
   UnauthorizedCancel = 1,
   InvalidSupport = 2,
   ProposalExpired = 3,
@@ -46,7 +46,21 @@ export enum GovernorErrorCode {
   VotesTokenNotSet = 25,
   PauserNotSet = 26,
   ArithmeticOverflow = 27,
-  ProposalNotActive = 28,
+  VotePeriodTooShort = 28,
+  ExecutionWindowZero = 29,
+  TooManyCalldataEntries = 30,
+  ProposalNotActive = 31,
+  AlreadyInitialized = 32,
+  InvalidVotingDelay = 33,
+  InvalidVotingPeriod = 34,
+  InvalidQuorumNumerator = 35,
+  InvalidProposalThreshold = 36,
+  InvalidMaxCalldataSize = 37,
+  InvalidMaxProposalsPerPeriod = 38,
+  InvalidProposalPeriodDuration = 39,
+  EmptyBatch = 40,
+  BatchProposalNotQueued = 41,
+  ProposalAlreadyCancelled = 42,
   InvalidVoteChoice = 43,
   UnauthorizedRegistry = 44,
 
@@ -101,8 +115,36 @@ const GOVERNOR_MESSAGES: Record<GovernorErrorCode, string> = {
   [GovernorErrorCode.PauserNotSet]: "Pauser address is not configured",
   [GovernorErrorCode.ArithmeticOverflow]:
     "Arithmetic overflow while computing governance state",
+  [GovernorErrorCode.VotePeriodTooShort]:
+    "Voting period is shorter than the minimum required",
+  [GovernorErrorCode.ExecutionWindowZero]:
+    "Execution window must be greater than zero",
+  [GovernorErrorCode.TooManyCalldataEntries]:
+    "Proposal exceeds the maximum number of calldata entries (10)",
   [GovernorErrorCode.ProposalNotActive]:
     "Voting has ended for this proposal",
+  [GovernorErrorCode.AlreadyInitialized]:
+    "Contract is already initialized",
+  [GovernorErrorCode.InvalidVotingDelay]:
+    "Voting delay must be greater than zero",
+  [GovernorErrorCode.InvalidVotingPeriod]:
+    "Voting period must be greater than zero",
+  [GovernorErrorCode.InvalidQuorumNumerator]:
+    "Quorum numerator must be between 0 and 100",
+  [GovernorErrorCode.InvalidProposalThreshold]:
+    "Proposal threshold must be non-negative",
+  [GovernorErrorCode.InvalidMaxCalldataSize]:
+    "Max calldata size must be greater than zero",
+  [GovernorErrorCode.InvalidMaxProposalsPerPeriod]:
+    "Max proposals per period must be greater than zero",
+  [GovernorErrorCode.InvalidProposalPeriodDuration]:
+    "Proposal period duration must be greater than zero",
+  [GovernorErrorCode.EmptyBatch]:
+    "Batch proposal cannot be empty",
+  [GovernorErrorCode.BatchProposalNotQueued]:
+    "Batch proposal is not queued",
+  [GovernorErrorCode.ProposalAlreadyCancelled]:
+    "Proposal has already been cancelled",
   [GovernorErrorCode.InvalidVoteChoice]:
     "Invalid vote choice: must be 0 (Against), 1 (For), or 2 (Abstain)",
   [GovernorErrorCode.UnauthorizedRegistry]:

@@ -38,6 +38,9 @@ export interface GovernorSettingsState {
   proposalCooldown: number;
   maxProposalsPerPeriod: number;
   proposalPeriodDuration: number;
+  maxCalldataSize: number;
+  isPaused: boolean;
+  pauser: string;
 }
 
 export interface GovernorState {
