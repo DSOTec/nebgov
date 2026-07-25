@@ -7,6 +7,11 @@
 //! rather than returning a `Result` — the runner wraps each step in
 //! `catch_unwind` to turn that into a `StepResult { success: false, .. }`
 //! instead of aborting the whole simulation.
+//!
+//! The runner supports both governor-level lifecycle steps (`Propose`,
+//! `Vote`, `Queue`, `Execute`, etc.) and direct timelock operations
+//! (`ScheduleBatch`, `ExecuteBatch`, `ValidateDag`) for testing DAG
+//! dependency features.
 
 use std::collections::HashMap;
 use std::panic::{catch_unwind, AssertUnwindSafe};
@@ -53,7 +58,6 @@ pub struct SimulationRunner {
     env: Env,
     scenario: Scenario,
     governor: GovernorContractClient<'static>,
-    #[allow(dead_code)]
     timelock: TimelockContractClient<'static>,
     token_votes: TokenVotesContractClient<'static>,
     #[allow(dead_code)]
@@ -65,6 +69,7 @@ pub struct SimulationRunner {
     treasury_addr: Address,
     actors: HashMap<String, Address>,
     report: SimulationReport,
+    batch_op_ids: Vec<Option<soroban_sdk::Bytes>>,
 }
 
 impl SimulationRunner {
@@ -173,6 +178,7 @@ impl SimulationRunner {
             treasury_addr: treasury_id,
             actors,
             report,
+            batch_op_ids: Vec::new(),
         }
     }
 
@@ -220,6 +226,7 @@ impl SimulationRunner {
     /// documenting an expected failure (via a following `ExpectError` step)
     /// should keep running.
     pub fn run(&mut self) -> SimulationReport {
+        self.batch_op_ids = vec![None; self.scenario.steps.len()];
         for i in 0..self.scenario.steps.len() {
             let step = self.scenario.steps[i].clone();
             let result = self.run_step_indexed(i, &step);
@@ -242,8 +249,13 @@ impl SimulationRunner {
         self.env.cost_estimate().budget().reset_default();
         let start = Instant::now();
 
+        // Ensure batch_op_ids is large enough for this step
+        if index >= self.batch_op_ids.len() {
+            self.batch_op_ids.resize_with(index + 1, || None);
+        }
+
         let outcome: Result<(), String> = catch_unwind(AssertUnwindSafe(|| {
-            self.dispatch(step);
+            self.dispatch(step, index);
         }))
         .map_err(panic_message);
 
@@ -273,7 +285,7 @@ impl SimulationRunner {
         }
     }
 
-    fn dispatch(&mut self, step: &SimStep) {
+    fn dispatch(&mut self, step: &SimStep, step_index: usize) {
         match step {
             SimStep::AdvanceLedger { ledgers } => {
                 let target = self.env.ledger().sequence() + ledgers;
@@ -496,6 +508,93 @@ impl SimulationRunner {
             SimStep::CancelDraft { actor, draft_id } => {
                 let caller = self.get_actor(actor).clone();
                 self.co_sponsorship.cancel_draft(&caller, draft_id);
+            }
+            SimStep::ScheduleBatch {
+                actor: _,
+                targets,
+                fn_names,
+                delay,
+            } => {
+                let gov_addr = self.governor.address.clone();
+                let targets_vec: SorobanVec<Address> = {
+                    let mut v = SorobanVec::new(&self.env);
+                    for t in targets {
+                        v.push_back(self.resolve_target(t));
+                    }
+                    v
+                };
+                let fn_names_vec: SorobanVec<Symbol> = {
+                    let mut v = SorobanVec::new(&self.env);
+                    for f in fn_names {
+                        v.push_back(Symbol::new(&self.env, f));
+                    }
+                    v
+                };
+                let calldatas: SorobanVec<Bytes> = {
+                    let mut v = SorobanVec::new(&self.env);
+                    for _ in 0..targets_vec.len() {
+                        v.push_back(Bytes::new(&self.env));
+                    }
+                    v
+                };
+                let empty_bytes = Bytes::new(&self.env);
+                let batch_op_id = self.timelock.schedule_batch(
+                    &gov_addr,
+                    &targets_vec,
+                    &calldatas,
+                    &fn_names_vec,
+                    delay,
+                    &empty_bytes,
+                    &empty_bytes,
+                );
+                if step_index < self.batch_op_ids.len() {
+                    self.batch_op_ids[step_index] = Some(batch_op_id);
+                }
+            }
+            SimStep::ExecuteBatch {
+                actor: _,
+                schedule_step_index,
+            } => {
+                let gov_addr = self.governor.address.clone();
+                let batch_op_id = self
+                    .batch_op_ids
+                    .get(*schedule_step_index)
+                    .and_then(|opt| opt.clone())
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "step {} references schedule_step_index {} which has no batch_op_id",
+                            step_index, schedule_step_index
+                        )
+                    });
+                self.timelock.execute_batch(&gov_addr, &batch_op_id);
+            }
+            SimStep::ValidateDag {
+                schedule_step_indices,
+            } => {
+                let op_ids: SorobanVec<Bytes> = {
+                    let mut v = SorobanVec::new(&self.env);
+                    for idx in schedule_step_indices {
+                        let batch_op_id = self
+                            .batch_op_ids
+                            .get(*idx)
+                            .and_then(|opt| opt.clone())
+                            .unwrap_or_else(|| {
+                                panic!(
+                                    "ValidateDag step {} references schedule_step_index {} which has no batch_op_id",
+                                    step_index, idx
+                                )
+                            });
+                        v.push_back(batch_op_id);
+                    }
+                    v
+                };
+                let result = self.timelock.validate_dependency_dag(&op_ids);
+                if !result.valid {
+                    panic!(
+                        "dependency DAG validation failed: cycle detected in {:?}",
+                        result.cycle_path
+                    );
+                }
             }
         }
     }

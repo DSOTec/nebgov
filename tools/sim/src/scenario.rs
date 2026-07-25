@@ -161,6 +161,19 @@ pub enum SimStep {
         actor: String,
         draft_id: u64,
     },
+    ScheduleBatch {
+        actor: String,
+        targets: Vec<String>,
+        fn_names: Vec<String>,
+        delay: u64,
+    },
+    ExecuteBatch {
+        actor: String,
+        schedule_step_index: usize,
+    },
+    ValidateDag {
+        schedule_step_indices: Vec<usize>,
+    },
 }
 
 impl SimStep {
@@ -189,6 +202,9 @@ impl SimStep {
             SimStep::CoSponsorDraft { .. } => "CoSponsorDraft",
             SimStep::FinalizeDraft { .. } => "FinalizeDraft",
             SimStep::CancelDraft { .. } => "CancelDraft",
+            SimStep::ScheduleBatch { .. } => "ScheduleBatch",
+            SimStep::ExecuteBatch { .. } => "ExecuteBatch",
+            SimStep::ValidateDag { .. } => "ValidateDag",
         }
     }
 }
@@ -262,7 +278,9 @@ impl Scenario {
                 | SimStep::BurnTokens { actor, .. }
                 | SimStep::UpdateConfig { actor, .. }
                 | SimStep::PauseContract { actor }
-                | SimStep::UnpauseContract { actor } => Some(actor.as_str()),
+                | SimStep::UnpauseContract { actor }
+                | SimStep::ScheduleBatch { actor, .. }
+                | SimStep::ExecuteBatch { actor, .. } => Some(actor.as_str()),
                 _ => None,
             };
             if let Some(name) = actor_ref {
@@ -282,7 +300,7 @@ impl Scenario {
                 }
             }
             match step {
-                SimStep::Propose { .. } => {
+                SimStep::Propose { .. } | SimStep::FinalizeDraft { .. } => {
                     // Proposal ids are assigned sequentially starting at 1 by
                     // the contract; the scenario doesn't declare them, so we
                     // just track how many have been created so far.
@@ -308,6 +326,24 @@ impl Scenario {
                             "step {} references out-of-range step_index {}",
                             i, step_index
                         ));
+                    }
+                }
+                SimStep::ExecuteBatch { schedule_step_index, .. } => {
+                    if *schedule_step_index >= self.steps.len() {
+                        return Err(format!(
+                            "step {} references out-of-range schedule_step_index {}",
+                            i, schedule_step_index
+                        ));
+                    }
+                }
+                SimStep::ValidateDag { schedule_step_indices } => {
+                    for idx in schedule_step_indices {
+                        if *idx >= self.steps.len() {
+                            return Err(format!(
+                                "step {} references out-of-range schedule_step_index {}",
+                                i, idx
+                            ));
+                        }
                     }
                 }
                 _ => {}
