@@ -105,7 +105,7 @@ fn setup_queued_proposal() -> (
 fn test_cancel_by_governance_on_queued_proposal_cancels_timelock_ops() {
     let (_env, governor_client, timelock_client, proposal_id) = setup_queued_proposal();
 
-    let op_ids = governor_client.get_queued_op_ids(&proposal_id);
+    let op_ids = governor_client.get_proposal(&proposal_id).op_ids;
     assert!(!op_ids.is_empty(), "expected at least one queued op_id");
 
     // All op_ids should be pending (scheduled, not yet cancelled) before cancellation.
@@ -184,7 +184,7 @@ fn test_cancel_by_governance_on_non_queued_proposal_does_not_call_timelock() {
     );
 
     // Proposal is still Pending — never queued, so op_ids is empty.
-    let op_ids_before = governor_client.get_queued_op_ids(&proposal_id);
+    let op_ids_before = governor_client.get_proposal(&proposal_id).op_ids;
     assert!(op_ids_before.is_empty());
 
     governor_client.cancel_by_governance(&proposal_id);

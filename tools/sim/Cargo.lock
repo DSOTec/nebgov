@@ -901,6 +901,7 @@ dependencies = [
  "serde",
  "serde_json",
  "soroban-sdk",
+ "sorogov-co-sponsorship",
  "sorogov-governor",
  "sorogov-timelock",
  "sorogov-token-votes",
@@ -1466,6 +1467,13 @@ dependencies = [
  "wasmi_arena",
  "wasmi_core",
  "wasmparser-nostd",
+]
+
+[[package]]
+name = "sorogov-co-sponsorship"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
 ]
 
 [[package]]

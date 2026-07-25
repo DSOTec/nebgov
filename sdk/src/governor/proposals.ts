@@ -731,6 +731,17 @@ export function validateGovernorSettings(
       "proposalThreshold must be greater than or equal to 0",
     );
   }
+  const commitPhaseFraction = newSettings.commitPhaseFraction ?? 5_000;
+  if (
+    !Number.isInteger(commitPhaseFraction) ||
+    commitPhaseFraction <= 0 ||
+    commitPhaseFraction >= 10_000
+  ) {
+    throw new GovernorError(
+      GovernorErrorCode.InvalidArguments,
+      "commitPhaseFraction must be a BPS value between 1 and 9999",
+    );
+  }
 }
 
 /**
@@ -754,6 +765,8 @@ export function buildUpdateConfigProposal(
   const proposalCooldown = newSettings.proposalCooldown ?? 100;
   const maxProposalsPerPeriod = newSettings.maxProposalsPerPeriod ?? 5;
   const proposalPeriodDuration = newSettings.proposalPeriodDuration ?? 10_000;
+  const useCommitReveal = newSettings.useCommitReveal ?? false;
+  const commitPhaseFraction = newSettings.commitPhaseFraction ?? 5_000;
 
   const settingsScVal = xdr.ScVal.scvMap([
     new xdr.ScMapEntry({
@@ -813,6 +826,14 @@ export function buildUpdateConfigProposal(
     new xdr.ScMapEntry({
       key: xdr.ScVal.scvSymbol("proposal_period_duration"),
       val: nativeToScVal(proposalPeriodDuration, { type: "u32" }),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("use_commit_reveal"),
+      val: xdr.ScVal.scvBool(useCommitReveal),
+    }),
+    new xdr.ScMapEntry({
+      key: xdr.ScVal.scvSymbol("commit_phase_fraction"),
+      val: nativeToScVal(commitPhaseFraction, { type: "u32" }),
     }),
   ]);
 

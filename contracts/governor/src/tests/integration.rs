@@ -346,7 +346,8 @@ fn test_full_proposal_lifecycle() {
     governor_client.cast_vote(&alice, &proposal_id, &VoteSupport::For);
     governor_client.cast_vote(&bob, &proposal_id, &VoteSupport::For);
 
-    let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_id);
+    let proposal = governor_client.get_proposal(&proposal_id);
+    let (votes_for, votes_against, votes_abstain) = (proposal.votes_for, proposal.votes_against, proposal.votes_abstain);
     assert_eq!(
         votes_for, 1000,
         "votes should reflect token-weighted power (500 + 500)"
@@ -770,7 +771,8 @@ fn test_multi_token_weight_arithmetic_zero_balance_and_edge_tokens() {
     env.ledger().with_mut(|l| l.sequence_number = 11);
     governor_client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
-    let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_id);
+    let proposal = governor_client.get_proposal(&proposal_id);
+    let (votes_for, votes_against, votes_abstain) = (proposal.votes_for, proposal.votes_against, proposal.votes_abstain);
     // 100*1.0 + 40*1.5 + 0*0.5 + missing*2.0 + 10*0.25 = 100 + 60 + 0 + 0 + 2
     assert_eq!(votes_for, 162);
     assert_eq!(votes_against, 0);
@@ -902,7 +904,8 @@ fn test_multi_token_cast_vote_and_quorum_with_two_weighted_tokens() {
     env.ledger().with_mut(|l| l.sequence_number = 11);
     governor_client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
-    let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_id);
+    let proposal = governor_client.get_proposal(&proposal_id);
+    let (votes_for, votes_against, votes_abstain) = (proposal.votes_for, proposal.votes_against, proposal.votes_abstain);
     assert_eq!(votes_for, 1_600);
     assert_eq!(votes_against, 0);
     assert_eq!(votes_abstain, 0);
@@ -1067,7 +1070,8 @@ fn test_multi_token_full_lifecycle_with_three_tokens_and_quorum_gate() {
     governor_client.cast_vote(&alice, &proposal_pass, &VoteSupport::For);
     governor_client.cast_vote(&bob, &proposal_pass, &VoteSupport::For);
 
-    let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_pass);
+    let proposal = governor_client.get_proposal(&proposal_pass);
+    let (votes_for, votes_against, votes_abstain) = (proposal.votes_for, proposal.votes_against, proposal.votes_abstain);
     assert_eq!(votes_for, 700);
     assert_eq!(votes_against, 0);
     assert_eq!(votes_abstain, 0);
@@ -2148,7 +2152,8 @@ fn test_post_deadline_vote_cannot_flip_defeated_proposal() {
         "proposal must remain Defeated after rejected post-deadline vote"
     );
 
-    let (votes_for, _votes_against, _) = governor_client.proposal_votes(&proposal_id);
+    let proposal = governor_client.get_proposal(&proposal_id);
+    let (votes_for, _votes_against, _) = (proposal.votes_for, proposal.votes_against, proposal.votes_abstain);
     assert_eq!(votes_for, 0, "votes_for must not have increased");
 }
 

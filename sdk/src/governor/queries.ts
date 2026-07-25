@@ -90,6 +90,8 @@ export async function getSettings(
       proposalCooldown: Number(native.proposal_cooldown ?? 100),
       maxProposalsPerPeriod: Number(native.max_proposals_per_period ?? 5),
       proposalPeriodDuration: Number(native.proposal_period_duration ?? 10_000),
+      useCommitReveal: Boolean(native.use_commit_reveal ?? false),
+      commitPhaseFraction: Number(native.commit_phase_fraction ?? 5_000),
     };
   });
 }

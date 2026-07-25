@@ -258,6 +258,11 @@ export async function castVoteWithReasonAndSign(
 
 /**
  * Get vote breakdown for a proposal.
+ *
+ * `proposal_votes` was removed from the governor contract (Issue #766) to
+ * reclaim WASM budget for commit-reveal voting — its tally is now read via
+ * `get_proposal`, which every other proposal-shaped query in this SDK
+ * already goes through.
  */
 export async function getProposalVotes(
   client: GovernorClient,
@@ -271,7 +276,7 @@ export async function getProposalVotes(
       )
         .addOperation(
           client.contract.call(
-            "proposal_votes",
+            "get_proposal",
             nativeToScVal(proposalId, { type: "u64" }),
           ),
         )
@@ -287,12 +292,16 @@ export async function getProposalVotes(
       .result?.retval;
     if (!raw) throw new Error("No return value");
 
-    const [votesFor, votesAgainst, votesAbstain] = scValToNative(raw) as [
-      bigint,
-      bigint,
-      bigint,
-    ];
-    return { votesFor, votesAgainst, votesAbstain };
+    const proposal = scValToNative(raw) as {
+      votes_for: bigint;
+      votes_against: bigint;
+      votes_abstain: bigint;
+    };
+    return {
+      votesFor: toBigInt(proposal.votes_for),
+      votesAgainst: toBigInt(proposal.votes_against),
+      votesAbstain: toBigInt(proposal.votes_abstain),
+    };
   });
 }
 

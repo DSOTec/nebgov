@@ -16,6 +16,9 @@ pub const CONFIG_UPDATED_TOPIC: &str = "ConfigUpdated";
 pub const GUARDIAN_CHANGED_TOPIC: &str = "GuardianChanged";
 pub const REPUTATION_UPDATED_TOPIC: &str = "ReputationUpdated";
 pub const EFFECTIVE_THRESHOLD_CHANGED_TOPIC: &str = "EffectiveThresholdChanged";
+pub const VOTE_COMMITTED_TOPIC: &str = "VoteCommitted";
+pub const VOTE_REVEALED_TOPIC: &str = "VoteRevealed";
+pub const COMMIT_PHASE_STARTED_TOPIC: &str = "CommitPhaseStarted";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -333,5 +336,43 @@ pub fn emit_effective_threshold_changed(
             old_threshold,
             new_threshold,
         },
+    );
+}
+
+// These three publish plain tuples rather than dedicated #[contracttype] event
+// structs (matching the existing PauserChanged/ProposalCancelledFromQueue
+// precedent) since every #[contracttype] adds its own entry to the contract's
+// spec metadata section — a real cost given sorogov_governor.wasm sits close
+// to Soroban's 100KB cap.
+
+pub fn emit_vote_committed(env: &Env, proposal_id: u64, voter: &Address, commitment: &BytesN<32>) {
+    env.events().publish(
+        (Symbol::new(env, VOTE_COMMITTED_TOPIC), voter.clone()),
+        (proposal_id, commitment.clone()),
+    );
+}
+
+pub fn emit_vote_revealed(
+    env: &Env,
+    proposal_id: u64,
+    voter: &Address,
+    support: &VoteSupport,
+    weight: i128,
+) {
+    env.events().publish(
+        (Symbol::new(env, VOTE_REVEALED_TOPIC), voter.clone()),
+        (proposal_id, vote_support_to_u32(support), weight),
+    );
+}
+
+pub fn emit_commit_phase_started(
+    env: &Env,
+    proposal_id: u64,
+    commit_deadline: u32,
+    reveal_deadline: u32,
+) {
+    env.events().publish(
+        (Symbol::new(env, COMMIT_PHASE_STARTED_TOPIC), proposal_id),
+        (commit_deadline, reveal_deadline),
     );
 }

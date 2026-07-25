@@ -137,25 +137,49 @@ export interface ProposalVotes {
   votesAbstain: bigint;
 }
 
-/** Draft proposal stored off-chain or in a cosponsorship contract. */
-export interface ProposalDraft {
-  /** Unique identifier for this draft. */
-  id: bigint;
-  /** Original proposer address. */
-  proposer: string;
-  /** Human-readable description hash. */
-  descriptionHash: string;
-  /** List of target contract addresses. */
-  targets: string[];
-  /** List of function names to call on targets. */
-  fnNames: string[];
-  /** List of encoded call arguments. */
-  calldatas: Uint8Array[];
-  /** Start ledger for voting. */
-  startLedger: number;
-  /** End ledger for voting. */
-  endLedger: number;
+/**
+ * Inputs to a two-phase commit-reveal vote (Issue #766).
+ *
+ * `weightSeed` and `salt` hide the vote's existence during the commit phase
+ * and are only disclosed at reveal time; if omitted from
+ * {@link GovernorClient.generateCommitment}, cryptographically random values
+ * are generated for you and returned in the {@link CommitmentResult} so they
+ * can be persisted (e.g. to `localStorage`) until reveal.
+ */
+export interface CommitVoteParams {
+  proposalId: bigint;
+  support: VoteSupport;
+  weightSeed?: bigint;
+  salt?: Buffer;
 }
+
+/** Output of {@link GovernorClient.generateCommitment}. */
+export interface CommitmentResult {
+  /** `sha256(proposal_id_le || support_u8 || weight_seed_le || salt)`, exactly matching the on-chain preimage. */
+  commitment: Buffer;
+  /** The salt used — persist this for the later `reveal_vote` call. */
+  salt: Buffer;
+  /** The weight seed used — persist this for the later `reveal_vote` call. */
+  weightSeed: bigint;
+}
+
+/** Where a proposal's commit-reveal voting currently stands. */
+export interface CommitRevealStatus {
+  phase: "commit" | "reveal" | "ended";
+  commitDeadline: number;
+  revealDeadline: number;
+  /**
+   * Best-effort counts. `get_commit_count`/`get_reveal_count` are not
+   * on-chain read functions — see the scope-boundary note in
+   * `contracts/governor/src/commit_reveal.rs` — so these are sourced from
+   * the indexer's mirror of the `VoteCommitted`/`VoteRevealed` event stream
+   * (same pattern as `ReputationClient`'s proposer leaderboard) and are `0`
+   * if no `indexerUrl` is configured on the client.
+   */
+  commitCount: number;
+  revealCount: number;
+}
+
 
 export interface GovernorConfig {
   /** Contract address of the governor */
@@ -299,6 +323,10 @@ export interface GovernorSettings {
   proposalCooldown?: number;
   maxProposalsPerPeriod?: number;
   proposalPeriodDuration?: number;
+  /** Whether two-phase commit-reveal voting (Issue #766) applies to new proposals. */
+  useCommitReveal?: boolean;
+  /** BPS share of a new proposal's voting_period allotted to the commit phase (e.g. 5000 = 50%). */
+  commitPhaseFraction?: number;
 }
 
 export interface GovernorSettingsValidationLimits {
