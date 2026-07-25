@@ -24,6 +24,7 @@ export default function StreamDetailPage() {
   const [report, setReport] = useState<TreasuryStreamReport | null>(null);
   const [spends, setSpends] = useState<TreasuryStreamSpend[]>([]);
   const [loading, setLoading] = useState(true);
+  const [isGovernor, setIsGovernor] = useState(false);
   const [showSpend, setShowSpend] = useState(false);
   const [client, setClient] = useState<TreasuryClient | null>(null);
 
@@ -33,14 +34,16 @@ export default function StreamDetailPage() {
   const fetchData = useCallback(async () => {
     if (!client || !publicKey) return;
     try {
-      const [s, r, sp] = await Promise.all([
+      const [s, r, sp, gov] = await Promise.all([
         client.getStream(publicKey, streamId),
         client.getStreamReport(publicKey, streamId),
         client.getStreamSpends(publicKey, streamId),
+        client.isGovernor(publicKey, publicKey),
       ]);
       setStream(s);
       setReport(r);
       setSpends(sp);
+      setIsGovernor(gov ?? false);
     } catch {
       toast.error("Failed to load stream data");
     } finally {
@@ -238,19 +241,22 @@ export default function StreamDetailPage() {
               )}
               <button
                 onClick={handleExtend}
-                className="border border-gray-300 text-gray-700 rounded-md px-3 py-1.5 text-xs hover:bg-gray-50"
+                disabled={!isGovernor || stream.isRevoked}
+                className="border border-gray-300 text-gray-700 rounded-md px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
               >
                 Extend
               </button>
               <button
                 onClick={handleTopUp}
-                className="border border-gray-300 text-gray-700 rounded-md px-3 py-1.5 text-xs hover:bg-gray-50"
+                disabled={!isGovernor || stream.isRevoked}
+                className="border border-gray-300 text-gray-700 rounded-md px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
               >
                 Top Up
               </button>
               <button
                 onClick={handleRevoke}
-                className="border border-red-300 text-red-600 rounded-md px-3 py-1.5 text-xs hover:bg-red-50"
+                disabled={!isGovernor || stream.isRevoked}
+                className="border border-red-300 text-red-600 rounded-md px-3 py-1.5 text-xs hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
               >
                 Revoke
               </button>

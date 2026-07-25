@@ -138,6 +138,27 @@ export async function processEvents(
             case "bat_xfer":
               await handleTreasuryBatchTransfer(event, topics);
               break;
+            case "stream_created":
+              await handleStreamCreated(event);
+              break;
+            case "stream_spend":
+              await handleStreamSpend(event);
+              break;
+            case "stream_batch":
+              await handleStreamBatchSpend(event);
+              break;
+            case "stream_revoked":
+              await handleStreamRevoked(event);
+              break;
+            case "stream_extended":
+              await handleStreamExtended(event);
+              break;
+            case "stream_topped_up":
+              await handleStreamToppedUp(event);
+              break;
+            case "stream_exhausted":
+              await handleStreamExhausted(event);
+              break;
             default:
               break;
           }
@@ -632,6 +653,122 @@ async function handleTreasuryBatchTransfer(
      VALUES ($1, $2, $3, $4, $5)
      ON CONFLICT DO NOTHING`,
     [opHash, token, recipientCount, totalAmount, event.ledger],
+  );
+}
+
+async function handleStreamCreated(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // Event: value = (stream_id, name, owner)
+  const data = scValToNative(event.value) as unknown[];
+  const streamId = String(data[0] as bigint);
+  const name = String(data[1]);
+  const owner = String(data[2]);
+
+  await pool.query(
+    `INSERT INTO treasury_stream_events (event_type, stream_id, owner, name, ledger)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    ["stream_created", streamId, owner, name, event.ledger],
+  );
+}
+
+async function handleStreamSpend(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // Event: value = (stream_id, recipient, amount)
+  const data = scValToNative(event.value) as unknown[];
+  const streamId = String(data[0] as bigint);
+  const recipient = String(data[1]);
+  const amount = String(data[2] as bigint);
+
+  await pool.query(
+    `INSERT INTO treasury_stream_events (event_type, stream_id, recipient, amount, ledger)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    ["stream_spend", streamId, recipient, amount, event.ledger],
+  );
+}
+
+async function handleStreamBatchSpend(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // Event: value = (stream_id, total_amount, recipient_count)
+  const data = scValToNative(event.value) as unknown[];
+  const streamId = String(data[0] as bigint);
+  const totalAmount = String(data[1] as bigint);
+  const recipientCount = Number(data[2]);
+
+  await pool.query(
+    `INSERT INTO treasury_stream_events (event_type, stream_id, total_amount, recipient_count, ledger)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    ["stream_batch", streamId, totalAmount, recipientCount, event.ledger],
+  );
+}
+
+async function handleStreamRevoked(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // Event: value = (stream_id, caller, unspent_returned)
+  const data = scValToNative(event.value) as unknown[];
+  const streamId = String(data[0] as bigint);
+  const caller = String(data[1]);
+  const unspentReturned = String(data[2] as bigint);
+
+  await pool.query(
+    `INSERT INTO treasury_stream_events (event_type, stream_id, caller, unspent_returned, ledger)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    ["stream_revoked", streamId, caller, unspentReturned, event.ledger],
+  );
+}
+
+async function handleStreamExtended(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // Event: value = (stream_id, old_end, new_end)
+  const data = scValToNative(event.value) as unknown[];
+  const streamId = String(data[0] as bigint);
+  const oldEnd = Number(data[1]);
+  const newEnd = Number(data[2]);
+
+  await pool.query(
+    `INSERT INTO treasury_stream_events (event_type, stream_id, old_end_ledger, new_end_ledger, ledger)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    ["stream_extended", streamId, oldEnd, newEnd, event.ledger],
+  );
+}
+
+async function handleStreamToppedUp(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // Event: value = (stream_id, additional, new_total)
+  const data = scValToNative(event.value) as unknown[];
+  const streamId = String(data[0] as bigint);
+  const additional = String(data[1] as bigint);
+  const newTotal = String(data[2] as bigint);
+
+  await pool.query(
+    `INSERT INTO treasury_stream_events (event_type, stream_id, additional_amount, new_total_amount, ledger)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT DO NOTHING`,
+    ["stream_topped_up", streamId, additional, newTotal, event.ledger],
+  );
+}
+
+async function handleStreamExhausted(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  // Event: value = stream_id
+  const streamId = String(scValToNative(event.value) as bigint);
+
+  await pool.query(
+    `INSERT INTO treasury_stream_events (event_type, stream_id, ledger)
+     VALUES ($1, $2, $3)
+     ON CONFLICT DO NOTHING`,
+    ["stream_exhausted", streamId, event.ledger],
   );
 }
 

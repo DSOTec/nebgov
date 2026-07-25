@@ -242,6 +242,18 @@ export class TreasuryClient {
     return this.isTreasuryOwner(viewer, candidate);
   }
 
+  async getOwner(viewer: string): Promise<string | null> {
+    const rv = await this.simulate(viewer, this.contract.call("get_owner"));
+    if (!rv) return null;
+    return String(scValToNative(rv));
+  }
+
+  async isGovernor(viewer: string, candidate: string): Promise<boolean | null> {
+    const governor = await this.getOwner(viewer);
+    if (governor === null) return null;
+    return governor === candidate;
+  }
+
   async getSpendingCap(
     viewer: string,
     token: string,

@@ -14,6 +14,7 @@ import {
   TreasuryTx,
   BatchTransferRecipient,
   BatchTransferEvent,
+  StreamEvent,
   Network,
   SpendingCap,
   BudgetStream,
@@ -418,6 +419,37 @@ export class TreasuryClient {
   }
 
   /**
+   * Get the current treasury governor (the address authorized to manage streams).
+   */
+  async getOwner(): Promise<string> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(this.contract.call("get_owner"))
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return "";
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) return "";
+      return String(scValToNative(raw));
+    });
+  }
+
+  /**
+   * Check whether an address is the current treasury governor.
+   */
+  async isGovernor(address: string): Promise<boolean> {
+    const governor = await this.getOwner();
+    return governor === address;
+  }
+
+  /**
    * Get total number of treasury transactions.
    */
   async getTxCount(): Promise<bigint> {
@@ -617,6 +649,132 @@ export class TreasuryClient {
         ledger: row.ledger,
       }))
       .filter((e) => fromLedger === undefined || e.ledger >= fromLedger);
+
+    return events;
+  }
+
+  /**
+   * Get the activity history for a budget stream from the indexer.
+   * Returns events such as stream creation, spends, extensions, top-ups, and revocations.
+   *
+   * @param streamId - The stream ID to get history for
+   * @param limit - Maximum number of events to return (default 20, max 100)
+   * @param offset - Number of events to skip (default 0)
+   * @returns Array of stream events
+   */
+  async getStreamHistory(
+    streamId: bigint,
+    limit = 20,
+    offset = 0,
+  ): Promise<StreamEvent[]> {
+    if (!this.config.indexerUrl) {
+      throw new TreasuryError(
+        TreasuryErrorCode.InvalidArguments,
+        "indexerUrl must be set in TreasuryConfig to use getStreamHistory",
+      );
+    }
+
+    const params = new URLSearchParams({
+      stream_id: String(streamId),
+      limit: String(Math.min(limit, 100)),
+      offset: String(offset),
+    });
+
+    const url = `${this.config.indexerUrl.replace(/\/$/, "")}/treasury/stream-events?${params}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      throw new TreasuryError(
+        TreasuryErrorCode.TransactionFailed,
+        `Indexer request failed: ${response.status} ${response.statusText}`,
+      );
+    }
+
+    const json = (await response.json()) as {
+      data: Array<{
+        event_type: string;
+        stream_id: string;
+        name?: string;
+        owner?: string;
+        recipient?: string;
+        amount?: string;
+        total_amount?: string;
+        recipient_count?: number;
+        caller?: string;
+        unspent_returned?: string;
+        old_end_ledger?: number;
+        new_end_ledger?: number;
+        additional_amount?: string;
+        new_total_amount?: string;
+        ledger: number;
+      }>;
+    };
+
+    const events: StreamEvent[] = json.data.map((row) => {
+      const common = { ledger: row.ledger };
+      const streamId = BigInt(row.stream_id);
+
+      switch (row.event_type) {
+        case "stream_created":
+          return {
+            type: "stream_created" as const,
+            streamId,
+            name: row.name ?? "",
+            owner: row.owner ?? "",
+            ...common,
+          };
+        case "stream_spend":
+          return {
+            type: "stream_spend" as const,
+            streamId,
+            recipient: row.recipient ?? "",
+            amount: BigInt(row.amount ?? "0"),
+            ...common,
+          };
+        case "stream_batch":
+          return {
+            type: "stream_batch" as const,
+            streamId,
+            totalAmount: BigInt(row.total_amount ?? "0"),
+            recipientCount: row.recipient_count ?? 0,
+            ...common,
+          };
+        case "stream_revoked":
+          return {
+            type: "stream_revoked" as const,
+            streamId,
+            caller: row.caller ?? "",
+            unspentReturned: BigInt(row.unspent_returned ?? "0"),
+            ...common,
+          };
+        case "stream_extended":
+          return {
+            type: "stream_extended" as const,
+            streamId,
+            oldEndLedger: row.old_end_ledger ?? 0,
+            newEndLedger: row.new_end_ledger ?? 0,
+            ...common,
+          };
+        case "stream_topped_up":
+          return {
+            type: "stream_topped_up" as const,
+            streamId,
+            additionalAmount: BigInt(row.additional_amount ?? "0"),
+            newTotalAmount: BigInt(row.new_total_amount ?? "0"),
+            ...common,
+          };
+        case "stream_exhausted":
+          return {
+            type: "stream_exhausted" as const,
+            streamId,
+            ...common,
+          };
+        default:
+          throw new TreasuryError(
+            TreasuryErrorCode.InvalidArguments,
+            `Unknown stream event type: ${row.event_type}`,
+          );
+      }
+    });
 
     return events;
   }
