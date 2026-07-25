@@ -86,6 +86,30 @@ export function cancelOperation(state: TimelockState, opId: string): void {
   op.cancelled = true;
 }
 
+function hasCycle(deps: Map<string, string[]>, opIds: string[]): boolean {
+  const visited = new Set<string>();
+  const stack = new Set<string>();
+
+  function visit(id: string): boolean {
+    if (stack.has(id)) return true;
+    if (visited.has(id)) return false;
+
+    stack.add(id);
+    const preds = deps.get(id) ?? [];
+    for (const pred of preds) {
+      if (visit(pred)) return true;
+    }
+    stack.delete(id);
+    visited.add(id);
+    return false;
+  }
+
+  for (const id of opIds) {
+    if (visit(id)) return true;
+  }
+  return false;
+}
+
 export const timelockExecutor = {
   is_ready(state: TimelockState, clock: LedgerClock, _caller: string, args: unknown[]): boolean {
     const [opIdBytes] = args as [Uint8Array];
@@ -109,6 +133,63 @@ export const timelockExecutor = {
 
   execution_window(state: TimelockState): bigint {
     return state.executionWindow;
+  },
+
+  schedule_with_deps(
+    state: TimelockState,
+    clock: LedgerClock,
+    _caller: string,
+    args: unknown[],
+  ): string {
+    const [target, data, fnName, delay, predecessorIds] = args as [string, Uint8Array, string, bigint, Uint8Array[]];
+    const predecessors = predecessorIds.map((b) => Buffer.from(b).toString("hex"));
+
+    for (const pred of predecessors) {
+      const predOp = state.operations.get(pred);
+      if (!predOp || (!predOp.executed && !predOp.cancelled)) {
+        throw new MockContractError(100, "schedule_with_deps: predecessor not done");
+      }
+    }
+
+    const opId = computeOpId(target, data, fnName, delay, new Uint8Array(), new Uint8Array());
+    const readyAt = clock.timestamp + Number(delay);
+    const expiresAt = readyAt + Number(state.executionWindow);
+    const op: TimelockOperationRecord = {
+      target,
+      fnName,
+      data,
+      readyAt,
+      expiresAt,
+      executed: false,
+      cancelled: false,
+      predecessors,
+    };
+    state.operations.set(opId, op);
+    state.dependencies.set(opId, predecessors);
+    return opId;
+  },
+
+  validate_dependency_dag(state: TimelockState, _clock: LedgerClock, _caller: string, args: unknown[]): null {
+    const [opIds] = args as [Uint8Array[]];
+    const opIdStrs = opIds.map((b) => Buffer.from(b).toString("hex"));
+
+    if (hasCycle(state.dependencies, opIdStrs)) {
+      throw new MockContractError(100, "validate_dependency_dag: cycle detected");
+    }
+
+    return null;
+  },
+
+  execute_batch_partial(_state: TimelockState, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
+    return null;
+  },
+
+  retry_failed_operation(_state: TimelockState, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
+    return null;
+  },
+
+  skip_failed_operation(_state: TimelockState, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
+    return null;
   },
 };
 

@@ -14,9 +14,30 @@ import { LedgerClock } from "../ledger";
 import { Checkpoint, TokenVotesState } from "./store";
 import { MockContractError } from "./errors";
 
+const MAX_CHAIN_WALK = 64;
+
 function lastCheckpointVotes(list: Checkpoint[] | undefined): bigint {
   if (!list || list.length === 0) return 0n;
   return list[list.length - 1].votes;
+}
+
+function resolveChain(state: TokenVotesState, start: string): string[] {
+  const chain: string[] = [start];
+  let current = start;
+  let hops = 0;
+  while (hops < MAX_CHAIN_WALK) {
+    const next = state.delegates.get(current);
+    if (!next || next === current) break;
+    chain.push(next);
+    current = next;
+    hops++;
+  }
+  return chain;
+}
+
+function wouldCreateCycle(state: TokenVotesState, delegator: string, delegatee: string): boolean {
+  const chain = resolveChain(state, delegatee);
+  return chain.includes(delegator);
 }
 
 function pushCheckpoint(map: Map<string, Checkpoint[]>, account: string, ledger: number, votes: bigint): void {
@@ -74,6 +95,13 @@ export const tokenVotesExecutor = {
     const [delegator, delegatee] = args as [string, string];
     if (caller !== delegator) {
       throw new MockContractError(1, "delegate: delegator must authorize this call");
+    }
+    if (wouldCreateCycle(state, delegator, delegatee)) {
+      throw new MockContractError(1, "delegation would create a cycle");
+    }
+    const prospectiveChain = resolveChain(state, delegatee);
+    if (prospectiveChain.length > MAX_CHAIN_WALK) {
+      throw new MockContractError(1, "delegation would exceed max chain depth");
     }
     applyDelegation(state, clock, delegator, delegatee);
     return null;

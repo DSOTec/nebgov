@@ -152,6 +152,7 @@ export class SimulationHarness {
         minDelay: this.config.settings.timelockDelay,
         executionWindow: this.config.settings.executionWindow ?? DEFAULT_EXECUTION_WINDOW,
         operations: new Map(),
+        dependencies: new Map(),
       },
       votes: {
         balances: new Map(),

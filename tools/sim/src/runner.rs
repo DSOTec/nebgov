@@ -22,6 +22,7 @@ use sorogov_governor::{
 use sorogov_timelock::{TimelockContract, TimelockContractClient};
 use sorogov_token_votes::{TokenVotesContract, TokenVotesContractClient};
 use sorogov_treasury::{TreasuryContract, TreasuryContractClient};
+use sorogov_co_sponsorship::{CoSponsorshipContract, CoSponsorshipContractClient};
 
 use crate::report::{SimulationReport, StepResult};
 use crate::scenario::{
@@ -57,6 +58,8 @@ pub struct SimulationRunner {
     token_votes: TokenVotesContractClient<'static>,
     #[allow(dead_code)]
     treasury: TreasuryContractClient<'static>,
+    #[allow(dead_code)]
+    co_sponsorship: CoSponsorshipContractClient<'static>,
     token: Address,
     target: Address,
     treasury_addr: Address,
@@ -129,6 +132,16 @@ impl SimulationRunner {
         let treasury = TreasuryContractClient::new(&env, &treasury_id);
         treasury.initialize(&treasury_owners, &1u32, &governor_id);
 
+        let co_sponsorship_id = env.register(CoSponsorshipContract, ());
+        let co_sponsorship = CoSponsorshipContractClient::new(&env, &co_sponsorship_id);
+        co_sponsorship.initialize(
+            &admin,
+            &governor_id,
+            &token_votes_id,
+            &7200u32, // draft expiry: 1 hour (12 ledgers of 5s each)
+            &10u32,   // max co-sponsors: 10
+        );
+
         let target = env.register(SimTargetContract, ());
 
         let sac = token::StellarAssetClient::new(&env, &token);
@@ -154,6 +167,7 @@ impl SimulationRunner {
             timelock,
             token_votes,
             treasury,
+            co_sponsorship,
             token,
             target,
             treasury_addr: treasury_id,
@@ -408,6 +422,80 @@ impl SimulationRunner {
                 if !self.governor.is_quorum_reached(proposal_id) {
                     panic!("quorum not reached for proposal #{}", proposal_id);
                 }
+            }
+            SimStep::AssertReputationScore {
+                actor,
+                min_score,
+                max_score,
+            } => {
+                let proposer = self.get_actor(actor).clone();
+                let rep = self.governor.get_proposer_reputation(&proposer);
+                if let Some(min) = min_score {
+                    if rep.reputation_score < *min {
+                        panic!(
+                            "reputation score {} below minimum {} for actor {}",
+                            rep.reputation_score, min, actor
+                        );
+                    }
+                }
+                if let Some(max) = max_score {
+                    if rep.reputation_score > *max {
+                        panic!(
+                            "reputation score {} above maximum {} for actor {}",
+                            rep.reputation_score, max, actor
+                        );
+                    }
+                }
+            }
+            SimStep::CreateDraft {
+                actor,
+                targets,
+                fn_names,
+                description,
+            } => {
+                let creator = self.get_actor(actor).clone();
+                let targets_vec: SorobanVec<Address> = {
+                    let mut v = SorobanVec::new(&self.env);
+                    for t in targets {
+                        v.push_back(self.resolve_target(t));
+                    }
+                    v
+                };
+                let fn_names_vec: SorobanVec<Symbol> = {
+                    let mut v = SorobanVec::new(&self.env);
+                    for f in fn_names {
+                        v.push_back(Symbol::new(&self.env, f));
+                    }
+                    v
+                };
+                let mut calldatas: SorobanVec<Bytes> = SorobanVec::new(&self.env);
+                for _ in 0..targets_vec.len() {
+                    calldatas.push_back(Bytes::new(&self.env));
+                }
+                let desc = SorobanString::from_str(&self.env, description);
+                let desc_hash = self.env.crypto().sha256(&Bytes::new(&self.env)).into();
+                let metadata_uri = SorobanString::from_str(&self.env, "");
+                self.co_sponsorship.create_draft(
+                    &creator,
+                    &desc,
+                    &desc_hash,
+                    &metadata_uri,
+                    &targets_vec,
+                    &fn_names_vec,
+                    &calldatas,
+                );
+            }
+            SimStep::CoSponsorDraft { actor, draft_id } => {
+                let co_sponsor = self.get_actor(actor).clone();
+                self.co_sponsorship.co_sponsor(&co_sponsor, draft_id);
+            }
+            SimStep::FinalizeDraft { actor, draft_id } => {
+                let caller = self.get_actor(actor).clone();
+                self.co_sponsorship.finalize_draft(&caller, draft_id);
+            }
+            SimStep::CancelDraft { actor, draft_id } => {
+                let caller = self.get_actor(actor).clone();
+                self.co_sponsorship.cancel_draft(&caller, draft_id);
             }
         }
     }

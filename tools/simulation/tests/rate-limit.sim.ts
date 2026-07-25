@@ -29,6 +29,7 @@ describe("Proposer rate limiting (mock runtime)", () => {
     expect(result.success).toBe(true);
     expect(result.proposalId).toBeDefined();
     expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toContain("Error(Contract, #6)");
   });
 
   it("allows a new proposal from the same proposer once the cooldown has elapsed", async () => {

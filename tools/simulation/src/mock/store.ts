@@ -60,12 +60,14 @@ export interface TimelockOperationRecord {
   expiresAt: number;
   executed: boolean;
   cancelled: boolean;
+  predecessors?: string[];
 }
 
 export interface TimelockState {
   minDelay: bigint;
   executionWindow: bigint;
   operations: Map<string, TimelockOperationRecord>;
+  dependencies: Map<string, string[]>;
 }
 
 export interface Checkpoint {

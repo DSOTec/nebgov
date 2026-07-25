@@ -197,6 +197,7 @@ Record the deployed address and verify the initialization flow end-to-end using 
 
 - [docs/architecture.md](./docs/architecture.md) — contract interaction diagram and storage layout
 - [docs/security.md](./docs/security.md) — known threat model and mitigations
+- [tools/simulation/README.md](./tools/simulation/README.md) — governance simulation testing framework and how to add scenarios
 
 ---
 
