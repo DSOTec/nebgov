@@ -3,6 +3,7 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 import type { TreasuryClient, TreasuryBudgetStream } from "../lib/treasury-client";
+import { isValidStellarAddress } from "../lib/utils/stellarAddress";
 
 interface StreamSpendModalProps {
   client: TreasuryClient;
@@ -22,6 +23,7 @@ export function StreamSpendModal({
   onSpent,
 }: StreamSpendModalProps) {
   const [recipient, setRecipient] = useState("");
+  const [recipientError, setRecipientError] = useState("");
   const [amount, setAmount] = useState("");
   const [memo, setMemo] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -32,6 +34,10 @@ export function StreamSpendModal({
     e.preventDefault();
     if (!recipient || !amount) {
       toast.error("Please fill in recipient and amount");
+      return;
+    }
+    if (!isValidStellarAddress(recipient)) {
+      setRecipientError("Invalid Stellar address.");
       return;
     }
 
@@ -78,11 +84,19 @@ export function StreamSpendModal({
             <input
               type="text"
               value={recipient}
-              onChange={(e) => setRecipient(e.target.value)}
+              onChange={(e) => { setRecipient(e.target.value); setRecipientError(""); }}
+              onBlur={(e) => {
+                if (e.target.value && !isValidStellarAddress(e.target.value))
+                  setRecipientError("Invalid Stellar address.");
+                else setRecipientError("");
+              }}
               placeholder="G..."
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
+              className={`w-full border rounded-md px-3 py-2 text-sm font-mono ${
+                recipientError ? "border-red-400" : "border-gray-300"
+              }`}
               required
             />
+            {recipientError && <p className="text-xs text-red-500 mt-1">{recipientError}</p>}
           </div>
           <div>
             <label className="text-xs text-gray-500">Amount</label>
@@ -115,7 +129,7 @@ export function StreamSpendModal({
             </button>
             <button
               type="submit"
-              disabled={submitting || !stream.isActive}
+              disabled={submitting || !stream.isActive || !!recipientError}
               className="flex-1 bg-indigo-600 text-white rounded-md py-2 text-sm hover:bg-indigo-700 disabled:opacity-50"
             >
               {submitting ? "Spending..." : "Execute Spend"}

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 import type { TreasuryClient } from "../lib/treasury-client";
+import { isValidStellarAddress } from "../lib/utils/stellarAddress";
 
 interface CreateStreamModalProps {
   client: TreasuryClient;
@@ -23,6 +24,7 @@ export function CreateStreamModal({
 }: CreateStreamModalProps) {
   const [name, setName] = useState("");
   const [owner, setOwner] = useState("");
+  const [ownerError, setOwnerError] = useState("");
   const [totalAllocated, setTotalAllocated] = useState("");
   const [maxSingleSpend, setMaxSingleSpend] = useState("");
   const [startLedger, setStartLedger] = useState("");
@@ -35,6 +37,10 @@ export function CreateStreamModal({
     e.preventDefault();
     if (!name || !owner || !totalAllocated || !maxSingleSpend || !startLedger || !endLedger) {
       toast.error("Please fill in all required fields");
+      return;
+    }
+    if (!isValidStellarAddress(owner)) {
+      setOwnerError("Invalid Stellar address.");
       return;
     }
 
@@ -84,11 +90,19 @@ export function CreateStreamModal({
             <input
               type="text"
               value={owner}
-              onChange={(e) => setOwner(e.target.value)}
+              onChange={(e) => { setOwner(e.target.value); setOwnerError(""); }}
+              onBlur={(e) => {
+                if (e.target.value && !isValidStellarAddress(e.target.value))
+                  setOwnerError("Invalid Stellar address.");
+                else setOwnerError("");
+              }}
               placeholder="G..."
-              className="w-full border border-gray-300 rounded-md px-3 py-2 text-sm font-mono"
+              className={`w-full border rounded-md px-3 py-2 text-sm font-mono ${
+                ownerError ? "border-red-400" : "border-gray-300"
+              }`}
               required
             />
+            {ownerError && <p className="text-xs text-red-500 mt-1">{ownerError}</p>}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
@@ -170,7 +184,7 @@ export function CreateStreamModal({
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !!ownerError}
               className="flex-1 bg-indigo-600 text-white rounded-md py-2 text-sm hover:bg-indigo-700 disabled:opacity-50"
             >
               {submitting ? "Creating..." : "Create Stream"}

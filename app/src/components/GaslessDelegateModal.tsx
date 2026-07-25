@@ -9,6 +9,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import toast from "react-hot-toast";
 import type { TopDelegate } from "@nebgov/sdk";
 import { useWallet } from "../lib/wallet-context";
+import { isValidStellarAddress } from "../lib/utils/stellarAddress";
 import {
   useGaslessDelegation,
   EXPIRY_PRESET_LABELS,
@@ -43,6 +44,7 @@ export function GaslessDelegateModal({
   topDelegates,
 }: Props) {
   const [delegatee, setDelegatee] = useState(prefillAddress || "");
+  const [delegateeError, setDelegateeError] = useState("");
   const [expiryPreset, setExpiryPreset] = useState<ExpiryPreset>("1month");
   const { isConnected, publicKey, connect } = useWallet();
   const { delegateGasless, submitting } = useGaslessDelegation();
@@ -53,9 +55,22 @@ export function GaslessDelegateModal({
 
   if (!open) return null;
 
+  function validateDelegatee(value: string) {
+    if (!value.trim()) {
+      setDelegateeError("Address is required.");
+      return false;
+    }
+    if (!isValidStellarAddress(value)) {
+      setDelegateeError("Invalid Stellar address.");
+      return false;
+    }
+    setDelegateeError("");
+    return true;
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (!delegatee.trim()) return;
+    if (!validateDelegatee(delegatee)) return;
 
     try {
       if (!isConnected || !publicKey) {
@@ -116,10 +131,16 @@ export function GaslessDelegateModal({
               type="text"
               placeholder="Stellar address (G...)"
               value={delegatee}
-              onChange={(e) => setDelegatee(e.target.value)}
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+              onChange={(e) => { setDelegatee(e.target.value); setDelegateeError(""); }}
+              onBlur={(e) => validateDelegatee(e.target.value)}
+              className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono ${
+                delegateeError ? "border-red-400" : "border-gray-300"
+              }`}
               required
             />
+            {delegateeError && (
+              <p className="text-xs text-red-500 mt-1">{delegateeError}</p>
+            )}
             {topDelegates && topDelegates.length > 0 && (
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {topDelegates.slice(0, 5).map((d) => (
@@ -168,7 +189,7 @@ export function GaslessDelegateModal({
             </button>
             <button
               type="submit"
-              disabled={submitting || !delegatee.trim() || !isConnected}
+              disabled={submitting || !delegatee.trim() || !!delegateeError || !isConnected}
               className="flex-1 bg-green-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
             >
               {submitting ? "Signing…" : "Delegate for free"}
