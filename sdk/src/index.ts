@@ -21,6 +21,8 @@ export { TimelockClient } from "./timelock";
 export { TreasuryClient } from "./treasury";
 export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
+export { CoSponsorshipClient } from "./cosponsor";
+export type { CoSponsorshipConfig } from "./cosponsor";
 export {
   GovernorError,
   GovernorErrorCode,

@@ -28,6 +28,8 @@ const TOPIC_MAP: Record<string, string> = {
   DelegateChanged: "DelegateChanged",
   ConfigUpdated: "ConfigUpdated",
   GovernorUpgraded: "GovernorUpgraded",
+  ReputationUpdated: "ReputationUpdated",
+  EffectiveThresholdChanged: "EffectiveThresholdChanged",
 };
 
 export interface IndexerConfig {
@@ -144,6 +146,12 @@ export async function processEvents(
               break;
             case "GovernorUpgraded":
               await handleGovernorUpgraded(event, topics);
+              break;
+            case "ReputationUpdated":
+              await handleReputationUpdated(event, topics);
+              break;
+            case "EffectiveThresholdChanged":
+              await handleEffectiveThresholdChanged(event, topics);
               break;
             default:
               break;
@@ -440,4 +448,33 @@ async function handleGovernorUpgraded(
      VALUES ($1, $2)`,
     [event.ledger, hashStr],
   );
+}
+
+async function handleReputationUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const oldScore = Number(data.old_score);
+  const newScore = Number(data.new_score);
+  const reason = String(data.reason ?? "");
+
+  await pool.query(
+    `INSERT INTO proposer_reputation (proposer, old_score, new_score, reason, ledger)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [proposer, oldScore, newScore, reason, event.ledger],
+  );
+}
+
+async function handleEffectiveThresholdChanged(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const oldThreshold = BigInt(Number(data.old_threshold ?? 0n));
+  const newThreshold = BigInt(Number(data.new_threshold ?? 0n));
+
+  // Log the threshold change (in a real implementation, this might be stored)
+  console.log(`Threshold changed from ${oldThreshold} to ${newThreshold} at ledger ${event.ledger}`);
 }
