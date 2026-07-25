@@ -38,6 +38,10 @@ export interface GovernorSettingsState {
   proposalCooldown: number;
   maxProposalsPerPeriod: number;
   proposalPeriodDuration: number;
+  useDynamicQuorum: boolean;
+  reflectorOracle: string | null;
+  minQuorumUsd: bigint;
+  maxCalldataSize: number;
 }
 
 export interface GovernorState {
@@ -57,12 +61,14 @@ export interface TimelockOperationRecord {
   expiresAt: number;
   executed: boolean;
   cancelled: boolean;
+  predecessors?: string[];
 }
 
 export interface TimelockState {
   minDelay: bigint;
   executionWindow: bigint;
   operations: Map<string, TimelockOperationRecord>;
+  dependencies: Map<string, string[]>;
 }
 
 export interface Checkpoint {
