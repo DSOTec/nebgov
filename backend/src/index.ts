@@ -10,6 +10,8 @@ import notificationsRouter from "./routes/notifications";
 import securityRouter from "./routes/security";
 import relayerRouter from "./routes/relayer";
 import { securityMonitor } from "./services/security-monitor";
+import { notificationProcessor } from "./jobs/notification-processor";
+import { deliveryRetry } from "./jobs/delivery-retry";
 import { runBackendMigrations } from "./db/migrationRunner";
 import pino from "pino";
 import pinoHttp from "pino-http";
@@ -130,6 +132,10 @@ async function bootstrap(): Promise<void> {
     securityMonitor.start().catch((err) => {
       logger.error({ err }, "Failed to start security monitor");
     });
+
+    // Start the notification engine's background jobs
+    notificationProcessor.start();
+    deliveryRetry.start();
   });
 }
 

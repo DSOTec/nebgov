@@ -25,6 +25,7 @@ import { useTranslations } from "next-intl";
 import toast from "react-hot-toast";
 import { loadNotificationHistory } from "../lib/governance-notifications";
 import { useGovernanceBalance } from "../lib/use-governance-balance";
+import { NotificationBell } from "./NotificationBell";
 
 function formatGovernanceAmount(v: bigint): string {
   const n = Number(v);
@@ -173,6 +174,7 @@ export function NavBar() {
         </div>
 
         <div className="flex items-center gap-4">
+          <NotificationBell />
           <button
             onClick={toggleTheme}
             aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}

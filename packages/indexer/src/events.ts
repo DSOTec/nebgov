@@ -137,6 +137,12 @@ export async function processEvents(
       );
 
       try {
+        await logToEventLog(eventType, ledger, contractId, event, topics);
+      } catch (err) {
+        console.error(`Failed to write event_log entry for ${eventType}:`, err);
+      }
+
+      try {
         if (isTreasury) {
           switch (eventType) {
             case "bat_xfer":
@@ -266,6 +272,32 @@ export async function processEvents(
   }
 
   return latestLedger;
+}
+
+/**
+ * Persists every parsed governance event to `event_log`, independent of
+ * whether a dedicated handler exists for its type. This is the durable feed
+ * the backend's notification engine polls to evaluate user-defined rules
+ * (issue #774) without needing its own RPC subscription.
+ */
+async function logToEventLog(
+  eventType: string,
+  ledger: number,
+  contractAddress: string | undefined,
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const payload = {
+    topics,
+    value: scValToNative(event.value),
+    tx_hash: event.txHash,
+  };
+
+  await pool.query(
+    `INSERT INTO event_log (event_type, ledger, transaction_hash, contract_address, payload)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [eventType, ledger, event.txHash ?? null, contractAddress ?? "", stringifyJson(payload)],
+  );
 }
 
 async function handleProposalCreated(
