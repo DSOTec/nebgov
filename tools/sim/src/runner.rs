@@ -537,7 +537,12 @@ fn merge_settings(current: &GovernorSettings, overrides: &SimGovernorSettings) -
 
 fn estimated_storage_touches(step: &SimStep) -> (u32, u32) {
     match step {
-        SimStep::Propose { .. } => (3, 5),
+        SimStep::Propose { targets, .. } => {
+            let target_count = targets.len() as u32;
+            let reads = 3;
+            let writes = 5 + target_count;
+            (reads, writes)
+        }
         SimStep::Vote { .. } => (2, 2),
         SimStep::Queue { .. } | SimStep::Execute { .. } | SimStep::Cancel { .. } => (2, 2),
         SimStep::UpdateConfig { .. } => (1, 14),

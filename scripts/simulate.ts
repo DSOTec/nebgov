@@ -395,7 +395,9 @@ async function main() {
       console.log(
         `${report.scenario_name}: ${report.passed_steps}/${report.total_steps} steps passed, final ledger ${report.final_ledger}`,
       );
-      if (report.failed_steps > 0) process.exitCode = 1;
+      if (report.failed_steps > 0 || report.compute_budget_warnings.some(w => w.utilization_pct >= 100)) {
+        process.exitCode = 1;
+      }
       break;
     }
     case "generate": {
