@@ -8,7 +8,10 @@ import leaderboardRouter from "./routes/leaderboard";
 import authRouter from "./routes/auth";
 import notificationsRouter from "./routes/notifications";
 import securityRouter from "./routes/security";
+import relayerRouter from "./routes/relayer";
 import { securityMonitor } from "./services/security-monitor";
+import { notificationProcessor } from "./jobs/notification-processor";
+import { deliveryRetry } from "./jobs/delivery-retry";
 import { runBackendMigrations } from "./db/migrationRunner";
 import pino from "pino";
 import pinoHttp from "pino-http";
@@ -46,6 +49,18 @@ const leaderboardLimiter = rateLimit({
   message: { error: "Too many requests" },
 });
 
+// Submitting a signed permit costs the relayer a real transaction fee, so
+// this is deliberately tighter than the other per-IP limiters. The
+// per-delegator-address daily budget is enforced separately in the route
+// itself (backend/src/routes/relayer.ts), against relayer_permit_log.
+const relayerLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many relayer requests" },
+});
+
 // Middleware
 app.use(
   cors({
@@ -66,12 +81,14 @@ app.use(
   }),
 );
 
-// Swagger documentation
-app.get("/openapi.json", (_req, res) => {
-  res.setHeader("Content-Type", "application/json");
-  res.send(generateOpenApiDocument());
-});
-app.use("/docs", swaggerUi.serve, swaggerUi.setup(generateOpenApiDocument()));
+// Swagger / OpenAPI documentation — served in development only
+if (process.env.NODE_ENV !== "production") {
+  app.get("/openapi.json", (_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.send(generateOpenApiDocument());
+  });
+  app.use("/docs", swaggerUi.serve, swaggerUi.setup(generateOpenApiDocument()));
+}
 
 // Health check — exempt from rate limiting
 app.get("/health", (_req, res) => {
@@ -90,6 +107,8 @@ app.use("/leaderboard/history", leaderboardLimiter);
 app.use("/leaderboard", leaderboardRouter);
 app.use("/notifications", notificationsRouter);
 app.use("/security", securityRouter);
+app.use("/relayer", relayerLimiter);
+app.use("/relayer", relayerRouter);
 
 // Error handling
 app.use(
@@ -113,6 +132,10 @@ async function bootstrap(): Promise<void> {
     securityMonitor.start().catch((err) => {
       logger.error({ err }, "Failed to start security monitor");
     });
+
+    // Start the notification engine's background jobs
+    notificationProcessor.start();
+    deliveryRetry.start();
   });
 }
 

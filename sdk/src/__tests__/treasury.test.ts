@@ -393,5 +393,36 @@ describe("TreasuryClient", () => {
       expect(tx.executed).toBe(false);
       expect(tx.cancelled).toBe(false);
     });
+
+    it("getSpendingRemaining() should decode remaining budget bigint", async () => {
+      mockScValToNative.mockReturnValue("150");
+
+      const remaining = await client.getSpendingRemaining(validCAddr);
+
+      expect(remaining).toBe(150n);
+      expect(mockNativeToScVal).toHaveBeenCalledWith(validCAddr, {
+        type: "address",
+      });
+    });
+
+    it("getSpendingRemaining() should return null when contract reports i128::MAX (no cap configured)", async () => {
+      const I128_MAX = (1n << 127n) - 1n;
+      mockScValToNative.mockReturnValue(I128_MAX.toString());
+
+      const remaining = await client.getSpendingRemaining(validCAddr);
+
+      expect(remaining).toBeNull();
+    });
+
+    it("getSpendingRemaining() should return null on simulation error", async () => {
+      const { SorobanRpc } = jest.requireMock("@stellar/stellar-sdk") as {
+        SorobanRpc: { Api: { isSimulationError: jest.Mock } };
+      };
+      SorobanRpc.Api.isSimulationError.mockReturnValueOnce(true);
+
+      const remaining = await client.getSpendingRemaining(validCAddr);
+
+      expect(remaining).toBeNull();
+    });
   });
 });

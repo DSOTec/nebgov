@@ -3,10 +3,15 @@
 use soroban_sdk::xdr::{FromXdr, ToXdr};
 use soroban_sdk::{
     contract, contractclient, contracterror, contractimpl, contracttype, symbol_short, token,
-    Address, Bytes, Env, Symbol, Val, Vec,
+    Address, Bytes, Env, String, Symbol, Val, Vec,
 };
 
+mod streams;
+
+pub use streams::{BudgetStream, StreamBudgetReport, StreamSpend, TreasuryBudgetSummary};
+
 const DEFAULT_PENDING_EXPIRY_LEDGERS: u32 = 17_280;
+const TX_STORAGE_TTL_LEDGERS: u32 = 518_400;
 
 /// Treasury error codes.
 #[contracterror]
@@ -16,6 +21,28 @@ pub enum TreasuryError {
     SingleTransferExceeded = 1,
     /// Proposed transfer would cause daily transfer total to exceed the daily limit.
     DailyLimitExceeded = 2,
+    /// Budget stream not found.
+    StreamNotFound = 10,
+    /// Budget stream is not active.
+    StreamNotActive = 11,
+    /// Budget stream has expired.
+    StreamExpired = 12,
+    /// Budget stream has been revoked.
+    StreamRevoked = 13,
+    /// Budget stream has no remaining funds.
+    StreamBudgetExhausted = 14,
+    /// Spend exceeds the maximum single spend for a stream.
+    StreamSpendExceedsMax = 15,
+    /// Cooldown period between spends has not elapsed.
+    StreamCooldownNotElapsed = 16,
+    /// Caller is not the authorized stream owner.
+    UnauthorizedStreamOwner = 17,
+    /// Treasury has insufficient balance for the stream spend.
+    InsufficientTreasuryBalance = 18,
+    /// Stream has already been revoked.
+    StreamAlreadyRevoked = 19,
+    /// Stream end ledger is before start ledger.
+    StreamEndBeforeStart = 20,
 }
 
 /// A treasury transaction proposal.
@@ -31,9 +58,8 @@ pub struct TxProposal {
     pub approvals: u32,
     pub executed: bool,
     pub cancelled: bool,
-    /// Amount reserved from daily limit (if submitted via submit_with_limit).
-    /// None for regular submit() calls.
-    pub reserved_daily_amount: Option<i128>,
+    /// Amount reserved from daily budget (0 if not submitted via submit_with_limit)
+    pub reserved_amount: i128,
 }
 
 /// A single recipient in a batch transfer.
@@ -95,6 +121,21 @@ pub enum DataKey {
     SpentThisPeriod(Address, u32),
     IsSlashed(Address),
     SlashingHistory(Address),
+    PendingOwner,
+}
+
+/// Storage keys for budget streams.
+#[contracttype]
+pub enum StreamDataKey {
+    Stream(u64),
+    StreamCount,
+    StreamList,
+    ActiveStreams,
+    StreamsByOwner(Address),
+    StreamsByToken(Address),
+    StreamSpends(u64),
+    StreamSpendCount(u64),
+    TotalStreamedByToken(Address),
 }
 
 #[contractclient(name = "TreasuryClient")]
@@ -142,6 +183,45 @@ impl TreasuryContract {
         env.storage()
             .instance()
             .set(&DataKey::DayWindowStart, &env.ledger().timestamp());
+    }
+
+    /// Propose a new owner (governor) for the treasury.
+    /// Current governor must call this.
+    pub fn propose_owner(env: Env, new_owner: Address) {
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized");
+        governor.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::PendingOwner, &new_owner);
+        env.events()
+            .publish((Symbol::new(&env, "OwnershipProposed"),), (new_owner,));
+    }
+
+    /// Accept ownership of the treasury.
+    /// New owner must call this to finalize the transfer.
+    pub fn accept_ownership(env: Env) {
+        let pending: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::PendingOwner)
+            .expect("no pending owner");
+        pending.require_auth();
+        env.storage().instance().set(&DataKey::Governor, &pending);
+        env.storage().instance().remove(&DataKey::PendingOwner);
+        env.events()
+            .publish((Symbol::new(&env, "OwnershipTransferred"),), (pending,));
+    }
+
+    /// Get the current owner (governor) address.
+    pub fn get_owner(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .expect("not initialized")
     }
 
     /// Configure a per-token spending cap for batch transfers.
@@ -196,6 +276,25 @@ impl TreasuryContract {
             .unwrap_or(0i128)
     }
 
+    /// Get the remaining spending budget in the current period for a token.
+    ///
+    /// Returns `spending_cap.max_amount - spent_this_period` for the token's
+    /// configured cap. If no cap has been configured for the token, returns
+    /// `i128::MAX` to signal that spending is effectively unrestricted.
+    pub fn get_spending_remaining(env: Env, token: Address) -> i128 {
+        let cap: Option<SpendingCap> = env
+            .storage()
+            .instance()
+            .get(&DataKey::SpendingCap(token.clone()));
+
+        let Some(cap) = cap else {
+            return i128::MAX;
+        };
+
+        let spent = Self::get_spent_this_period(env, token);
+        cap.max_amount.saturating_sub(spent)
+    }
+
     /// Submit a new transaction for approval.
     /// TODO issue #22: add owner-only guard and event emission.
     pub fn submit(
@@ -206,7 +305,7 @@ impl TreasuryContract {
         data: Bytes,
     ) -> u64 {
         proposer.require_auth();
-        Self::submit_internal(env, proposer, target, fn_name, data)
+        Self::submit_internal(env, proposer, target, fn_name, data, 0)
     }
 
     fn submit_internal(
@@ -215,6 +314,7 @@ impl TreasuryContract {
         target: Address,
         fn_name: Symbol,
         data: Bytes,
+        reserved_amount: i128,
     ) -> u64 {
         Self::require_not_executing(&env);
         Self::require_owner(&env, &proposer);
@@ -232,10 +332,15 @@ impl TreasuryContract {
             approvals: 0,
             executed: false,
             cancelled: false,
-            reserved_daily_amount: None,
+            reserved_amount,
         };
 
         env.storage().persistent().set(&DataKey::Tx(id), &tx);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Tx(id),
+            TX_STORAGE_TTL_LEDGERS,
+            TX_STORAGE_TTL_LEDGERS,
+        );
         env.storage().instance().set(&DataKey::TxCount, &id);
         env.events().publish((symbol_short!("submit"),), id);
 
@@ -264,6 +369,7 @@ impl TreasuryContract {
         env: Env,
         proposer: Address,
         target: Address,
+        fn_name: Symbol,
         data: Bytes,
         amount: i128,
     ) -> u64 {
@@ -318,31 +424,8 @@ impl TreasuryContract {
             .instance()
             .set(&DataKey::DailySpent, &new_daily_total);
 
-        // Create proposal with reserved amount tracking
-        Self::require_not_executing(&env);
-        Self::require_owner(&env, &proposer);
-
-        let count: u64 = env.storage().instance().get(&DataKey::TxCount).unwrap_or(0);
-        let id = count + 1;
-
-        let tx = TxProposal {
-            id,
-            proposer,
-            target,
-            fn_name: symbol_short!("transfer"),
-            data,
-            created_ledger: env.ledger().sequence(),
-            approvals: 0,
-            executed: false,
-            cancelled: false,
-            reserved_daily_amount: Some(amount),
-        };
-
-        env.storage().persistent().set(&DataKey::Tx(id), &tx);
-        env.storage().instance().set(&DataKey::TxCount, &id);
-        env.events().publish((symbol_short!("submit"),), id);
-
-        id
+        // Proceed with standard proposal submission logic, storing the reserved amount.
+        Self::submit_internal(env, proposer, target, fn_name, data, amount)
     }
 
     /// Approve a pending transaction. Executes automatically when threshold reached.
@@ -381,6 +464,11 @@ impl TreasuryContract {
             // State-first: commit executed before making any external call.
             tx.executed = true;
             env.storage().persistent().set(&DataKey::Tx(tx_id), &tx);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Tx(tx_id),
+                TX_STORAGE_TTL_LEDGERS,
+                TX_STORAGE_TTL_LEDGERS,
+            );
 
             // Lock execution path to reject reentrant approve/cancel/submit.
             env.storage().instance().set(&DataKey::IsExecuting, &true);
@@ -390,6 +478,11 @@ impl TreasuryContract {
             env.events().publish((symbol_short!("execute"),), tx_id);
         } else {
             env.storage().persistent().set(&DataKey::Tx(tx_id), &tx);
+            env.storage().persistent().extend_ttl(
+                &DataKey::Tx(tx_id),
+                TX_STORAGE_TTL_LEDGERS,
+                TX_STORAGE_TTL_LEDGERS,
+            );
         }
 
         env.events()
@@ -397,6 +490,8 @@ impl TreasuryContract {
     }
 
     /// Cancel a pending transaction. Owner or governor only.
+    /// Cancel a pending transaction. Owner or governor only.
+    /// If the proposal was submitted via submit_with_limit(), credits back the reserved amount to the daily accumulator.
     pub fn cancel(env: Env, caller: Address, tx_id: u64) {
         Self::require_not_executing(&env);
         caller.require_auth();
@@ -414,20 +509,29 @@ impl TreasuryContract {
             .get(&DataKey::Tx(tx_id))
             .expect("tx not found");
         assert!(!tx.executed && !tx.cancelled, "invalid state");
-        
-        // If this proposal had a reserved daily amount, refund it
-        if let Some(reserved) = tx.reserved_daily_amount {
-            let spent: i128 = env
+
+        // If this proposal reserved budget, credit it back to the accumulator.
+        if tx.reserved_amount > 0 {
+            let current_daily_spent: i128 = env
                 .storage()
                 .instance()
                 .get(&DataKey::DailySpent)
                 .unwrap_or(0i128);
-            let new_spent = spent.saturating_sub(reserved);
-            env.storage().instance().set(&DataKey::DailySpent, &new_spent);
+            let credited_amount = current_daily_spent
+                .checked_sub(tx.reserved_amount)
+                .unwrap_or(0i128);
+            env.storage()
+                .instance()
+                .set(&DataKey::DailySpent, &credited_amount);
         }
-        
+
         tx.cancelled = true;
         env.storage().persistent().set(&DataKey::Tx(tx_id), &tx);
+        env.storage().persistent().extend_ttl(
+            &DataKey::Tx(tx_id),
+            TX_STORAGE_TTL_LEDGERS,
+            TX_STORAGE_TTL_LEDGERS,
+        );
         env.events().publish((symbol_short!("cancel"),), tx_id);
     }
 
@@ -747,6 +851,121 @@ impl TreasuryContract {
         }
         false
     }
+
+    // ── Budget Stream functions ────────────────────────────────────────────
+
+    /// Governance-gated: allocate a new budget stream to a department owner.
+    pub fn create_stream(
+        env: Env,
+        caller: Address,
+        name: Symbol,
+        owner: Address,
+        token: Address,
+        total_allocated: i128,
+        start_ledger: u32,
+        end_ledger: u32,
+        max_single_spend: i128,
+        cooldown_ledgers: u32,
+        proposal_id: u64,
+    ) -> u64 {
+        streams::create_stream(
+            env,
+            caller,
+            name,
+            owner,
+            token,
+            total_allocated,
+            start_ledger,
+            end_ledger,
+            max_single_spend,
+            cooldown_ledgers,
+            proposal_id,
+        )
+    }
+
+    /// Stream owner: spend from an allocated stream.
+    pub fn stream_spend(
+        env: Env,
+        owner: Address,
+        stream_id: u64,
+        recipient: Address,
+        amount: i128,
+        memo: String,
+    ) {
+        streams::stream_spend(env, owner, stream_id, recipient, amount, memo);
+    }
+
+    /// Batch spend from a stream to multiple recipients.
+    pub fn stream_batch_spend(
+        env: Env,
+        owner: Address,
+        stream_id: u64,
+        recipients: Vec<Address>,
+        amounts: Vec<i128>,
+        memo: String,
+    ) {
+        streams::stream_batch_spend(env, owner, stream_id, recipients, amounts, memo);
+    }
+
+    /// Governance-gated: revoke an active stream and return unspent funds to treasury.
+    pub fn revoke_stream(env: Env, caller: Address, stream_id: u64) {
+        streams::revoke_stream(env, caller, stream_id);
+    }
+
+    /// Governance-gated: extend a stream's end_ledger.
+    pub fn extend_stream(env: Env, caller: Address, stream_id: u64, new_end_ledger: u32) {
+        streams::extend_stream(env, caller, stream_id, new_end_ledger);
+    }
+
+    /// Governance-gated: top up an existing stream's allocated budget.
+    pub fn top_up_stream(env: Env, caller: Address, stream_id: u64, additional_amount: i128) {
+        streams::top_up_stream(env, caller, stream_id, additional_amount);
+    }
+
+    /// Query: get a stream by ID.
+    pub fn get_stream(env: Env, stream_id: u64) -> BudgetStream {
+        streams::get_stream(env, stream_id)
+    }
+
+    /// Query: get paginated list of streams.
+    pub fn get_streams(env: Env, offset: u64, limit: u64) -> Vec<BudgetStream> {
+        streams::get_streams(env, offset, limit)
+    }
+
+    /// Query: get streams by owner (paginated).
+    pub fn get_streams_by_owner(
+        env: Env,
+        owner: Address,
+        offset: u64,
+        limit: u64,
+    ) -> Vec<BudgetStream> {
+        streams::get_streams_by_owner(env, owner, offset, limit)
+    }
+
+    /// Query: get spend history for a stream (paginated).
+    pub fn get_stream_spends(
+        env: Env,
+        stream_id: u64,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<StreamSpend> {
+        streams::get_stream_spends(env, stream_id, offset, limit)
+    }
+
+    /// Query: get budget report for a specific stream.
+    pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
+        streams::get_stream_report(env, stream_id)
+    }
+
+    /// Query: get treasury-wide budget summary.
+    pub fn get_budget_summary(env: Env) -> TreasuryBudgetSummary {
+        streams::get_budget_summary(env)
+    }
+
+    /// Query: compute remaining budget for a stream at the current ledger.
+    pub fn get_stream_remaining(env: Env, stream_id: u64) -> i128 {
+        streams::get_stream_remaining(env, stream_id)
+    }
 }
 
 #[cfg(test)]
@@ -918,6 +1137,85 @@ mod tests {
     }
 
     #[test]
+    fn test_spending_cap_enforcement_succeeds_within_cap() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let alice = Address::generate(&env);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&treasury_id, &1000i128);
+
+        client.set_spending_cap(&governor, &token_addr, &500i128, &100u32);
+
+        let mut recipients = Vec::new(&env);
+        recipients.push_back(BatchRecipient {
+            recipient: alice,
+            amount: 500,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients); // should succeed
+    }
+
+    #[test]
+    #[should_panic(expected = "spending cap exceeded")]
+    fn test_spending_cap_enforcement_reverts_when_exceeded() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let alice = Address::generate(&env);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&treasury_id, &1000i128);
+
+        client.set_spending_cap(&governor, &token_addr, &500i128, &100u32);
+
+        // First spend 400
+        let mut recipients1 = Vec::new(&env);
+        recipients1.push_back(BatchRecipient {
+            recipient: alice.clone(),
+            amount: 400,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients1);
+
+        // Then spend 101, which exceeds the remaining 100
+        let mut recipients2 = Vec::new(&env);
+        recipients2.push_back(BatchRecipient {
+            recipient: alice,
+            amount: 101,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients2); // should panic
+    }
+
+    #[test]
+    fn test_spending_cap_enforcement_resets_after_period() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let alice = Address::generate(&env);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&treasury_id, &1000i128);
+
+        let period_ledgers = 100u32;
+        client.set_spending_cap(&governor, &token_addr, &500i128, &period_ledgers);
+
+        // First spend max cap
+        let mut recipients = Vec::new(&env);
+        recipients.push_back(BatchRecipient {
+            recipient: alice.clone(),
+            amount: 500,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients);
+
+        // Advance ledger beyond the period
+        env.ledger()
+            .with_mut(|l| l.sequence_number += period_ledgers + 1);
+
+        // Second spend max cap should succeed because period reset
+        client.batch_transfer(&governor, &token_addr, &recipients); // should succeed
+    }
+
+    #[test]
     fn test_batch_transfer_deterministic_hash() {
         let env = Env::default();
         env.mock_all_auths();
@@ -1051,7 +1349,13 @@ mod tests {
 
         // Submit a proposal at the limit.
         let data = Bytes::new(&env);
-        let proposal_id = client.submit_with_limit(&owner, &target, &data, &max_amount);
+        let proposal_id = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &max_amount,
+        );
         assert_eq!(proposal_id, 1);
     }
 
@@ -1089,7 +1393,13 @@ mod tests {
         });
 
         let data = Bytes::new(&env);
-        let proposal_id = client.submit_with_limit(&owner, &target, &data, &proposed_amount);
+        let proposal_id = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposed_amount,
+        );
         assert_eq!(proposal_id, 1);
     }
 
@@ -1133,15 +1443,33 @@ mod tests {
         let data = Bytes::new(&env);
 
         // First proposal: 800 (daily total = 800)
-        let id1 = client.submit_with_limit(&owner, &target, &data, &proposal_amount);
+        let id1 = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposal_amount,
+        );
         assert_eq!(id1, 1);
 
         // Second proposal: 800 (daily total = 1600)
-        let id2 = client.submit_with_limit(&owner, &target, &data, &proposal_amount);
+        let id2 = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposal_amount,
+        );
         assert_eq!(id2, 2);
 
         // Third proposal: 800 (daily total = 2400)
-        let id3 = client.submit_with_limit(&owner, &target, &data, &proposal_amount);
+        let id3 = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposal_amount,
+        );
         assert_eq!(id3, 3);
 
         // Verify accumulator is at 2400.
@@ -1208,7 +1536,13 @@ mod tests {
             .with_mut(|l| l.timestamp = initial_time + 86401);
 
         // Now submit: window has reset, so accumulator is 0, and 1 token should fit.
-        let proposal_id = client.submit_with_limit(&owner, &target, &data, &test_amount);
+        let proposal_id = client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &test_amount,
+        );
         let proposal_count_after = client.tx_count();
 
         assert_eq!(proposal_count_after, proposal_count_before + 1);
@@ -1253,7 +1587,13 @@ mod tests {
         let tx_count_before = client.tx_count();
 
         // This must panic.
-        client.submit_with_limit(&owner, &target, &data, &proposed_amount);
+        client.submit_with_limit(
+            &owner,
+            &target,
+            &symbol_short!("transfer"),
+            &data,
+            &proposed_amount,
+        );
 
         // Verify state is unchanged.
         let tx_count_after = client.tx_count();
@@ -1304,7 +1644,7 @@ mod tests {
 
         // Try to submit 200 when only 100 is available in the daily budget.
         // This should panic and leave state unchanged.
-        client.submit_with_limit(&owner, &target, &data, &200i128);
+        client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &200i128);
 
         let tx_count_after = client.tx_count();
         assert_eq!(tx_count_after, tx_count_before);
@@ -1342,7 +1682,8 @@ mod tests {
             env.storage().instance().set(&DataKey::DailySpent, &0i128);
         });
 
-        let id = client.submit_with_limit(&owner, &target, &data, &0i128);
+        let id =
+            client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &0i128);
         assert_eq!(id, 1);
 
         // Verify accumulator is still 0.
@@ -1390,7 +1731,8 @@ mod tests {
         });
 
         // First transfer at the limit succeeds.
-        let id1 = client.submit_with_limit(&owner, &target, &data, &limit);
+        let id1 =
+            client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &limit);
         assert_eq!(id1, 1);
 
         // Accumulator is now at `limit`.
@@ -1442,7 +1784,8 @@ mod tests {
         });
 
         // Submit a transfer of 50 — accumulator is i128::MAX - 50, which is valid.
-        let id = client.submit_with_limit(&owner, &target, &data, &50i128);
+        let id =
+            client.submit_with_limit(&owner, &target, &symbol_short!("transfer"), &data, &50i128);
         assert_eq!(id, 1);
 
         let daily_spent: i128 = env.as_contract(&treasury_id, || {
@@ -1551,8 +1894,76 @@ mod tests {
         owners.push_back(owner.clone());
         client.initialize(&owners, &1u32, &governor);
 
-        // Attempting to slash the only owner should fail
-        let reason = Symbol::new(&env, "malicious");
-        client.slash_signer(&governor, &owner, &reason);
+        // Attempting to slash the only remaining owner must panic.
+        client.slash_signer(&governor, &owner, &Symbol::new(&env, "bad"));
+    }
+
+    #[test]
+    fn test_get_spending_remaining_no_cap_returns_max() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, _governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let _ = treasury_id;
+
+        // No spending cap configured for this token.
+        let remaining = client.get_spending_remaining(&token_addr);
+        assert_eq!(remaining, i128::MAX);
+    }
+
+    #[test]
+    fn test_get_spending_remaining_reflects_cap_and_usage() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let alice = Address::generate(&env);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&treasury_id, &1000i128);
+
+        client.set_spending_cap(&governor, &token_addr, &500i128, &100u32);
+
+        // No spend yet: full cap is remaining.
+        assert_eq!(client.get_spending_remaining(&token_addr), 500i128);
+
+        let mut recipients = Vec::new(&env);
+        recipients.push_back(BatchRecipient {
+            recipient: alice,
+            amount: 300,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients);
+
+        // 300 spent of a 500 cap -> 200 remaining.
+        assert_eq!(client.get_spending_remaining(&token_addr), 200i128);
+    }
+
+    #[test]
+    fn test_get_spending_remaining_resets_after_period() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let (treasury_id, token_addr, governor) = setup(&env);
+        let client = TreasuryContractClient::new(&env, &treasury_id);
+        let alice = Address::generate(&env);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+        sac_client.mint(&treasury_id, &1000i128);
+
+        let period_ledgers = 100u32;
+        client.set_spending_cap(&governor, &token_addr, &500i128, &period_ledgers);
+
+        let mut recipients = Vec::new(&env);
+        recipients.push_back(BatchRecipient {
+            recipient: alice,
+            amount: 500,
+        });
+        client.batch_transfer(&governor, &token_addr, &recipients);
+        assert_eq!(client.get_spending_remaining(&token_addr), 0i128);
+
+        // Advance past the period — budget should refresh.
+        env.ledger()
+            .with_mut(|l| l.sequence_number += period_ledgers + 1);
+        assert_eq!(client.get_spending_remaining(&token_addr), 500i128);
     }
 }
+
+#[cfg(test)]
+mod stream_tests;

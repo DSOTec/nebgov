@@ -6,11 +6,44 @@ export type WsEventType =
   | "vote_cast"
   | "proposal_queued"
   | "proposal_executed"
+  | "proposal_cancelled"
   | "delegate_changed"
   | "config_updated"
   | "governor_upgraded"
   | "wrapper_deposit"
-  | "wrapper_withdrawal";
+  | "wrapper_withdrawal"
+  | "liquidity_added"
+  | "liquidity_removed"
+  | "swap"
+  | "pool_fee_updated"
+  | "draft_created"
+  | "co_sponsored"
+  | "co_sponsorship_withdrawn"
+  | "draft_finalized"
+  | "draft_cancelled"
+  | "draft_expired"
+  | "delegation_registered"
+  | "delegation_revoked"
+  | "delegation_depth_limit_updated"
+  | "analytics_snapshot_taken"
+  | "reputation_updated"
+  | "effective_threshold_changed"
+  | "timelock_operation_scheduled"
+  | "timelock_operation_executed"
+  | "timelock_operation_cancelled"
+  | "timelock_batch_operation_scheduled"
+  | "timelock_batch_operation_executed"
+  | "timelock_batch_operation_cancelled"
+  | "timelock_min_delay_updated"
+  | "timelock_dependency_dag_validated"
+  | "timelock_cycle_detected"
+  | "timelock_partial_batch_started"
+  | "timelock_partial_op_succeeded"
+  | "timelock_partial_op_failed"
+  | "timelock_batch_recovery_entered"
+  | "timelock_failed_op_retried"
+  | "timelock_failed_op_skipped"
+  | "timelock_batch_fully_complete";
 
 export interface WsEvent {
   type: WsEventType;
@@ -20,14 +53,32 @@ export interface WsEvent {
 interface SubscriptionFilter {
   types?: WsEventType[];
   proposalId?: string;
+  state?: string;
 }
 
 interface SubscribedClient {
   socket: WebSocket;
   filter: SubscriptionFilter;
+  missedPings: number;
 }
 
+const HEARTBEAT_INTERVAL_MS = 25_000;
+const MAX_MISSED_PINGS = 3;
+
 const clients = new Set<SubscribedClient>();
+
+/**
+ * Proposal lifecycle state implied by each event type. Succeeded/Defeated/Expired
+ * are derived purely from ledger time rather than an on-chain event, so they have
+ * no entry here and can't be matched by a `state` filter.
+ */
+const EVENT_STATE: Partial<Record<WsEventType, string>> = {
+  proposal_created: "Pending",
+  vote_cast: "Active",
+  proposal_queued: "Queued",
+  proposal_executed: "Executed",
+  proposal_cancelled: "Cancelled",
+};
 
 function matchesFilter(event: WsEvent, filter: SubscriptionFilter): boolean {
   if (filter.types && filter.types.length > 0) {
@@ -36,6 +87,9 @@ function matchesFilter(event: WsEvent, filter: SubscriptionFilter): boolean {
   if (filter.proposalId !== undefined) {
     const pid = (event.data as any).proposal_id ?? (event.data as any).id;
     if (String(pid) !== filter.proposalId) return false;
+  }
+  if (filter.state !== undefined) {
+    if (EVENT_STATE[event.type] !== filter.state) return false;
   }
   return true;
 }
@@ -56,7 +110,7 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
   const wss = new WebSocketServer({ server: httpServer, path: "/events" });
 
   wss.on("connection", (socket: WebSocket, _req: IncomingMessage) => {
-    const entry: SubscribedClient = { socket, filter: {} };
+    const entry: SubscribedClient = { socket, filter: {}, missedPings: 0 };
     clients.add(entry);
 
     socket.on("message", (raw) => {
@@ -64,13 +118,27 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
         const msg = JSON.parse(raw.toString()) as {
           types?: WsEventType[];
           proposalId?: string;
+          subscribe?: "proposal" | "state";
+          proposal_id?: string | number;
+          state?: string;
         };
         if (Array.isArray(msg.types)) entry.filter.types = msg.types;
         if (typeof msg.proposalId === "string")
           entry.filter.proposalId = msg.proposalId;
+
+        // { subscribe: "proposal", proposal_id: 42 } / { subscribe: "state", state: "Active" }
+        if (msg.subscribe === "proposal" && msg.proposal_id !== undefined) {
+          entry.filter.proposalId = String(msg.proposal_id);
+        } else if (msg.subscribe === "state" && typeof msg.state === "string") {
+          entry.filter.state = msg.state;
+        }
       } catch {
         /* ignore malformed filter messages */
       }
+    });
+
+    socket.on("pong", () => {
+      entry.missedPings = 0;
     });
 
     socket.on("close", () => {
@@ -80,6 +148,25 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
     socket.on("error", () => {
       clients.delete(entry);
     });
+  });
+
+  const heartbeat = setInterval(() => {
+    for (const client of clients) {
+      if (client.missedPings >= MAX_MISSED_PINGS) {
+        client.socket.terminate();
+        clients.delete(client);
+        continue;
+      }
+      if (client.socket.readyState === WebSocket.OPEN) {
+        client.missedPings += 1;
+        client.socket.ping();
+      }
+    }
+  }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref();
+
+  wss.on("close", () => {
+    clearInterval(heartbeat);
   });
 
   return wss;

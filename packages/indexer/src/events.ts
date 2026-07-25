@@ -15,6 +15,7 @@ const TOPIC_MAP: Record<string, string> = {
   vote_rsn: "VoteCastWithReason",
   queued: "ProposalQueued",
   executed: "ProposalExecuted",
+  cancelled: "ProposalCancelled",
   delegate: "DelegateChanged",
   del_chsh: "DelegateChanged",
   config_updated: "ConfigUpdated",
@@ -25,6 +26,7 @@ const TOPIC_MAP: Record<string, string> = {
   VoteCastWithReason: "VoteCastWithReason",
   ProposalQueued: "ProposalQueued",
   ProposalExecuted: "ProposalExecuted",
+  ProposalCancelled: "ProposalCancelled",
   DelegateChanged: "DelegateChanged",
   ConfigUpdated: "ConfigUpdated",
   GovernorUpgraded: "GovernorUpgraded",
@@ -37,6 +39,10 @@ export interface IndexerConfig {
   governorAddress: string;
   wrapperAddress?: string;
   treasuryAddress?: string;
+  liquidityAddress?: string;
+  coSponsorshipAddress?: string;
+  tokenVotesAddress?: string;
+  timelockAddress?: string;
   pollIntervalMs: number;
 }
 
@@ -64,6 +70,10 @@ export async function processEvents(
     const contractIds = [config.governorAddress].filter(Boolean);
     if (config.wrapperAddress) contractIds.push(config.wrapperAddress);
     if (config.treasuryAddress) contractIds.push(config.treasuryAddress);
+    if (config.liquidityAddress) contractIds.push(config.liquidityAddress);
+    if (config.coSponsorshipAddress) contractIds.push(config.coSponsorshipAddress);
+    if (config.tokenVotesAddress) contractIds.push(config.tokenVotesAddress);
+    if (config.timelockAddress) contractIds.push(config.timelockAddress);
 
     const response = await server.getEvents({
       startLedger,
@@ -95,6 +105,32 @@ export async function processEvents(
         config.treasuryAddress &&
         contractId === config.treasuryAddress
       );
+      const isLiquidity = !!(
+        contractId &&
+        config.liquidityAddress &&
+        contractId === config.liquidityAddress
+      );
+      const isCoSponsorship = !!(
+        contractId &&
+        config.coSponsorshipAddress &&
+        contractId === config.coSponsorshipAddress
+      );
+      const isTokenVotes = !!(
+        contractId &&
+        config.tokenVotesAddress &&
+        contractId === config.tokenVotesAddress
+      );
+      const isTimelock = !!(
+        contractId &&
+        config.timelockAddress &&
+        contractId === config.timelockAddress
+      );
+
+      try {
+        await logToEventLog(eventType, ledger, contractId, event, topics);
+      } catch (err) {
+        console.error(`Failed to write event_log entry for ${eventType}:`, err);
+      }
 
       try {
         if (isTreasury) {
@@ -117,6 +153,116 @@ export async function processEvents(
               break;
             case "DelegateChanged":
               await handleDelegateChanged(event, topics);
+              break;
+            default:
+              break;
+          }
+        } else if (isLiquidity) {
+          switch (eventType) {
+            case "LiquidityAdded":
+              await handleLiquidityAdded(event, topics);
+              break;
+            case "LiquidityRemoved":
+              await handleLiquidityRemoved(event, topics);
+              break;
+            case "Swap":
+              await handleSwap(event, topics);
+              break;
+            case "PoolFeeUpdated":
+              await handlePoolFeeUpdated(event, topics);
+              break;
+            default:
+              break;
+          }
+        } else if (isCoSponsorship) {
+          switch (eventType) {
+            case "DraftCreated":
+              await handleDraftCreated(event, topics);
+              break;
+            case "CoSponsored":
+              await handleCoSponsored(event, topics);
+              break;
+            case "CoSponsorshipWithdrawn":
+              await handleCoSponsorshipWithdrawn(event, topics);
+              break;
+            case "DraftFinalized":
+              await handleDraftFinalized(event);
+              break;
+            case "DraftCancelled":
+              await handleDraftCancelled(event);
+              break;
+            case "DraftExpired":
+              await handleDraftExpired(event);
+              break;
+            default:
+              break;
+          }
+        } else if (isTokenVotes) {
+          switch (eventType) {
+            case "DelegateChanged":
+              await handleDelegateChanged(event, topics);
+              break;
+            case "DelegationRegistered":
+              await handleDelegationRegistered(event, topics);
+              break;
+            case "DelegationRevoked":
+              await handleDelegationRevoked(event, topics);
+              break;
+            case "DelegationDepthLimitUpdated":
+              await handleDelegationDepthLimitUpdated(event, topics);
+              break;
+            default:
+              break;
+          }
+        } else if (isTimelock) {
+          switch (eventType) {
+            case "OperationScheduled":
+              await handleTimelockOperationScheduled(event, topics);
+              break;
+            case "OperationExecuted":
+              await handleTimelockOperationExecuted(event, topics);
+              break;
+            case "OperationCancelled":
+              await handleTimelockOperationCancelled(event, topics);
+              break;
+            case "BatchOperationScheduled":
+              await handleTimelockBatchOperationScheduled(event, topics);
+              break;
+            case "BatchOperationExecuted":
+              await handleTimelockBatchOperationExecuted(event, topics);
+              break;
+            case "BatchOperationCancelled":
+              await handleTimelockBatchOperationCancelled(event, topics);
+              break;
+            case "MinDelayUpdated":
+              await handleTimelockMinDelayUpdated(event, topics);
+              break;
+            case "DependencyDagValidated":
+              await handleTimelockDependencyDagValidated(event, topics);
+              break;
+            case "CycleDetected":
+              await handleTimelockCycleDetected(event, topics);
+              break;
+            case "PartialBatchStarted":
+              await handleTimelockPartialBatchStarted(event, topics);
+              break;
+            case "PartialOpSucceeded":
+              await handleTimelockPartialOpSucceeded(event, topics);
+              break;
+            case "PartialOpFailed":
+              await handleTimelockPartialOpFailed(event, topics);
+              break;
+            case "BatchRecoveryEntered":
+              await handleTimelockBatchRecoveryEntered(event, topics);
+              break;
+            case "FailedOpRetried":
+              await handleTimelockFailedOpRetried(event, topics);
+              break;
+            case "FailedOpSkipped":
+              await handleTimelockFailedOpSkipped(event, topics);
+              break;
+            case "BatchFullyComplete":
+              await handleTimelockBatchFullyComplete(event, topics);
               break;
             default:
               break;
@@ -168,21 +314,59 @@ export async function processEvents(
   return latestLedger;
 }
 
+/**
+ * Persists every parsed governance event to `event_log`, independent of
+ * whether a dedicated handler exists for its type. This is the durable feed
+ * the backend's notification engine polls to evaluate user-defined rules
+ * (issue #774) without needing its own RPC subscription.
+ */
+async function logToEventLog(
+  eventType: string,
+  ledger: number,
+  contractAddress: string | undefined,
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const payload = {
+    topics,
+    value: scValToNative(event.value),
+    tx_hash: event.txHash,
+  };
+
+  await pool.query(
+    `INSERT INTO event_log (event_type, ledger, transaction_hash, contract_address, payload)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [eventType, ledger, event.txHash ?? null, contractAddress ?? "", stringifyJson(payload)],
+  );
+}
+
 async function handleProposalCreated(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
 ): Promise<void> {
-  const proposer = topics[1] as string;
-  const data = scValToNative(event.value) as unknown[];
-  const [id, description, , , , startLedger, endLedger] = data as [
-    bigint,
-    string,
-    unknown,
-    unknown,
-    unknown,
-    number,
-    number,
-  ];
+  const raw = scValToNative(event.value);
+  let id: bigint;
+  let proposer: string;
+  let description: string;
+  let startLedger: number;
+  let endLedger: number;
+
+  if (Array.isArray(raw)) {
+    // Legacy tuple format from raw env.events().publish()
+    id = raw[0] as bigint;
+    proposer = topics[1] as string;
+    description = String(raw[1] ?? "");
+    startLedger = raw[5] as number;
+    endLedger = raw[6] as number;
+  } else {
+    // Struct format from emit_proposal_created()
+    const data = raw as Record<string, unknown>;
+    id = data.proposal_id as bigint;
+    proposer = String(data.proposer ?? "");
+    description = String(data.description ?? "");
+    startLedger = Number(data.start_ledger);
+    endLedger = Number(data.end_ledger);
+  }
 
   invalidatePattern("proposals:");
   await pool.query(
@@ -281,6 +465,121 @@ async function handleDelegateChanged(
   });
 }
 
+async function handleDelegationRegistered(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+  const data = scValToNative(event.value) as [string, bigint, number];
+  const [delegatee, power, chainDepth] = data;
+
+  await pool.query(
+    `INSERT INTO delegation_entries
+       (delegator_address, delegatee_address, delegated_at_ledger, power_at_delegation, chain_depth, active)
+     VALUES ($1, $2, $3, $4, $5, TRUE)`,
+    [delegator, delegatee, event.ledger, String(power), chainDepth],
+  );
+  invalidatePattern("delegates:");
+  invalidate(`profile:${delegator}`, `profile:${delegatee}`);
+  broadcast({
+    type: "delegation_registered",
+    data: { delegator, delegatee, power: String(power), chain_depth: chainDepth, ledger: event.ledger },
+  });
+}
+
+async function handleDelegationRevoked(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+  const data = scValToNative(event.value) as [string, number];
+  const [previousDelegatee, atLedger] = data;
+
+  await pool.query(
+    `UPDATE delegation_entries
+     SET active = FALSE, revoked_at_ledger = $3
+     WHERE delegator_address = $1 AND delegatee_address = $2 AND active = TRUE`,
+    [delegator, previousDelegatee, atLedger],
+  );
+  invalidatePattern("delegates:");
+  invalidate(`profile:${delegator}`, `profile:${previousDelegatee}`);
+  broadcast({
+    type: "delegation_revoked",
+    data: { delegator, previous_delegatee: previousDelegatee, ledger: atLedger },
+  });
+}
+
+async function handleDelegationDepthLimitUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as [number, number];
+  const [oldLimit, newLimit] = data;
+
+  broadcast({
+    type: "delegation_depth_limit_updated",
+    data: { old_limit: oldLimit, new_limit: newLimit, ledger: event.ledger },
+  });
+}
+
+// --- Proposer reputation events (#771) ---
+//
+// Backed by the `proposer_reputation` / `reputation_score_history` tables.
+// `proposer_reputation` is a running snapshot upserted on every
+// ReputationUpdated event, tracking just the score/ledger fields the event
+// itself carries. Per-outcome breakdown counts (succeeded/executed/
+// defeated/...) aren't tracked on-chain or here either — they're cheap to
+// derive client-side from `reputation_score_history`'s `reason` column
+// (see the profile page's outcome tally).
+
+async function handleReputationUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, number, number, string];
+  const [, oldScore, newScore, reason] = data;
+
+  await pool.query(
+    `INSERT INTO proposer_reputation (proposer_address, reputation_score, last_updated_ledger)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (proposer_address) DO UPDATE
+       SET reputation_score = $2, last_updated_ledger = $3, updated_at = NOW()`,
+    [proposer, newScore, event.ledger],
+  );
+  await pool.query(
+    `INSERT INTO reputation_score_history (proposer_address, ledger, score, change, reason)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [proposer, event.ledger, newScore, newScore - oldScore, reason],
+  );
+  invalidate(`reputation:${proposer}`);
+  invalidatePattern("reputation:leaderboard");
+  broadcast({
+    type: "reputation_updated",
+    data: { proposer, old_score: oldScore, new_score: newScore, reason, ledger: event.ledger },
+  });
+}
+
+async function handleEffectiveThresholdChanged(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as [string, bigint, bigint];
+  const [, oldThreshold, newThreshold] = data;
+
+  broadcast({
+    type: "effective_threshold_changed",
+    data: {
+      proposer,
+      old_threshold: String(oldThreshold),
+      new_threshold: String(newThreshold),
+      ledger: event.ledger,
+    },
+  });
+}
+
+
 async function handleWrapperDeposit(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
@@ -353,6 +652,18 @@ interface GovernorSettings {
   proposal_period_duration?: number;
 }
 
+function stringifyJson(value: unknown): string {
+  return JSON.stringify(value, (_key, current) =>
+    typeof current === "bigint" ? current.toString() : current,
+  );
+}
+
+function parseLedgerClosedAt(value: unknown): Date | null {
+  if (typeof value !== "string" || value.length === 0) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function toNumber(value: unknown): number | null {
   if (typeof value === "number") return value;
   if (typeof value === "bigint") return Number(value);
@@ -414,26 +725,42 @@ function toGovernorSettings(value: unknown): GovernorSettings | null {
 
 async function handleConfigUpdated(
   event: SorobanRpc.Api.EventResponse,
-  topics: unknown[],
+  _topics: unknown[],
 ): Promise<void> {
   const data = scValToNative(event.value) as Record<string, unknown>;
+  const oldSettings =
+    data.old_settings === undefined || data.old_settings === null
+      ? null
+      : toGovernorSettings(data.old_settings);
   const newSettings = toGovernorSettings(data.new_settings);
+
+  if ((data.old_settings !== undefined && data.old_settings !== null) && !oldSettings) {
+    console.error("Failed to parse old_settings from ConfigUpdated event");
+    return;
+  }
 
   if (!newSettings) {
     console.error("Failed to parse new_settings from ConfigUpdated event");
     return;
   }
 
+  const ledgerClosedAt = parseLedgerClosedAt((event as any).ledgerClosedAt);
+
   await pool.query(
-    `INSERT INTO config_updates (ledger, new_settings)
-     VALUES ($1, $2)`,
-    [event.ledger, JSON.stringify(newSettings)],
+    `INSERT INTO config_updates (ledger, old_settings, new_settings, ledger_closed_at)
+     VALUES ($1, $2, $3, $4)`,
+    [
+      event.ledger,
+      oldSettings ? stringifyJson(oldSettings) : null,
+      stringifyJson(newSettings),
+      ledgerClosedAt,
+    ],
   );
 }
 
 async function handleGovernorUpgraded(
   event: SorobanRpc.Api.EventResponse,
-  topics: unknown[],
+  _topics: unknown[],
 ): Promise<void> {
   const data = scValToNative(event.value) as Record<string, unknown>;
   const newHash = data.new_hash;

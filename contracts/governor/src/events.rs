@@ -13,6 +13,9 @@ pub const PROPOSAL_CANCELLED_TOPIC: &str = "ProposalCancelled";
 pub const PROPOSAL_EXPIRED_TOPIC: &str = "ProposalExpired";
 pub const GOVERNOR_UPGRADED_TOPIC: &str = "GovernorUpgraded";
 pub const CONFIG_UPDATED_TOPIC: &str = "ConfigUpdated";
+pub const GUARDIAN_CHANGED_TOPIC: &str = "GuardianChanged";
+pub const REPUTATION_UPDATED_TOPIC: &str = "ReputationUpdated";
+pub const EFFECTIVE_THRESHOLD_CHANGED_TOPIC: &str = "EffectiveThresholdChanged";
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
@@ -20,6 +23,8 @@ pub struct ProposalCreatedEvent {
     pub proposal_id: u64,
     pub proposer: Address,
     pub description: String,
+    pub description_hash: BytesN<32>,
+    pub metadata_uri: String,
     pub targets: Vec<Address>,
     pub fn_names: Vec<Symbol>,
     pub calldatas: Vec<Bytes>,
@@ -91,6 +96,13 @@ pub struct ConfigUpdatedEvent {
 
 #[derive(Clone)]
 #[soroban_sdk::contracttype]
+pub struct GuardianChangedEvent {
+    pub old_guardian: Address,
+    pub new_guardian: Address,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
 pub struct PauseEvent {
     pub pauser: Address,
     pub ledger: u32,
@@ -120,6 +132,8 @@ pub fn emit_proposal_created(env: &Env, proposal: &Proposal) {
             proposal_id: proposal.id,
             proposer: proposal.proposer.clone(),
             description: proposal.description.clone(),
+            description_hash: proposal.description_hash.clone(),
+            metadata_uri: proposal.metadata_uri.clone(),
             targets: proposal.targets.clone(),
             fn_names: proposal.fn_names.clone(),
             calldatas: proposal.calldatas.clone(),
@@ -232,6 +246,16 @@ pub fn emit_config_updated(
     );
 }
 
+pub fn emit_guardian_changed(env: &Env, old_guardian: &Address, new_guardian: &Address) {
+    env.events().publish(
+        (Symbol::new(env, GUARDIAN_CHANGED_TOPIC),),
+        GuardianChangedEvent {
+            old_guardian: old_guardian.clone(),
+            new_guardian: new_guardian.clone(),
+        },
+    );
+}
+
 pub fn emit_paused(env: &Env, pauser: &Address) {
     env.events().publish(
         (Symbol::new(env, PAUSED_TOPIC), pauser.clone()),
@@ -255,5 +279,59 @@ pub fn emit_pauser_changed(env: &Env, old_pauser: &Address, new_pauser: &Address
     env.events().publish(
         (Symbol::new(env, "PauserChanged"),),
         (old_pauser.clone(), new_pauser.clone()),
+    );
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct ReputationUpdatedEvent {
+    pub proposer: Address,
+    pub old_score: i32,
+    pub new_score: i32,
+    pub reason: Symbol,
+}
+
+#[derive(Clone)]
+#[soroban_sdk::contracttype]
+pub struct EffectiveThresholdChangedEvent {
+    pub proposer: Address,
+    pub old_threshold: i128,
+    pub new_threshold: i128,
+}
+
+pub fn emit_reputation_updated(
+    env: &Env,
+    proposer: &Address,
+    old_score: i32,
+    new_score: i32,
+    reason: &Symbol,
+) {
+    env.events().publish(
+        (Symbol::new(env, REPUTATION_UPDATED_TOPIC), proposer.clone()),
+        ReputationUpdatedEvent {
+            proposer: proposer.clone(),
+            old_score,
+            new_score,
+            reason: reason.clone(),
+        },
+    );
+}
+
+pub fn emit_effective_threshold_changed(
+    env: &Env,
+    proposer: &Address,
+    old_threshold: i128,
+    new_threshold: i128,
+) {
+    env.events().publish(
+        (
+            Symbol::new(env, EFFECTIVE_THRESHOLD_CHANGED_TOPIC),
+            proposer.clone(),
+        ),
+        EffectiveThresholdChangedEvent {
+            proposer: proposer.clone(),
+            old_threshold,
+            new_threshold,
+        },
     );
 }

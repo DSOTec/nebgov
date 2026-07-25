@@ -1,14 +1,20 @@
+"use client";
+
+import { useGovernorConfig } from "@/hooks/useGovernorConfig";
+
 interface Props {
   votesFor: bigint;
   votesAgainst: bigint;
   votesAbstain: bigint;
 }
 
-function fmt(n: bigint) {
-  return (Number(n) / 1e7).toLocaleString();
-}
-
 export function VoteBar({ votesFor, votesAgainst, votesAbstain }: Props) {
+  const { divisor } = useGovernorConfig();
+  
+  const fmt = (n: bigint) => {
+    return (Number(n) / divisor).toLocaleString();
+  };
+
   const total = votesFor + votesAgainst + votesAbstain;
   const pctFor = total > 0n ? Number((votesFor * 10000n) / total) / 100 : 0;
   const pctAgainst = total > 0n ? Number((votesAgainst * 10000n) / total) / 100 : 0;

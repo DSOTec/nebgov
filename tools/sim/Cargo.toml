@@ -1,0 +1,20 @@
+[package]
+name = "nebgov-sim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "nebgov-sim"
+path = "src/main.rs"
+
+[dependencies]
+soroban-sdk = { version = "22.0.0", features = ["testutils"] }
+sorogov-governor = { path = "../../contracts/governor" }
+sorogov-timelock = { path = "../../contracts/timelock" }
+sorogov-token-votes = { path = "../../contracts/token-votes" }
+sorogov-treasury = { path = "../../contracts/treasury" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rand = "0.8"
+clap = { version = "4", features = ["derive"] }

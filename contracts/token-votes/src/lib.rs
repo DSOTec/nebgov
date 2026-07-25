@@ -1,11 +1,26 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Symbol,
+    contract, contractimpl, contracttype, symbol_short, token, Address, BytesN, Env, Symbol, Vec,
 };
+
+mod delegation_registry;
+mod delegation_sig;
+mod error;
+mod events;
+
+pub use delegation_registry::{DelegateProfile, DelegationEntry, DelegationHistoryEntry, DelegatorInfo};
+pub use delegation_sig::DelegationPermit;
+pub use error::TokenVotesError;
+
+#[cfg(test)]
+mod delegation_sig_tests;
 
 #[cfg(test)]
 mod load_tests;
+
+#[cfg(test)]
+mod delegation_registry_tests;
 
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
@@ -33,9 +48,26 @@ pub enum DataKey {
     Nonce(Address),            // owner -> nonce for delegate_by_sig
     CheckpointRetentionPeriod, // u32: number of ledgers to retain checkpoints
     AccountList,               // Vec<Address>: all accounts that have checkpoints
+    IsInAccountList(Address),  // bool: marker for O(1) AccountList membership check
     DelegatorRecord(Address),  // delegator -> DelegatorRecord
     TimeWeightEnabled,         // bool
     TimeWeightScale,           // u32
+    DomainSeparator,                  // BytesN<32>: cached at init
+    UsedNonce(Address, u64),          // (delegator, nonce) -> bool: replay protection
+    DelegationPermitExpiry(Address),  // delegator -> u32: latest permit expiry
+    RelayerWhitelist(Address),        // relayer -> bool: optional whitelist
+    RelayerWhitelistEnabled,          // bool
+
+    // --- Delegation registry (issue #769) ---
+    DelegationRecord(Address, Address), // (delegator, delegatee) -> DelegationEntry
+    DelegationHistory(Address),         // delegator -> Vec<DelegationHistoryEntry>
+    ReceivedDelegations(Address),       // delegatee -> Vec<Address> (all current delegators)
+    DelegationDepthLimit,               // u32: max chain depth (default 1, upgradeable)
+    TotalDelegatorsFor(Address),        // delegatee -> u32: count of current delegators
+    DelegationChain(Address),           // delegator -> Vec<Address>: full chain from delegator to tip
+    ChainDepth(Address),                // delegator -> u32: depth of delegation chain from this delegator
+    AllDelegators,                      // Vec<Address>: every address that has ever registered a delegation
+    IsKnownDelegator(Address),          // bool marker for O(1) AllDelegators membership check
 }
 
 #[contract]
@@ -53,9 +85,18 @@ impl TokenVotesContract {
             .instance()
             .set(&DataKey::CheckpointRetentionPeriod, &100800u32);
         // Default time-weighting to disabled
-        env.storage().instance().set(&DataKey::TimeWeightEnabled, &false);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimeWeightEnabled, &false);
         // Default scale to 4,204,800 (~1 year at 7.5s per ledger)
-        env.storage().instance().set(&DataKey::TimeWeightScale, &4204800u32);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimeWeightScale, &4204800u32);
+        // Relayer whitelist is opt-in.
+        env.storage()
+            .instance()
+            .set(&DataKey::RelayerWhitelistEnabled, &false);
+        delegation_sig::init_domain_separator(&env);
     }
 
     /// Delegate voting power from caller to delegatee.
@@ -68,6 +109,34 @@ impl TokenVotesContract {
     pub fn delegate(env: Env, delegator: Address, delegatee: Address) {
         delegator.require_auth();
         Self::apply_delegation(&env, delegator, delegatee);
+    }
+
+    /// Bulk-delegate voting power to multiple delegatees in a single transaction.
+    ///
+    /// In a MultiToken governance setup there are multiple token-votes contracts,
+    /// one per token type.  A token holder can delegate their voting power for
+    /// all of them with a single on-chain auth signature by calling
+    /// `delegate_batch` on each contract within the same transaction.
+    ///
+    /// Each element of `delegatees` is applied in order via [`apply_delegation`].
+    /// Because each call overwrites the previous delegate, the *last* entry in
+    /// the list is the effective delegatee for this contract after the batch
+    /// completes.  When coordinating across multiple token-votes contracts, the
+    /// governor's multi-token strategy passes a single-element list whose sole
+    /// entry is the delegatee for that particular token.
+    ///
+    /// A single auth on `delegator` covers all delegations in the batch — this
+    /// is the key UX improvement over N separate `delegate()` calls.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `delegatees` is empty.
+    pub fn delegate_batch(env: Env, delegator: Address, delegatees: Vec<Address>) {
+        assert!(!delegatees.is_empty(), "delegatees must not be empty");
+        delegator.require_auth();
+        for delegatee in delegatees.iter() {
+            Self::apply_delegation(&env, delegator.clone(), delegatee);
+        }
     }
 
     /// Explicitly revoke delegation and move voting power back to self.
@@ -124,6 +193,16 @@ impl TokenVotesContract {
             .persistent()
             .get(&DataKey::Delegate(delegator.clone()));
 
+        // A "registry" delegation is one that hands voting power to someone
+        // else (self-delegation is the revoke/no-delegate state, not tracked
+        // as a registry entry). Validate cycle/depth *before* any state
+        // mutation below so an invalid delegation reverts cleanly.
+        let will_register =
+            delegatee != delegator && previous_delegate.as_ref() != Some(&delegatee);
+        if will_register {
+            delegation_registry::validate_delegation(env, &delegator, &delegatee);
+        }
+
         let record: DelegatorRecord = env
             .storage()
             .persistent()
@@ -154,8 +233,18 @@ impl TokenVotesContract {
 
         if let Some(old_delegatee) = previous_delegate.clone() {
             if old_delegatee != delegatee {
-                Self::update_account_votes(env, old_delegatee.clone(), -record.balance, -old_weighted_sum);
-                Self::update_account_votes(env, delegatee.clone(), new_record.balance, new_weighted_sum);
+                Self::update_account_votes(
+                    env,
+                    old_delegatee.clone(),
+                    -record.balance,
+                    -old_weighted_sum,
+                );
+                Self::update_account_votes(
+                    env,
+                    delegatee.clone(),
+                    new_record.balance,
+                    new_weighted_sum,
+                );
             } else {
                 let delta = new_record.balance - record.balance;
                 let delta_ws = new_weighted_sum - old_weighted_sum;
@@ -182,6 +271,28 @@ impl TokenVotesContract {
             .persistent()
             .set(&DataKey::DelegatorRecord(delegator.clone()), &new_record);
 
+        // Registry bookkeeping runs after the `Delegate` mapping above is
+        // written so that chain resolution sees the new edge.
+        if will_register {
+            delegation_registry::register_delegation(
+                env,
+                &delegator,
+                &delegatee,
+                new_record.balance,
+                current_ledger,
+            );
+        }
+        if let Some(old_delegatee) = previous_delegate.clone() {
+            if old_delegatee != delegator && old_delegatee != delegatee {
+                delegation_registry::revoke_registry_entry(
+                    env,
+                    &delegator,
+                    &old_delegatee,
+                    current_ledger,
+                );
+            }
+        }
+
         env.events().publish(
             (Symbol::new(env, "DelegateChanged"), delegator.clone()),
             (previous_delegate, delegatee),
@@ -207,7 +318,12 @@ impl TokenVotesContract {
             let weighted_sum = record.balance * record.start_ledger as i128;
             if record.balance > 0 {
                 // Remove voting power from the previous delegate and total supply.
-                Self::update_account_votes(&env, old_delegatee.clone(), -record.balance, -weighted_sum);
+                Self::update_account_votes(
+                    &env,
+                    old_delegatee.clone(),
+                    -record.balance,
+                    -weighted_sum,
+                );
                 Self::update_total_supply_checkpoint(&env, -record.balance, -weighted_sum);
             }
 
@@ -217,6 +333,15 @@ impl TokenVotesContract {
             env.storage()
                 .persistent()
                 .remove(&DataKey::DelegatorRecord(delegator.clone()));
+
+            if old_delegatee != delegator {
+                delegation_registry::revoke_registry_entry(
+                    &env,
+                    &delegator,
+                    &old_delegatee,
+                    env.ledger().sequence(),
+                );
+            }
 
             env.events().publish(
                 (symbol_short!("del_revk"), delegator),
@@ -289,15 +414,96 @@ impl TokenVotesContract {
             .expect("not initialized")
     }
 
+    // --- Delegation registry queries/admin (issue #769) ---
+
+    /// Get full delegation history for a delegator.
+    pub fn get_delegation_history(env: Env, delegator: Address) -> Vec<DelegationHistoryEntry> {
+        delegation_registry::get_delegation_history(&env, delegator)
+    }
+
+    /// Get all current delegators of a delegatee with their power and depth.
+    pub fn get_delegators(
+        env: Env,
+        delegatee: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<DelegatorInfo> {
+        delegation_registry::get_delegators(&env, delegatee, offset, limit)
+    }
+
+    /// Get total number of current delegators.
+    pub fn get_delegator_count(env: Env, delegatee: Address) -> u32 {
+        delegation_registry::get_delegator_count(&env, delegatee)
+    }
+
+    /// Get the full delegation chain from delegator to the final tip.
+    pub fn get_delegation_chain(env: Env, delegator: Address) -> Vec<Address> {
+        delegation_registry::get_delegation_chain(&env, delegator)
+    }
+
+    /// Get depth of the delegation chain from this address.
+    pub fn get_chain_depth(env: Env, delegator: Address) -> u32 {
+        delegation_registry::get_chain_depth(&env, delegator)
+    }
+
+    /// Get comprehensive delegate profile.
+    pub fn get_delegate_profile(env: Env, address: Address) -> DelegateProfile {
+        delegation_registry::get_delegate_profile(&env, address)
+    }
+
+    /// Get all active delegations received by a delegatee (paginated).
+    pub fn get_received_delegations(
+        env: Env,
+        delegatee: Address,
+        offset: u32,
+        limit: u32,
+    ) -> Vec<DelegationEntry> {
+        delegation_registry::get_received_delegations(&env, delegatee, offset, limit)
+    }
+
+    /// Admin function to update the maximum delegation chain depth.
+    pub fn set_delegation_depth_limit(env: Env, admin: Address, new_limit: u32) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        assert_eq!(admin, stored_admin, "unauthorized");
+        admin.require_auth();
+        delegation_registry::set_delegation_depth_limit(&env, new_limit);
+    }
+
+    /// Get current delegation depth limit.
+    pub fn get_delegation_depth_limit(env: Env) -> u32 {
+        delegation_registry::get_delegation_depth_limit(&env)
+    }
+
+    /// Check whether delegating from `delegator` to `delegatee` would create a cycle.
+    pub fn would_create_cycle(env: Env, delegator: Address, delegatee: Address) -> bool {
+        delegation_registry::would_create_cycle(&env, delegator, delegatee)
+    }
+
+    /// Get a snapshot of the full delegation graph at a past ledger (for audit).
+    pub fn get_delegation_snapshot(
+        env: Env,
+        delegatee: Address,
+        at_ledger: u32,
+    ) -> Vec<DelegatorInfo> {
+        delegation_registry::get_delegation_snapshot(&env, delegatee, at_ledger)
+    }
+
     /// Get voting power at a past ledger sequence (snapshot).
     pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128 {
         let current_ledger = env.ledger().sequence();
-        assert!(ledger <= current_ledger, "ledger must not exceed current ledger");
+        assert!(
+            ledger <= current_ledger,
+            "ledger must not exceed current ledger"
+        );
 
         let checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
-            .get(&DataKey::Checkpoints(account))
+            .get(&DataKey::Checkpoints(account.clone()))
             .unwrap_or(soroban_sdk::Vec::new(&env));
 
         let cp = Self::binary_search(&checkpoints, ledger);
@@ -336,7 +542,7 @@ impl TokenVotesContract {
             .persistent()
             .get(&DataKey::TotalCheckpoints)
             .unwrap_or(soroban_sdk::Vec::new(&env));
-        
+
         let cp = Self::binary_search(&checkpoints, ledger);
         if cp.votes <= 0 {
             return 0;
@@ -360,7 +566,7 @@ impl TokenVotesContract {
             .unwrap_or(soroban_sdk::Vec::new(&env));
 
         let current_ledger = env.ledger().sequence();
-        
+
         // When using raw checkpoint manually, we assume no weighted sum change for simplicity
         // or we try to estimate it based on last checkpoint.
         let weighted_sum = if checkpoints.is_empty() {
@@ -403,7 +609,7 @@ impl TokenVotesContract {
             .persistent()
             .get(&DataKey::TotalCheckpoints)
             .unwrap_or(soroban_sdk::Vec::new(env));
- 
+
         let current_ledger = env.ledger().sequence();
         let (old_votes, old_weighted_sum) = if checkpoints.is_empty() {
             (0, 0)
@@ -413,7 +619,7 @@ impl TokenVotesContract {
         };
         let new_total = old_votes + delta;
         let new_weighted_sum = old_weighted_sum + delta_weighted_sum;
- 
+
         if !checkpoints.is_empty() && checkpoints.last().unwrap().ledger == current_ledger {
             let last_idx = checkpoints.len() - 1;
             checkpoints.set(
@@ -431,7 +637,7 @@ impl TokenVotesContract {
                 weighted_sum: new_weighted_sum,
             });
         }
- 
+
         env.storage()
             .persistent()
             .set(&DataKey::TotalCheckpoints, &checkpoints);
@@ -479,19 +685,25 @@ impl TokenVotesContract {
             .set(&DataKey::Checkpoints(account.clone()), &checkpoints);
 
         // Register account in the global list so prune_checkpoints can find it.
-        // Only add if not already present (linear scan is acceptable since the
-        // list grows slowly and is only read during admin pruning operations).
-        let mut account_list: soroban_sdk::Vec<Address> = env
+        // Uses a persistent marker for O(1) membership check instead of O(N) scan.
+        let already_registered: bool = env
             .storage()
             .persistent()
-            .get(&DataKey::AccountList)
-            .unwrap_or(soroban_sdk::Vec::new(env));
-        let already_registered = account_list.iter().any(|a| a == account);
+            .get(&DataKey::IsInAccountList(account.clone()))
+            .unwrap_or(false);
         if !already_registered {
+            let mut account_list: soroban_sdk::Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::AccountList)
+                .unwrap_or(soroban_sdk::Vec::new(env));
             account_list.push_back(account.clone());
             env.storage()
                 .persistent()
                 .set(&DataKey::AccountList, &account_list);
+            env.storage()
+                .persistent()
+                .set(&DataKey::IsInAccountList(account.clone()), &true);
         }
 
         env.events()
@@ -538,47 +750,118 @@ impl TokenVotesContract {
         checkpoints.get(low - 1).unwrap()
     }
 
-    /// Delegate voting power by signature (gasless for the token holder).
+    /// Delegate via an off-chain signed [`DelegationPermit`] (gasless for the
+    /// token holder). Callable by any relayer; the relayer pays the fee and
+    /// must authorize the call, but the permit itself is relayer-agnostic
+    /// (see delegation_sig.rs for why).
     ///
-    /// Uses Soroban's native authorization framework (`owner.require_auth()`) to
-    /// verify the delegation. This is the correct approach for Soroban contracts
-    /// because Address types do not directly expose the underlying Ed25519 public
-    /// key needed for manual `ed25519_verify` calls (see ADR-005).
-    ///
-    /// Replay protection is provided by the nonce (must equal the stored nonce,
-    /// then incremented) and expiry (checked against current ledger timestamp).
-    ///
-    /// # Arguments
-    /// * `owner`     - The token holder authorising the delegation
-    /// * `delegatee` - The address to delegate voting power to
-    /// * `nonce`     - Must equal the owner's current stored nonce
-    /// * `expiry`    - Ledger timestamp after which the signature is invalid
-    /// * `signature` - Ed25519 signature (verified via Soroban auth framework)
-    pub fn delegate_by_sig(
-        env: Env,
-        owner: Address,
-        delegatee: Address,
-        nonce: u64,
-        expiry: u64,
-        _signature: BytesN<64>,
-    ) {
-        // Verify expiry against current ledger timestamp
-        let current_time = env.ledger().timestamp();
-        assert!(current_time <= expiry, "signature expired");
+    /// Returns the delegator's new nonce.
+    pub fn delegate_by_sig(env: Env, relayer: Address, permit: DelegationPermit) -> u64 {
+        relayer.require_auth();
+        if !delegation_sig::is_relayer_allowed(&env, &relayer) {
+            env.panic_with_error(TokenVotesError::RelayerNotWhitelisted);
+        }
 
-        // Verify and increment nonce (prevent replay)
-        let nonce_key = DataKey::Nonce(owner.clone());
-        let stored_nonce: u64 = env.storage().persistent().get(&nonce_key).unwrap_or(0);
-        assert!(nonce == stored_nonce, "invalid nonce");
-        env.storage()
-            .persistent()
-            .set(&nonce_key, &(stored_nonce + 1));
+        let delegator = delegation_sig::verify_delegation_permit(&env, &permit);
+        Self::apply_delegation(&env, delegator.clone(), permit.delegatee.clone());
 
-        // Use Soroban's native auth framework for signature verification.
-        // This correctly handles Ed25519 keys, multisig, and smart-wallet accounts
-        // without needing to extract the raw public key from an Address.
-        owner.require_auth();
-        Self::apply_delegation(&env, owner, delegatee);
+        events::emit_delegated_by_sig(&env, &delegator, &permit.delegatee, &relayer, permit.nonce);
+        delegation_sig::current_nonce(&env, &delegator)
+    }
+
+    /// Batch-delegate via multiple signed permits in a single transaction.
+    /// Atomic: if any permit fails verification, the entire batch (including
+    /// permits already applied earlier in the loop) is rolled back.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `permits` is empty.
+    pub fn delegate_batch_by_sig(env: Env, relayer: Address, permits: Vec<DelegationPermit>) {
+        assert!(!permits.is_empty(), "permits must not be empty");
+        relayer.require_auth();
+        if !delegation_sig::is_relayer_allowed(&env, &relayer) {
+            env.panic_with_error(TokenVotesError::RelayerNotWhitelisted);
+        }
+
+        for permit in permits.iter() {
+            let delegator = delegation_sig::verify_delegation_permit(&env, &permit);
+            Self::apply_delegation(&env, delegator.clone(), permit.delegatee.clone());
+            events::emit_delegated_by_sig(
+                &env,
+                &delegator,
+                &permit.delegatee,
+                &relayer,
+                permit.nonce,
+            );
+        }
+    }
+
+    /// Revoke all outstanding signed permits for `delegator` by bumping their
+    /// nonce past anything they may have already signed. Only the delegator
+    /// themself may call this.
+    pub fn invalidate_all_permits(env: Env, delegator: Address) {
+        delegator.require_auth();
+        let new_nonce = delegation_sig::invalidate_all_permits(&env, &delegator);
+        events::emit_permits_invalidated(&env, &delegator, new_nonce);
+    }
+
+    /// Get the current (next expected) nonce for a delegator.
+    pub fn nonce(env: Env, delegator: Address) -> u64 {
+        delegation_sig::current_nonce(&env, &delegator)
+    }
+
+    /// Compute the domain separator for this contract instance.
+    pub fn domain_separator(env: Env) -> BytesN<32> {
+        delegation_sig::domain_separator(&env)
+    }
+
+    /// Compute the full signed-message hash for a permit, for client-side
+    /// verification/tooling parity. See delegation_sig.rs for why this is
+    /// informational and not itself the on-chain signature check.
+    pub fn compute_permit_hash(env: Env, permit: DelegationPermit) -> BytesN<32> {
+        delegation_sig::compute_permit_hash(&env, &permit)
+    }
+
+    /// Check whether a nonce has already been used by a delegator.
+    pub fn is_nonce_used(env: Env, delegator: Address, nonce: u64) -> bool {
+        delegation_sig::is_nonce_used(&env, &delegator, nonce)
+    }
+
+    /// The `expiry_ledger` of the most recently applied signed permit for
+    /// `delegator`, if any.
+    pub fn delegation_permit_expiry(env: Env, delegator: Address) -> Option<u32> {
+        delegation_sig::delegation_permit_expiry(&env, &delegator)
+    }
+
+    /// Admin: enable or disable the relayer whitelist.
+    pub fn set_relayer_whitelist_enabled(env: Env, admin: Address, enabled: bool) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        assert_eq!(admin, stored_admin, "unauthorized");
+        delegation_sig::set_relayer_whitelist_enabled(&env, enabled);
+    }
+
+    /// Admin: add or remove a relayer from the whitelist.
+    pub fn set_relayer_whitelisted(env: Env, admin: Address, relayer: Address, whitelisted: bool) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        admin.require_auth();
+        assert_eq!(admin, stored_admin, "unauthorized");
+        delegation_sig::set_relayer_whitelisted(&env, &relayer, whitelisted);
+        events::emit_relayer_whitelist_updated(&env, &relayer, whitelisted);
+    }
+
+    /// Check if a relayer is whitelisted (or if the whitelist is disabled,
+    /// in which case every relayer is allowed).
+    pub fn is_relayer_allowed(env: Env, relayer: Address) -> bool {
+        delegation_sig::is_relayer_allowed(&env, &relayer)
     }
 
     /// Set the checkpoint retention period (admin only).
@@ -655,7 +938,9 @@ impl TokenVotesContract {
             .expect("not initialized");
         admin.require_auth();
 
-        env.storage().instance().set(&DataKey::TimeWeightEnabled, &enabled);
+        env.storage()
+            .instance()
+            .set(&DataKey::TimeWeightEnabled, &enabled);
     }
 
     /// Get whether time-weighted voting is enabled.
@@ -701,29 +986,35 @@ impl TokenVotesContract {
             return 0;
         }
 
-        let mut new_checkpoints = soroban_sdk::Vec::new(env);
-
-        // Find the first checkpoint to keep (newer than cutoff_ledger)
-        let mut start_idx = checkpoints.len();
-        for i in 0..checkpoints.len() {
-            let checkpoint = checkpoints.get(i).unwrap();
-            if checkpoint.ledger > cutoff_ledger {
-                start_idx = i;
-                break;
+        // Binary search for the first checkpoint with ledger > cutoff_ledger
+        let len = checkpoints.len();
+        let mut low: u32 = 0;
+        let mut high: u32 = len;
+        while low < high {
+            let mid = low + (high - low) / 2;
+            let cp = checkpoints.get(mid).unwrap();
+            if cp.ledger <= cutoff_ledger {
+                low = mid + 1;
+            } else {
+                high = mid;
             }
         }
+        let mut start_idx = low;
 
         // Always keep at least the most recent checkpoint
-        if start_idx == checkpoints.len() {
-            start_idx = checkpoints.len() - 1;
+        if start_idx == len {
+            start_idx = len - 1;
         }
 
-        // Copy checkpoints from start_idx to end
-        for i in start_idx..checkpoints.len() {
+        let pruned_count = start_idx.min(len - 1);
+        if pruned_count == 0 {
+            return 0;
+        }
+
+        let mut new_checkpoints = soroban_sdk::Vec::new(env);
+        for i in start_idx..len {
             new_checkpoints.push_back(checkpoints.get(i).unwrap());
         }
-
-        let pruned_count = start_idx.min(checkpoints.len() - 1);
 
         env.storage()
             .persistent()
@@ -760,34 +1051,35 @@ impl TokenVotesContract {
                 continue;
             }
 
-            // Find the index of the first checkpoint strictly newer than cutoff.
-            // We keep the checkpoint just before that index so historical queries
-            // at or before cutoff_ledger still return the correct value.
-            let mut keep_from: u32 = 0;
-            for i in 0..checkpoints.len() {
-                let cp = checkpoints.get(i).unwrap();
+            // Binary search for the last checkpoint with ledger <= cutoff_ledger
+            let len = checkpoints.len();
+            let mut low: u32 = 0;
+            let mut high: u32 = len;
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let cp = checkpoints.get(mid).unwrap();
                 if cp.ledger <= cutoff_ledger {
-                    // This checkpoint is a candidate for pruning; the one after
-                    // it (if any) is newer. We track the last one at/before cutoff
-                    // so we can keep it as the "anchor" for historical queries.
-                    keep_from = i;
+                    low = mid + 1;
                 } else {
-                    break;
+                    high = mid;
                 }
             }
+            // low is the index of the first checkpoint > cutoff_ledger
+            // keep_from is the last checkpoint <= cutoff_ledger, or 0 if none
+            let keep_from = if low > 0 { low - 1 } else { 0 };
 
-            // keep_from is the index of the last checkpoint at/before cutoff.
-            // We prune everything before keep_from (exclusive), retaining keep_from
-            // as the historical anchor plus all newer checkpoints.
             if keep_from == 0 {
-                // Either all checkpoints are newer than cutoff, or there is only
-                // one checkpoint at/before cutoff \u2014 nothing to prune.
                 continue;
             }
 
-            let pruned_count = keep_from; // indices 0..keep_from are removed
+            let new_checkpoints_len = len - keep_from;
+            if new_checkpoints_len >= len {
+                continue;
+            }
+
+            let pruned_count = keep_from;
             let mut new_checkpoints = soroban_sdk::Vec::new(env);
-            for i in keep_from..checkpoints.len() {
+            for i in keep_from..len {
                 new_checkpoints.push_back(checkpoints.get(i).unwrap());
             }
 
@@ -1679,114 +1971,10 @@ mod tests {
         assert!(pruned > 0, "expected some checkpoints pruned");
     }
 
-    // \u2014\u2014 delegate_by_sig tests (issue #216) \u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014\u2014
-
-    /// Valid delegation via delegate_by_sig: correct nonce, unexpired, auth passes.
-    #[test]
-    fn test_delegate_by_sig_valid() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee = Address::generate(&env);
-
-        let (contract_id, token_addr) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
-        sac_client.mint(&owner, &1000i128);
-
-        // Set ledger timestamp so expiry is in the future
-        env.ledger().with_mut(|l| l.timestamp = 100);
-
-        let nonce = 0u64;
-        let expiry = 200u64;
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-
-        client.delegate_by_sig(&owner, &delegatee, &nonce, &expiry, &dummy_sig);
-
-        // Delegation should have been applied
-        assert_eq!(client.get_votes(&delegatee), 1000);
-        assert_eq!(client.delegates(&owner), Some(delegatee.clone()));
-    }
-
-    /// Expired signature must be rejected.
-    #[test]
-    #[should_panic(expected = "signature expired")]
-    fn test_delegate_by_sig_expired() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee = Address::generate(&env);
-
-        let (contract_id, _) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-
-        env.ledger().with_mut(|l| l.timestamp = 500);
-
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-        // expiry is in the past
-        client.delegate_by_sig(&owner, &delegatee, &0u64, &100u64, &dummy_sig);
-    }
-
-    /// Replayed nonce must be rejected.
-    #[test]
-    #[should_panic(expected = "invalid nonce")]
-    fn test_delegate_by_sig_replayed_nonce() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee = Address::generate(&env);
-
-        let (contract_id, token_addr) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
-        sac_client.mint(&owner, &500i128);
-
-        env.ledger().with_mut(|l| l.timestamp = 100);
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-
-        // First call with nonce=0 succeeds
-        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
-
-        // Second call with nonce=0 must fail (nonce is now 1)
-        client.delegate_by_sig(&owner, &delegatee, &0u64, &9999u64, &dummy_sig);
-    }
-
-    /// Nonce is incremented after a successful delegate_by_sig call.
-    #[test]
-    fn test_delegate_by_sig_nonce_increments() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let admin = Address::generate(&env);
-        let owner = Address::generate(&env);
-        let delegatee1 = Address::generate(&env);
-        let delegatee2 = Address::generate(&env);
-
-        let (contract_id, token_addr) = setup(&env, &admin);
-        let client = TokenVotesContractClient::new(&env, &contract_id);
-        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
-        sac_client.mint(&owner, &300i128);
-
-        env.ledger().with_mut(|l| l.timestamp = 1);
-        let dummy_sig = BytesN::from_array(&env, &[0u8; 64]);
-
-        // nonce=0 succeeds
-        client.delegate_by_sig(&owner, &delegatee1, &0u64, &9999u64, &dummy_sig);
-        assert_eq!(client.get_votes(&delegatee1), 300);
-
-        env.ledger().with_mut(|l| l.sequence_number += 1);
-
-        // nonce=1 succeeds (re-delegation)
-        client.delegate_by_sig(&owner, &delegatee2, &1u64, &9999u64, &dummy_sig);
-        assert_eq!(client.get_votes(&delegatee1), 0);
-        assert_eq!(client.get_votes(&delegatee2), 300);
-    }
+    // Old delegate_by_sig tests (issue #216) removed: delegate_by_sig was
+    // replaced by the DelegationPermit-based flow in issue #772 (see
+    // delegation_sig_tests.rs for equivalent + expanded coverage of the new
+    // signature, expiry, and nonce-replay behavior).
 
     #[test]
     fn test_new_delegator_start_ledger_is_current_ledger() {
@@ -1812,6 +2000,80 @@ mod tests {
         assert_eq!(record.balance, 100);
     }
 
+    // ── delegate_batch tests ─────────────────────────────────────────────────
+
+    /// Single-element batch behaves identically to delegate().
+    #[test]
+    fn test_delegate_batch_single_element() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+
+        sac_client.mint(&delegator, &500i128);
+
+        let mut batch = soroban_sdk::Vec::new(&env);
+        batch.push_back(delegatee.clone());
+        client.delegate_batch(&delegator, &batch);
+
+        assert_eq!(client.get_votes(&delegatee), 500);
+        assert_eq!(client.delegates(&delegator), Some(delegatee));
+    }
+
+    /// Multi-element batch: the last delegatee in the list is the effective one.
+    #[test]
+    fn test_delegate_batch_last_entry_wins() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+        let delegatee_a = Address::generate(&env);
+        let delegatee_b = Address::generate(&env);
+        let delegatee_c = Address::generate(&env);
+
+        let (contract_id, token_addr) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+        let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+
+        sac_client.mint(&delegator, &200i128);
+
+        let mut batch = soroban_sdk::Vec::new(&env);
+        batch.push_back(delegatee_a.clone());
+        batch.push_back(delegatee_b.clone());
+        batch.push_back(delegatee_c.clone());
+        client.delegate_batch(&delegator, &batch);
+
+        // Final delegatee is delegatee_c.
+        assert_eq!(client.delegates(&delegator), Some(delegatee_c.clone()));
+        assert_eq!(client.get_votes(&delegatee_c), 200);
+        // Intermediate delegatees received and then lost voting power.
+        assert_eq!(client.get_votes(&delegatee_a), 0);
+        assert_eq!(client.get_votes(&delegatee_b), 0);
+    }
+
+    /// Empty batch panics.
+    #[test]
+    #[should_panic]
+    fn test_delegate_batch_empty_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let admin = Address::generate(&env);
+        let delegator = Address::generate(&env);
+
+        let (contract_id, _) = setup(&env, &admin);
+        let client = TokenVotesContractClient::new(&env, &contract_id);
+
+        let empty: soroban_sdk::Vec<Address> = soroban_sdk::Vec::new(&env);
+        client.delegate_batch(&delegator, &empty);
+    }
 }
 
 #[cfg(test)]

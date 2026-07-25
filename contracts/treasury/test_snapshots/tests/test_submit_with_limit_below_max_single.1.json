@@ -43,6 +43,9 @@
                   "address": "CAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAMDR4"
                 },
                 {
+                  "symbol": "transfer"
+                },
+                {
                   "bytes": ""
                 },
                 {
@@ -233,6 +236,17 @@
                     },
                     {
                       "key": {
+                        "symbol": "reserved_amount"
+                      },
+                      "val": {
+                        "i128": {
+                          "hi": 0,
+                          "lo": 500
+                        }
+                      }
+                    },
+                    {
+                      "key": {
                         "symbol": "target"
                       },
                       "val": {
@@ -245,7 +259,7 @@
             },
             "ext": "v0"
           },
-          4095
+          518400
         ]
       ],
       [

@@ -947,6 +947,108 @@ fn test_timelock_error_codes_snapshot() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #1)")]
+/// Test that execute() with pending predecessor reverts with PredecessorNotDone.
+fn test_execute_pending_predecessor_reverts_predecessor_not_done() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+    let data = Bytes::new(&env);
+    let fn_name = Symbol::new(&env, "exec");
+
+    let op_a_id = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0u64,
+        &Bytes::new(&env),
+        &Bytes::new(&env),
+    );
+
+    let op_b_id = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0u64,
+        &op_a_id.clone(),
+        &Bytes::new(&env),
+    );
+
+    // Should panic with PredecessorNotDone (error code 1)
+    client.execute(&governor, &op_b_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+/// Test that schedule() with a non-existent predecessor reverts with PredecessorNotFound.
+fn test_schedule_nonexistent_predecessor_reverts_predecessor_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = Address::generate(&env);
+    let data = Bytes::new(&env);
+    let fn_name = Symbol::new(&env, "exec");
+    let non_existent_pred = Bytes::from_slice(&env, b"nonexistent");
+
+    // Should panic with PredecessorNotFound (error code 2)
+    client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0u64,
+        &non_existent_pred,
+        &Bytes::new(&env),
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #2)")]
+/// Test that schedule_batch() with a non-existent predecessor reverts with PredecessorNotFound.
+fn test_batch_schedule_nonexistent_predecessor_reverts_predecessor_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = Address::generate(&env);
+    let mut targets = Vec::new(&env);
+    targets.push_back(target);
+    let mut datas = Vec::new(&env);
+    datas.push_back(Bytes::new(&env));
+    let mut fn_names = Vec::new(&env);
+    fn_names.push_back(Symbol::new(&env, "exec"));
+    let non_existent_pred = Bytes::from_slice(&env, b"nonexistent");
+
+    // Should panic with PredecessorNotFound (error code 2)
+    client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0u64,
+        &non_existent_pred,
+        &Bytes::new(&env),
+    );
+}
+
+#[test]
 #[should_panic(expected = "already initialized")]
 /// Test that initialize() cannot be called twice.
 fn test_initialize_guard_prevents_reinitialization() {

@@ -319,7 +319,7 @@ describe("GovernorClient", () => {
       const id = await client.propose(
         mockKeypair,
         "Test proposal",
-        "3665313936616466316231366230623362346231613963316131613262336334",
+        "1c6b4a6130bbe90b01411cf29743a638cf8520f556dcbdc570ff655bfafd2c0a",
         "ipfs://QmTest",
         [validCAddr],
         ["upgrade"],
@@ -340,7 +340,7 @@ describe("GovernorClient", () => {
         client.propose(
           mockKeypair,
           "Test proposal",
-          "3665313936616466316231366230623362346231613963316131613262336334",
+          "1c6b4a6130bbe90b01411cf29743a638cf8520f556dcbdc570ff655bfafd2c0a",
           "ipfs://QmTest",
           [validCAddr],
           ["upgrade"],
@@ -371,7 +371,7 @@ describe("GovernorClient", () => {
         client.propose(
           mockKeypair,
           "Test proposal",
-          "3665313936616466316231366230623362346231613963316131613262336334",
+          "1c6b4a6130bbe90b01411cf29743a638cf8520f556dcbdc570ff655bfafd2c0a",
           "ipfs://QmTest",
           [validCAddr],
           ["upgrade"],
@@ -402,7 +402,7 @@ describe("GovernorClient", () => {
       const promise = client.propose(
         mockKeypair,
         "Test proposal",
-        "3665313936616466316231366230623362346231613963316131613262336334",
+        "1c6b4a6130bbe90b01411cf29743a638cf8520f556dcbdc570ff655bfafd2c0a",
         "ipfs://QmTest",
         [validCAddr],
         ["upgrade"],
@@ -443,6 +443,60 @@ describe("GovernorClient", () => {
       } catch (e) {
         expect((e as GovernorError).code).toBe(GovernorErrorCode.InvalidArguments);
       }
+    });
+
+    it("throws GovernorError(InvalidArguments) when descriptionHash does not match SHA-256 of description", async () => {
+      const wrongHash = "a".repeat(64);
+      await expect(
+        client.propose(
+          mockKeypair,
+          "Test proposal",
+          wrongHash,
+          "ipfs://QmTest",
+          [validCAddr],
+          ["upgrade"],
+          [Buffer.from([1, 2, 3])]
+        )
+      ).rejects.toThrow(/description_hash does not match SHA-256/);
+    });
+
+    it("accepts propose() when descriptionHash correctly matches SHA-256 of description", async () => {
+      mockGetTransaction.mockResolvedValue({
+        status: "SUCCESS",
+        returnValue: {} as xdr.ScVal,
+      });
+      mockScValToNative.mockReturnValue(1n);
+
+      const { createHash } = require("crypto");
+      const correctHash = createHash("sha256").update("Hello governance").digest("hex");
+
+      const id = await client.propose(
+        mockKeypair,
+        "Hello governance",
+        correctHash,
+        "ipfs://QmTest",
+        [validCAddr],
+        ["upgrade"],
+        [Buffer.from([1])]
+      );
+      expect(id).toBe(1n);
+    });
+
+    it("skips hash validation for legacy propose() calls (targets as second argument)", async () => {
+      mockGetTransaction.mockResolvedValue({
+        status: "SUCCESS",
+        returnValue: {} as xdr.ScVal,
+      });
+      mockScValToNative.mockReturnValue(99n);
+
+      const id = await client.propose(
+        mockKeypair,
+        "Legacy proposal",
+        [validCAddr],
+        ["fn"],
+        [Buffer.from([])]
+      );
+      expect(id).toBe(99n);
     });
   });
 

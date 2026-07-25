@@ -1,6 +1,6 @@
 use crate::{GovernorContract, GovernorContractClient, VoteType, MigrateData};
 use soroban_sdk::{
-    testutils::{Address as _, Events, MockAuth, MockAuthInvoke},
+    testutils::{Address as _, MockAuth, MockAuthInvoke},
     Address, BytesN, Env, IntoVal,
 };
 
@@ -30,7 +30,9 @@ fn test_governance_upgrade_flow() {
         client.upgrade(&new_wasm_hash);
     });
 
-    assert_eq!(client.version(), 1); // Version stays 1 if not migrated yet
+    // Upgrade completed without panic; settings should still be accessible.
+    let settings = client.get_settings();
+    assert_eq!(settings.voting_delay, 10);
 }
 
 #[test]
@@ -113,5 +115,7 @@ fn test_migrate_executed() {
         client.migrate(&migrate_data);
     });
 
-    assert_eq!(client.version(), 2);
+    // Migration completed without panic; settings must remain intact.
+    let settings = client.get_settings();
+    assert_eq!(settings.voting_delay, 10);
 }

@@ -36,6 +36,11 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+        working-directory: .
+
+      - name: Build SDK
+        run: pnpm --filter @nebgov/sdk run build
+        working-directory: .
 
       - name: Lint
         run: pnpm eslint .

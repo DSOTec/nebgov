@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { VotesClient } from "@nebgov/sdk";
 import { readGovernorConfig } from "./nebgov-env";
+import { useDebounce } from "../hooks/useDebounce";
 
 type GovernanceBalance = {
   loading: boolean;
@@ -17,6 +18,8 @@ export function useGovernanceBalance(address: string | null | undefined): Govern
   const config = useMemo(() => readGovernorConfig(), []);
   const client = useMemo(() => (config ? new VotesClient(config) : null), [config]);
 
+  const debouncedAddress = useDebounce(address, 400);
+
   const [loading, setLoading] = useState(false);
   const [baseVotes, setBaseVotes] = useState<bigint | null>(null);
   const [votingPower, setVotingPower] = useState<bigint | null>(null);
@@ -27,7 +30,7 @@ export function useGovernanceBalance(address: string | null | undefined): Govern
   const refresh = () => setRefreshIndex((i) => i + 1);
 
   useEffect(() => {
-    if (!address || !client) return;
+    if (!debouncedAddress || !client) return;
 
     let alive = true;
     async function run() {
@@ -35,9 +38,9 @@ export function useGovernanceBalance(address: string | null | undefined): Govern
       setError(null);
       try {
         const [raw, power, del] = await Promise.all([
-          client.getBaseVotes(address),
-          client.getVotes(address),
-          client.getDelegatee(address),
+          client.getBaseVotes(debouncedAddress),
+          client.getVotes(debouncedAddress),
+          client.getDelegatee(debouncedAddress),
         ]);
         if (!alive) return;
         setBaseVotes(raw);
@@ -61,7 +64,7 @@ export function useGovernanceBalance(address: string | null | undefined): Govern
       alive = false;
       window.clearInterval(interval);
     };
-  }, [address, client, refreshIndex]);
+  }, [debouncedAddress, client, refreshIndex]);
 
   useEffect(() => {
     if (!address) {

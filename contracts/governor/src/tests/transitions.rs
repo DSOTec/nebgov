@@ -41,7 +41,9 @@ impl MockTimelockContract {
     }
 }
 
-/// Shared helper: initialize the governor with standard test parameters.
+/// Shared helper: initialize the governor with standard test parameters and a
+/// mock timelock (min_delay=1, execution_window=60).  Only use this when the
+/// test does NOT need to interact with the real timelock contract.
 fn setup() -> (
     Env,
     GovernorContractClient<'static>,
@@ -76,6 +78,62 @@ fn setup() -> (
     );
 
     (env, client, admin, proposer, voter)
+}
+
+/// Shared helper: initialise environment and governor with a real timelock
+/// contract.  Returns (env, client, admin, proposer, voter, timelock_client).
+/// Use this for tests that schedule or execute proposals.
+fn setup_real_timelock(
+    min_delay: u64,
+    execution_window: u64,
+    voting_delay: u32,
+    voting_period: u32,
+    quorum_numerator: u32,
+) -> (
+    Env,
+    GovernorContractClient<'static>,
+    Address,
+    Address,
+    Address,
+    sorogov_timelock::TimelockContractClient<'static>,
+) {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(GovernorContract, ());
+    let client = GovernorContractClient::new(&env, &contract_id);
+
+    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
+    let timelock_client =
+        sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
+    let timelock_admin = Address::generate(&env);
+    timelock_client.initialize(
+        &timelock_admin,
+        &client.address,
+        &min_delay,
+        &execution_window,
+    );
+
+    let admin = Address::generate(&env);
+    let proposer = Address::generate(&env);
+    let voter = Address::generate(&env);
+    let guardian = Address::generate(&env);
+    let votes_token_id = env.register(MockVotesContract, ());
+
+    client.initialize(
+        &admin,
+        &votes_token_id,
+        &timelock_id,
+        &voting_delay,
+        &voting_period,
+        &quorum_numerator,
+        &0,
+        &guardian,
+        &VoteType::Extended,
+        &120_960,
+    );
+
+    (env, client, admin, proposer, voter, timelock_client)
 }
 
 /// Shared helper: create a new proposal and return its id.
@@ -201,6 +259,17 @@ fn test_defeated_when_against_wins() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #30)")]
+/// Verifies that cast_vote rejects votes submitted after the voting period has ended.
+fn test_cast_vote_rejects_after_voting_period_end() {
+    let (env, client, _, proposer, voter) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    env.ledger().set_sequence_number(111); // Past end_ledger (10 + 100)
+    client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
+}
+
+#[test]
 /// Verifies that a proposal is Defeated if voting ends in a tie
 /// (votes_against == votes_for).
 fn test_defeated_when_votes_for_equals_votes_against() {
@@ -247,6 +316,48 @@ fn test_cancelled_by_proposer() {
 }
 
 #[test]
+#[should_panic]
+/// Verifies that a random token holder cannot cancel another user's proposal.
+fn test_cancel_unauthorized_by_random_holder() {
+    let (env, client, _, proposer, _) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    let random_holder = Address::generate(&env);
+    client.cancel(&random_holder, &proposal_id);
+}
+
+#[test]
+/// Verifies that the guardian can cancel an Active proposal.
+fn test_cancel_by_guardian_when_active() {
+    let (env, client, _, proposer, _) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    // Get guardian from contract settings
+    let settings = client.get_settings();
+    let guardian = settings.guardian;
+
+    // Move to Active state
+    env.ledger().set_sequence_number(10);
+
+    client.cancel(&guardian, &proposal_id);
+    assert_eq!(client.state(&proposal_id), ProposalState::Cancelled);
+    assert_eq!(count_topic(&env, "ProposalCancelled"), 1);
+}
+
+#[test]
+#[should_panic]
+/// Verifies that the proposer cannot cancel a proposal when it's Active (only allowed when Pending).
+fn test_cancel_by_proposer_when_active_should_fail() {
+    let (env, client, _, proposer, _) = setup();
+    let proposal_id = make_proposal(&env, &client, &proposer);
+
+    // Move to Active state
+    env.ledger().set_sequence_number(10);
+
+    client.cancel(&proposer, &proposal_id);
+}
+
+#[test]
 /// Verifies that votes can be cast even in Pending state, documenting current contract behavior.
 fn test_vote_state_is_pending_not_active() {
     let (env, client, _, proposer, voter) = setup();
@@ -280,59 +391,23 @@ impl LocalDummyContract {
 #[test]
 /// Verifies that a successful proposal can be queued and then executed after the timelock delay.
 fn test_proposal_execution_lifecycle() {
-    let (env, client, admin, proposer, voter) = setup();
+    let (env, client, _admin, proposer, voter, _tl) =
+        setup_real_timelock(0, 1_209_600, 10, 100, 0);
 
-    // 1. Propose
-    let proposal_id = make_proposal(&env, &client, &proposer);
-
-    // 2. Vote (Active state)
     env.ledger().set_sequence_number(10);
-    client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
-    // 3. Succeed (Past end_ledger)
-    env.ledger().set_sequence_number(111);
-    assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
-
-    // 4. Queue (Succeeded -> Queued)
-    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
-    let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
-    timelock_client.initialize(&admin, &client.address, &0, &1_209_600); // min_delay = 0
-
-    let votes_token_id = env.register(MockVotesContract, ());
-    let guardian = Address::generate(&env);
-    client.initialize(
-        &admin,
-        &votes_token_id,
-        &timelock_id,
-        &10,
-        &100,
-        &0,
-        &0,
-        &guardian,
-        &VoteType::Extended,
-        &120_960,
-    );
-
-    client.queue(&proposal_id);
-    assert_eq!(client.state(&proposal_id), ProposalState::Queued);
-
-    // 5. Execute (Queued -> Executed)
     let dummy_id = env.register(LocalDummyContract, ());
-
-    // Re-create proposal with real dummy target
-    let description = String::from_str(&env, "Test proposal 2");
     let fn_name = Symbol::new(&env, "noop");
     let calldata = Bytes::new(&env);
-
-    // Proposal 2 will be created at current ledger (111)
+    let description = String::from_str(&env, "Test proposal");
+    let description_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, b"Test proposal"))
+        .into();
+    let metadata_uri = String::from_str(&env, "https://example.com/metadata");
     let targets = Vec::from_array(&env, [dummy_id.clone()]);
     let fn_names = Vec::from_array(&env, [fn_name.clone()]);
     let calldatas = Vec::from_array(&env, [calldata.clone()]);
-    let description_hash = env
-        .crypto()
-        .sha256(&Bytes::from_slice(&env, b"Test proposal 2"))
-        .into();
-    let metadata_uri = String::from_str(&env, "https://example.com/metadata2");
 
     let proposal_id = client.propose(
         &proposer,
@@ -344,19 +419,12 @@ fn test_proposal_execution_lifecycle() {
         &calldatas,
     );
 
-    // Proposal 2 timing:
-    // start_ledger = 111 + 10 = 121
-    // end_ledger = 121 + 100 = 221
-
-    // Use a different voter for the second proposal to avoid "already voted"
-    let voter2 = Address::generate(&env);
-    env.ledger().set_sequence_number(121); // Move to Active for new proposal
-    client.cast_vote(&voter2, &proposal_id, &VoteSupport::For);
-    env.ledger().set_sequence_number(222); // Past end_ledger (221)
+    env.ledger().set_sequence_number(121);
+    client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
+    env.ledger().set_sequence_number(222);
 
     assert_eq!(client.state(&proposal_id), ProposalState::Succeeded);
     client.queue(&proposal_id);
-
     client.execute(&proposal_id);
     assert_eq!(client.state(&proposal_id), ProposalState::Executed);
 }
@@ -365,33 +433,15 @@ fn test_proposal_execution_lifecycle() {
 #[should_panic]
 /// Verifies that execution fails if the timelock delay has not yet passed.
 fn test_execute_fails_before_timelock_delay() {
-    let (env, client, admin, proposer, voter) = setup();
+    // min_delay = 3600 (1 hour) so ready_at will be 3600 in the future
+    let (env, client, _admin, proposer, voter, _tl) =
+        setup_real_timelock(3600, 1_209_600, 10, 100, 0);
     let proposal_id = make_proposal(&env, &client, &proposer);
 
     env.ledger().set_sequence_number(10);
     client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
     env.ledger().set_sequence_number(111);
-
-    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
-    let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
-    // Set 1 hour delay
-    timelock_client.initialize(&admin, &client.address, &3600, &1_209_600);
-
-    let votes_token_id = env.register(MockVotesContract, ());
-    let guardian = Address::generate(&env);
-    client.initialize(
-        &admin,
-        &votes_token_id,
-        &timelock_id,
-        &10,
-        &100,
-        &0,
-        &0,
-        &guardian,
-        &VoteType::Extended,
-        &120_960,
-    );
 
     client.queue(&proposal_id);
 
@@ -401,26 +451,8 @@ fn test_execute_fails_before_timelock_delay() {
 
 #[test]
 fn test_execute_batch_executes_all_in_order() {
-    let (env, client, admin, proposer, voter) = setup();
-
-    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
-    let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
-    timelock_client.initialize(&admin, &client.address, &0u64, &1_209_600u64);
-
-    let votes_token_id = env.register(MockVotesContract, ());
-    let guardian = Address::generate(&env);
-    client.initialize(
-        &admin,
-        &votes_token_id,
-        &timelock_id,
-        &10,
-        &100,
-        &0,
-        &0,
-        &guardian,
-        &VoteType::Extended,
-        &120_960,
-    );
+    let (env, client, _admin, proposer, voter, _tl) =
+        setup_real_timelock(0, 1_209_600, 10, 100, 0);
 
     let dummy_id = env.register(LocalDummyContract, ());
     let fn_name = Symbol::new(&env, "noop");
@@ -492,30 +524,11 @@ fn test_execute_batch_executes_all_in_order() {
 /// (votes_for == 0) cannot be queued even if the state machine were bypassed.
 /// Issue #461: queue() must independently verify quorum and threshold.
 fn test_queue_rejects_proposal_failing_quorum() {
-    let (env, client, admin, proposer, _voter) = setup();
-    let proposal_id = make_proposal(&env, &client, &proposer);
-
-    // Register a real timelock so queue() can proceed to the vote-tally check.
-    let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
-    let timelock_client = sorogov_timelock::TimelockContractClient::new(&env, &timelock_id);
-    timelock_client.initialize(&admin, &client.address, &0u64, &1_209_600u64);
-
-    let votes_token_id = env.register(MockVotesContract, ());
-    let guardian = Address::generate(&env);
-    // quorum_numerator = 10 means 10% of 10_000_000 = 1_000_000 required.
+    // quorum_numerator = 10 → 10 % of 10_000_000 total supply = 1_000_000 required.
     // No votes cast → votes_for = 0 < 1_000_000 quorum.
-    client.initialize(
-        &admin,
-        &votes_token_id,
-        &timelock_id,
-        &10,
-        &100,
-        &10,
-        &0,
-        &guardian,
-        &VoteType::Extended,
-        &120_960,
-    );
+    let (env, client, _admin, proposer, _voter, _tl) =
+        setup_real_timelock(0, 1_209_600, 10, 100, 10);
+    let proposal_id = make_proposal(&env, &client, &proposer);
 
     // Advance past end_ledger without any For votes.
     env.ledger().set_sequence_number(111);
@@ -526,4 +539,73 @@ fn test_queue_rejects_proposal_failing_quorum() {
     // queue() must panic with ProposalNotSucceeded (#14) because the
     // independent quorum re-check also fails.
     client.queue(&proposal_id);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+/// Verifies that execute_batch reverts entirely (all-or-nothing) when at
+/// least one proposal in the batch has not been queued yet.
+fn test_execute_batch_partial_preflight_failure() {
+    let (env, client, _admin, proposer, voter, _tl) =
+        setup_real_timelock(0, 1_209_600, 10, 100, 0);
+
+    let dummy_id = env.register(LocalDummyContract, ());
+    let fn_name = Symbol::new(&env, "noop");
+    let targets = {
+        let mut t = soroban_sdk::Vec::new(&env);
+        t.push_back(dummy_id.clone());
+        t
+    };
+    let fn_names = {
+        let mut f = soroban_sdk::Vec::new(&env);
+        f.push_back(fn_name.clone());
+        f
+    };
+
+    // Helper to propose with a distinct description
+    let propose = |desc: &str, calldata: Bytes| -> u64 {
+        let desc_str = String::from_str(&env, desc);
+        let desc_hash = env.crypto().sha256(&Bytes::from_slice(&env, desc.as_bytes())).into();
+        let meta = String::from_str(&env, "https://example.com/");
+        let mut cds = soroban_sdk::Vec::new(&env);
+        cds.push_back(calldata);
+        client.propose(&proposer, &desc_str, &desc_hash, &meta, &targets, &fn_names, &cds)
+    };
+
+    let p1 = propose("p1", Bytes::new(&env));
+    let p2 = propose("p2", Bytes::new(&env));
+    let p3 = propose("p3", Bytes::new(&env));
+
+    env.ledger().set_sequence_number(10);
+    client.cast_vote(&voter, &p1, &VoteSupport::For);
+    client.cast_vote(&voter, &p2, &VoteSupport::For);
+    client.cast_vote(&voter, &p3, &VoteSupport::For);
+
+    env.ledger().set_sequence_number(111);
+    assert_eq!(client.state(&p1), ProposalState::Succeeded);
+    assert_eq!(client.state(&p2), ProposalState::Succeeded);
+    assert_eq!(client.state(&p3), ProposalState::Succeeded);
+
+    // Queue only p1 and p3 — leave p2 as Succeeded
+    client.queue(&p1);
+    client.queue(&p3);
+    assert_eq!(client.state(&p1), ProposalState::Queued);
+    assert_eq!(client.state(&p2), ProposalState::Succeeded);
+    assert_eq!(client.state(&p3), ProposalState::Queued);
+
+    // Batch [queued, succeeded, queued] should panic in the pre-flight check
+    let mut batch = Vec::new(&env);
+    batch.push_back(p1);
+    batch.push_back(p2);
+    batch.push_back(p3);
+    client.execute_batch(&batch);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+/// Verifies that execute_batch rejects an empty batch.
+fn test_execute_batch_rejects_empty_batch() {
+    let (env, client, _admin, _proposer, _voter) = setup();
+    let batch = Vec::new(&env);
+    client.execute_batch(&batch);
 }

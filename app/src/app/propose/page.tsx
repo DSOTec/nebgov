@@ -18,14 +18,17 @@ import {
   Loader2,
   Link as LinkIcon,
   AlertCircle,
+  Copy,
 } from "lucide-react";
 import { Keypair } from "@stellar/stellar-sdk";
 import {
   GovernorClient,
   VotesClient,
+  ReputationClient,
   hashDescription,
   uploadProposalMetadata,
   type CanProposeResult,
+  type GovernorSettings,
 } from "@nebgov/sdk";
 import {
   calldataArgRowToScVal,
@@ -34,11 +37,13 @@ import {
   type CalldataArgRow,
 } from "../../lib/treasury-calldata";
 import { useWallet } from "../../lib/wallet-context";
+import { CountdownTimer } from "../../components/CountdownTimer";
 
 // Wizard Constants
 const TITLE_MIN = 10;
 const TITLE_MAX = 100;
 const DESC_MIN = 20;
+const DESC_MAX = 10000;
 const STORAGE_KEY = "nebgov_proposal_draft";
 const DRAFT_EXPIRY_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -79,6 +84,20 @@ function newAction(): WizardAction {
 }
 
 // Helpers
+const LEDGER_SECONDS = 5;
+
+function ledgerToTimeEstimate(ledgers: number): string {
+  const totalSeconds = ledgers * LEDGER_SECONDS;
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  if (minutes < 60) return `~${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  if (hours < 24) return `~${hours} hr${remainingMinutes > 0 ? ` ${remainingMinutes} min` : ''}`;
+  const days = Math.floor(hours / 24);
+  return `~${days} day${days > 1 ? 's' : ''} ${hours % 24} hr`;
+}
+
 function isReasonableIpfsRef(s: string): boolean {
   if (!s) return true; // Optional
   const v = s.trim().toLowerCase();
@@ -119,6 +138,7 @@ function getClients() {
   return {
     governor: new GovernorClient(cfg),
     votes: new VotesClient(cfg),
+    reputation: new ReputationClient(cfg),
     governorAddress,
   };
 }
@@ -126,7 +146,11 @@ function getClients() {
 function buildDescription(title: string, desc: string, ipfs: string): string {
   // We store the title + description content on-chain as a single string
   // and we also store the IPFS link for rich metadata access.
-  return `${title}\n\n${desc}`;
+  const base = `${title}\n\n${desc}`;
+  if (ipfs) {
+    return `${base}\n\n<!-- ipfs:${ipfs} -->`;
+  }
+  return base;
 }
 
 function buildPayload(actions: WizardAction[], governorAddress: string) {
@@ -193,6 +217,12 @@ function ProposeWizardInner() {
   // Simulation / review data
   const [votes, setVotes] = useState<bigint | null>(null);
   const [threshold, setThreshold] = useState<bigint | null>(null);
+  // Reputation-adjusted threshold (Issue #771) — what propose() actually
+  // enforces. Falls back to the flat threshold if reputation is disabled or
+  // the fetch fails, so behavior degrades gracefully.
+  const [effectiveThreshold, setEffectiveThreshold] = useState<bigint | null>(
+    null,
+  );
   const [canProposeResult, setCanProposeResult] =
     useState<CanProposeResult | null>(null);
   const [estimate, setEstimate] = useState<{
@@ -211,6 +241,7 @@ function ProposeWizardInner() {
   const [baseVotes, setBaseVotes] = useState<bigint | null>(null);
   const [delegatee, setDelegatee] = useState<string | null>(null);
   const [delegateBusy, setDelegateBusy] = useState(false);
+  const [settings, setSettings] = useState<GovernorSettings | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
 
   const reviewDataReady =
@@ -314,19 +345,37 @@ function ProposeWizardInner() {
       return;
     }
 
-    const pinataKey = localStorage.getItem("pinata_jwt") || "";
+    // Try to get JWT from sessionStorage (only for current session, cleared on tab close)
+    let pinataKey = sessionStorage.getItem("pinata_jwt") || "";
     if (!pinataKey) {
       const key = prompt("Please enter your Pinata JWT (or API Key):");
       if (!key) return;
-      localStorage.setItem("pinata_jwt", key);
+      // Store only in sessionStorage (cleared on browser tab close) - NEVER in localStorage
+      sessionStorage.setItem("pinata_jwt", key);
+      pinataKey = key;
     }
 
     setIsUploading(true);
     setStepErrors([]);
     try {
-      const { uri, hash } = await uploadProposalMetadata(draft.description, {
-        pinataApiKey: localStorage.getItem("pinata_jwt") || "",
+      // Call the server-side API route that handles Pinata uploads securely
+      const response = await fetch("/api/upload-metadata", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          description: draft.description,
+          pinataJwt: pinataKey,
+        }),
       });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || `Upload failed: ${response.status}`);
+      }
+
+      const { uri, hash } = await response.json();
       setDraft((d) => ({ ...d, ipfsRef: uri, descriptionHash: hash }));
     } catch (err) {
       console.error("IPFS upload failed:", err);
@@ -344,8 +393,9 @@ function ProposeWizardInner() {
     if (t.length < TITLE_MIN || t.length > TITLE_MAX) {
       err.push(`Title must be ${TITLE_MIN}–${TITLE_MAX} characters.`);
     }
-    if (draft.description.trim().length < DESC_MIN) {
-      err.push(`Description must be at least ${DESC_MIN} characters.`);
+    const d = draft.description.trim();
+    if (d.length < DESC_MIN || d.length > DESC_MAX) {
+      err.push(`Description must be ${DESC_MIN}–${DESC_MAX} characters.`);
     }
     if (!isReasonableIpfsRef(draft.ipfsRef)) {
       err.push(
@@ -380,18 +430,22 @@ function ProposeWizardInner() {
     setEstimate(null);
     setEstimateErr(null);
     try {
-      const [v, t, cp, bv, del] = await Promise.all([
+      const [v, t, cp, bv, del, s, et] = await Promise.all([
         clients.votes.getVotes(publicKey),
         clients.governor.proposalThreshold(),
         clients.governor.canPropose(publicKey),
         clients.votes.getBaseVotes(publicKey),
         clients.votes.getDelegatee(publicKey),
+        clients.governor.getSettings(publicKey).catch(() => null),
+        clients.reputation.getEffectiveThreshold(publicKey).catch(() => null),
       ]);
       setVotes(v);
       setThreshold(t);
       setCanProposeResult(cp);
       setBaseVotes(bv);
       setDelegatee(del);
+      setSettings(s);
+      setEffectiveThreshold(et);
 
       const description = buildDescription(
         draft.title,
@@ -617,13 +671,14 @@ function ProposeWizardInner() {
         setStepErrors(["Still loading voting power. Try again in a moment."]);
         return;
       }
-      if (votes < threshold) {
+      const requiredThreshold = effectiveThreshold ?? threshold;
+      if (votes < requiredThreshold) {
         const shortfall = (
-          Number(threshold - votes) /
+          Number(requiredThreshold - votes) /
           10 ** 7
         ).toLocaleString();
         setStepErrors([
-          `Insufficient voting power — need ${(Number(threshold) / 10 ** 7).toLocaleString()} GOV, have ${(Number(votes) / 10 ** 7).toLocaleString()} GOV (shortfall: ${shortfall} GOV).`,
+          `Insufficient voting power — need ${(Number(requiredThreshold) / 10 ** 7).toLocaleString()} GOV, have ${(Number(votes) / 10 ** 7).toLocaleString()} GOV (shortfall: ${shortfall} GOV).`,
         ]);
         return;
       }
@@ -726,7 +781,10 @@ function ProposeWizardInner() {
                 <p className="mt-1">{earlyEligibility.reason}</p>
                 {earlyEligibility.cooldownEndsAt && (
                   <p className="mt-2 text-xs font-mono opacity-80">
-                    Cooldown ends at ledger: {earlyEligibility.cooldownEndsAt}
+                    <CountdownTimer
+                      label="Cooldown ends in"
+                      targetLedger={earlyEligibility.cooldownEndsAt}
+                    />
                   </p>
                 )}
                 {earlyEligibility.reason.includes("threshold") && (
@@ -781,17 +839,47 @@ function ProposeWizardInner() {
           <div className="grid md:grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                Description (Markdown, min {DESC_MIN} chars)
+                Description (Markdown, {DESC_MIN}–{DESC_MAX} chars)
               </label>
               <textarea
                 value={draft.description}
                 onChange={(e) =>
-                  setDraft((d) => ({ ...d, description: e.target.value }))
+                  setDraft((d) => ({ ...d, description: e.target.value.slice(0, DESC_MAX) }))
                 }
                 rows={12}
+                maxLength={DESC_MAX}
                 className="w-full bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-900 dark:text-white font-mono focus:ring-2 focus:ring-indigo-500"
                 placeholder="Full proposal narrative: context, options, risks…"
               />
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                {draft.description.trim().length} / {DESC_MAX} (min {DESC_MIN})
+              </p>
+              {draft.description.trim() && (
+                <div className="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+                  {isHashing ? (
+                    <span className="flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Computing content hash…
+                    </span>
+                  ) : draft.descriptionHash ? (
+                    <>
+                      <span className="font-mono truncate max-w-[280px]">
+                        Content hash: 0x{draft.descriptionHash}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard.writeText(`0x${draft.descriptionHash}`);
+                          toast.success("Hash copied");
+                        }}
+                        className="text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 shrink-0"
+                      >
+                        <Copy className="w-3.5 h-3.5" />
+                      </button>
+                    </>
+                  ) : null}
+                </div>
+              )}
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1 flex items-center justify-between">
@@ -1208,14 +1296,44 @@ function ProposeWizardInner() {
                       <p className="text-xl font-bold text-gray-900 dark:text-white">
                         {threshold === null
                           ? "..."
-                          : (Number(threshold) / 10 ** 7).toLocaleString()}
+                          : (
+                              Number(effectiveThreshold ?? threshold) /
+                              10 ** 7
+                            ).toLocaleString()}
                       </p>
                     </div>
                   </div>
 
+                  {threshold !== null &&
+                    effectiveThreshold !== null &&
+                    effectiveThreshold !== threshold &&
+                    (() => {
+                      const pctChange =
+                        threshold === 0n
+                          ? 0
+                          : (Number(effectiveThreshold - threshold) /
+                              Number(threshold)) *
+                            100;
+                      const isDiscount = pctChange < 0;
+                      return (
+                        <div
+                          className={`text-sm p-3 rounded-xl border ${
+                            isDiscount
+                              ? "text-green-800 bg-green-50 border-green-200 dark:bg-green-900/20 dark:text-green-300 dark:border-green-800"
+                              : "text-rose-800 bg-rose-50 border-rose-200 dark:bg-rose-900/20 dark:text-rose-300 dark:border-rose-800"
+                          }`}
+                        >
+                          Your reputation {isDiscount ? "discount" : "penalty"}:{" "}
+                          {isDiscount ? "" : "+"}
+                          {pctChange.toFixed(0)}% vs the flat threshold of{" "}
+                          {(Number(threshold) / 10 ** 7).toLocaleString()} GOV.
+                        </div>
+                      );
+                    })()}
+
                   {votes !== null &&
                     threshold !== null &&
-                    votes < threshold && (
+                    votes < (effectiveThreshold ?? threshold) && (
                       <div className="flex items-start gap-3 text-amber-800 bg-amber-50 dark:bg-amber-900/20 dark:text-amber-300 p-4 rounded-xl text-sm border border-amber-200 dark:border-amber-800">
                         <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
                         <div>
@@ -1224,14 +1342,18 @@ function ProposeWizardInner() {
                           </p>
                           <p className="mt-1">
                             You need{" "}
-                            {(Number(threshold) / 10 ** 7).toLocaleString()} GOV
-                            to create a proposal. Your current voting power:{" "}
+                            {(
+                              Number(effectiveThreshold ?? threshold) /
+                              10 ** 7
+                            ).toLocaleString()}{" "}
+                            GOV to create a proposal. Your current voting
+                            power:{" "}
                             {(Number(votes) / 10 ** 7).toLocaleString()} GOV.
                           </p>
                           <p className="mt-2 text-sm font-medium">
                             Shortfall:{" "}
                             {(
-                              Number(threshold - votes) /
+                              Number((effectiveThreshold ?? threshold) - votes) /
                               10 ** 7
                             ).toLocaleString()}{" "}
                             GOV
@@ -1271,6 +1393,34 @@ function ProposeWizardInner() {
                 </>
               )}
 
+              {settings && (
+                <div className="bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl p-4 space-y-2">
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                    Rate limits
+                  </p>
+                  <div className="text-sm space-y-1">
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Cooldown</span>
+                      <span className="font-mono text-gray-900 dark:text-gray-200">
+                        {ledgerToTimeEstimate(settings.proposalCooldown ?? 100)} ({settings.proposalCooldown ?? 100} ledgers)
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Max per period</span>
+                      <span className="font-mono text-gray-900 dark:text-gray-200">
+                        {settings.maxProposalsPerPeriod ?? 5}
+                      </span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-500">Period</span>
+                      <span className="font-mono text-gray-900 dark:text-gray-200">
+                        {ledgerToTimeEstimate(settings.proposalPeriodDuration ?? 10_000)} ({settings.proposalPeriodDuration ?? 10_000} ledgers)
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {canProposeResult && !canProposeResult.allowed && (
                 <div className="flex items-start gap-3 text-red-700 bg-red-50 dark:bg-red-900/20 dark:text-red-400 p-4 rounded-xl text-sm border border-red-100 dark:border-red-900/30">
                   <AlertCircle className="w-5 h-5 shrink-0 mt-0.5" />
@@ -1278,9 +1428,11 @@ function ProposeWizardInner() {
                     <p className="font-semibold">Rate limit active</p>
                     <p className="mt-1">{canProposeResult.reason}</p>
                     {canProposeResult.cooldownEndsAt && (
-                      <p className="mt-2 text-xs opacity-80">
-                        Estimated availability: Ledger{" "}
-                        {canProposeResult.cooldownEndsAt}
+                      <p className="mt-2 text-xs">
+                        <CountdownTimer
+                          label="Estimated availability in"
+                          targetLedger={canProposeResult.cooldownEndsAt}
+                        />
                       </p>
                     )}
                   </div>
@@ -1375,7 +1527,7 @@ function ProposeWizardInner() {
                   (!reviewDataReady ||
                     (votes !== null &&
                       threshold !== null &&
-                      votes < threshold)))
+                      votes < (effectiveThreshold ?? threshold))))
               }
               className="bg-indigo-600 text-white px-8 py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors min-w-[120px]"
             >

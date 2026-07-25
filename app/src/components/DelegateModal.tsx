@@ -6,6 +6,7 @@
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Keypair } from "@stellar/stellar-sdk";
+import { isValidStellarAddress } from "../lib/utils/stellarAddress";
 import toast from "react-hot-toast";
 import { VotesClient, type Network } from "@nebgov/sdk";
 import { useWallet } from "../lib/wallet-context";
@@ -16,6 +17,8 @@ interface Props {
   onDelegated?: () => void;
   prefillAddress?: string;
   currentDelegatee?: string | null;
+  /** Shown as a secondary "delegate without paying gas" action, if provided. */
+  onOpenGasless?: () => void;
 }
 
 function getVotesClientFromEnv(): VotesClient {
@@ -63,8 +66,10 @@ export function DelegateModal({
   onDelegated,
   prefillAddress,
   currentDelegatee,
+  onOpenGasless,
 }: Props) {
   const [delegatee, setDelegatee] = useState(prefillAddress || "");
+  const [delegateeError, setDelegateeError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { isConnected, publicKey } = useWallet();
 
@@ -79,9 +84,22 @@ export function DelegateModal({
     Boolean(publicKey) &&
     currentDelegatee !== publicKey;
 
+  function validateDelegatee(value: string) {
+    if (!value.trim()) {
+      setDelegateeError("Address is required.");
+      return false;
+    }
+    if (!isValidStellarAddress(value)) {
+      setDelegateeError("Invalid Stellar address.");
+      return false;
+    }
+    setDelegateeError("");
+    return true;
+  }
+
   async function handleDelegate(e: FormEvent) {
     e.preventDefault();
-    if (!delegatee.trim()) return;
+    if (!validateDelegatee(delegatee)) return;
 
     setSubmitting(true);
     try {
@@ -141,41 +159,6 @@ export function DelegateModal({
     }
   }
 
-  async function handleDelegateBySig() {
-    if (!delegatee.trim()) return;
-
-    setSubmitting(true);
-    try {
-      if (!isConnected || !publicKey) {
-        throw new Error("Connect your wallet first.");
-      }
-
-      const client = getVotesClientFromEnv();
-      const signer = getDelegateSigner();
-      const nonce = 0n; // TODO: Query current nonce from contract
-      const expiry = BigInt(Math.floor(Date.now() / 1000) + 3600);
-      const signature = client.signDelegation(
-        signer,
-        delegatee.trim(),
-        nonce,
-        expiry,
-      );
-
-      await client.delegateBySig(
-        publicKey,
-        delegatee.trim(),
-        nonce,
-        expiry,
-        signature,
-      );
-
-      onDelegated?.();
-      onClose();
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
   return (
     <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
@@ -216,10 +199,16 @@ export function DelegateModal({
             type="text"
             placeholder="Stellar address (G...)"
             value={delegatee}
-            onChange={(e) => setDelegatee(e.target.value)}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono"
+            onChange={(e) => { setDelegatee(e.target.value); setDelegateeError(""); }}
+            onBlur={(e) => validateDelegatee(e.target.value)}
+            className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono ${
+              delegateeError ? "border-red-400" : "border-gray-300"
+            }`}
             required
           />
+          {delegateeError && (
+            <p className="text-xs text-red-500 mt-1">{delegateeError}</p>
+          )}
 
           <div className="flex gap-3">
             <button
@@ -231,7 +220,7 @@ export function DelegateModal({
             </button>
             <button
               type="submit"
-              disabled={submitting}
+              disabled={submitting || !!delegateeError || !delegatee.trim()}
               className="flex-1 bg-indigo-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
             >
               {submitting ? "Delegating..." : "Delegate"}
@@ -249,22 +238,24 @@ export function DelegateModal({
             </button>
           )}
 
-          <div className="border-t border-gray-200 pt-4 mt-4">
-            <p className="text-xs text-gray-500 mb-2">
-              Or delegate without paying gas
-            </p>
-            <button
-              type="button"
-              onClick={() => void handleDelegateBySig()}
-              disabled={submitting || !delegatee.trim()}
-              className="w-full bg-green-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
-            >
-              {submitting ? "Signing..." : "Delegate without paying gas"}
-            </button>
-            <p className="text-xs text-gray-400 mt-1">
-              Sign off-chain, relayer submits transaction
-            </p>
-          </div>
+          {onOpenGasless && (
+            <div className="border-t border-gray-200 pt-4 mt-4">
+              <p className="text-xs text-gray-500 mb-2">
+                Or delegate without paying gas
+              </p>
+              <button
+                type="button"
+                onClick={onOpenGasless}
+                disabled={submitting}
+                className="w-full bg-green-600 text-white py-2 rounded-lg text-sm font-medium hover:bg-green-700 disabled:opacity-50"
+              >
+                Delegate for free — we pay the fee
+              </button>
+              <p className="text-xs text-gray-400 mt-1">
+                Sign off-chain, our relayer submits the transaction
+              </p>
+            </div>
+          )}
         </form>
       </div>
     </div>

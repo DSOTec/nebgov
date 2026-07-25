@@ -38,6 +38,8 @@ import {
 } from "recharts";
 
 import { ErrorBoundary } from "../../../components/ErrorBoundary";
+import ReactMarkdown from "react-markdown";
+import rehypeSanitize from "rehype-sanitize";
 import { ErrorState } from "../../../components/ErrorState";
 import { useTheme } from "../../../hooks/useTheme";
 import {
@@ -45,6 +47,7 @@ import {
   reportFrontendError,
 } from "../../../lib/frontend-error";
 import { ProposalDetailSkeleton } from "../../../components/ui/ProposalDetailSkeleton";
+import { CountdownTimer } from "../../../components/CountdownTimer";
 
 interface Props {
   params: { id: string };
@@ -77,6 +80,7 @@ const INITIAL_PROPOSAL = {
   votesFor: 0n,
   votesAgainst: 0n,
   votesAbstain: 0n,
+  startLedger: 0,
   endLedger: 0,
   proposer: "",
   quorum: 0n,
@@ -247,6 +251,15 @@ export default function ProposalDetailClient({ params }: Props) {
   }, [loadProposal]);
 
   useEffect(() => {
+    if (proposal.state === ProposalState.Active || proposal.state === ProposalState.Queued) {
+      const interval = setInterval(() => {
+        loadProposal();
+      }, 15_000);
+      return () => clearInterval(interval);
+    }
+  }, [proposal.state, loadProposal]);
+
+  useEffect(() => {
     if (!governorClient) return;
     governorClient
       .getSettings()
@@ -350,6 +363,11 @@ export default function ProposalDetailClient({ params }: Props) {
 
   const totalVotes =
     proposal.votesFor + proposal.votesAgainst + proposal.votesAbstain;
+
+  const quorumVotes = proposal.votesFor + proposal.votesAbstain;
+  const quorumPercentage =
+    quorumValue > 0n ? Math.min(100, Number((quorumVotes * 100n) / quorumValue)) : 0;
+  const quorumColor = quorumReached ? "bg-green-500" : "bg-blue-500";
 
   async function handleCastVote() {
     if (selectedSupport === null || !governorClient || !publicKey || isVoting)
@@ -500,7 +518,9 @@ export default function ProposalDetailClient({ params }: Props) {
       </div>
 
       <h1 className="text-2xl font-bold text-gray-900 dark:text-white mb-2">
-        {proposal.description}
+        <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+          {proposal.description}
+        </ReactMarkdown>
       </h1>
 
       <p className="text-sm text-gray-500 mb-6">
@@ -601,13 +621,21 @@ export default function ProposalDetailClient({ params }: Props) {
             content...
           </div>
         ) : metadata ? (
-          <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200 whitespace-pre-wrap">
-            {metadata}
+          <div className="prose prose-sm max-w-none text-gray-800 dark:text-gray-200">
+            <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+              {metadata}
+            </ReactMarkdown>
           </div>
         ) : (
-          <p className="text-gray-400 italic py-4">
-            {fetchError ? "Content unavailable" : proposal.description}
-          </p>
+          <div className="text-gray-400 italic py-4">
+            {fetchError ? (
+              "Content unavailable"
+            ) : (
+              <ReactMarkdown rehypePlugins={[rehypeSanitize]}>
+                {proposal.description}
+              </ReactMarkdown>
+            )}
+          </div>
         )}
       </div>
       </ErrorBoundary>
@@ -829,6 +857,14 @@ export default function ProposalDetailClient({ params }: Props) {
             Cast Your Vote
           </h2>
 
+          <div className="mb-4">
+            <CountdownTimer
+              state={proposal.state}
+              startLedger={proposal.startLedger}
+              endLedger={proposal.endLedger}
+            />
+          </div>
+
           {!isConnected ? (
             <div className="bg-indigo-50 dark:bg-slate-900/80 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-5 mb-4">
               <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -837,7 +873,7 @@ export default function ProposalDetailClient({ params }: Props) {
                     Connect your wallet to vote on this proposal
                   </p>
                   <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">
-                    You'll need GOV tokens to participate.
+                    You&apos;ll need GOV tokens to participate.
                   </p>
                 </div>
 

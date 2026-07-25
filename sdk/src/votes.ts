@@ -18,6 +18,10 @@ import {
   DelegatorInfo,
   VotesSettings,
   DelegatorRecord,
+  DelegationEntry,
+  DelegationHistoryEntry,
+  RegistryDelegatorInfo,
+  DelegateProfile,
 } from "./types";
 import { VotesError, VotesErrorCode, parseVotesError } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
@@ -420,7 +424,8 @@ export class VotesClient {
     }
 
     const options = arg1 ?? {};
-    const limit = Math.max(1, Math.min(options.limit ?? 20, 100));
+    const limit = Math.max(1, Math.min(options.limit ?? 50, 100));
+    const offset = Math.max(0, options.offset ?? 0);
 
     const delegationMap =
       options.delegationMap ??
@@ -449,22 +454,34 @@ export class VotesClient {
       byDelegate.get(delegatee)!.add(delegator);
     }
 
-    // Query current voting power for each unique delegate
+    // Query current voting power in batches to avoid OOM on large delegate sets
     const delegateAddresses = Array.from(byDelegate.keys());
-    const powerEntries = await Promise.all(
-      delegateAddresses.map(async (addr) => {
-        const [votingPower, baseVotes] = await Promise.all([
-          this.getVotes(addr),
-          this.getBaseVotes(addr),
-        ]);
-        return {
-          address: addr,
-          votingPower,
-          baseVotes,
-          delegatorCount: byDelegate.get(addr)!.size,
-        };
-      }),
-    );
+    const POWER_BATCH_SIZE = 20;
+    const powerEntries: Array<{
+      address: string;
+      votingPower: bigint;
+      baseVotes: bigint;
+      delegatorCount: number;
+    }> = [];
+
+    for (let i = 0; i < delegateAddresses.length; i += POWER_BATCH_SIZE) {
+      const batch = delegateAddresses.slice(i, i + POWER_BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (addr) => {
+          const [votingPower, baseVotes] = await Promise.all([
+            this.getVotes(addr),
+            this.getBaseVotes(addr),
+          ]);
+          return {
+            address: addr,
+            votingPower,
+            baseVotes,
+            delegatorCount: byDelegate.get(addr)!.size,
+          };
+        }),
+      );
+      powerEntries.push(...batchResults);
+    }
 
     const delegates = powerEntries
       .filter((d) => d.votingPower > 0n)
@@ -475,7 +492,7 @@ export class VotesClient {
             ? -1
             : 0,
       )
-      .slice(0, limit);
+      .slice(offset, offset + limit);
 
     const result: TopDelegatesResult = {
       delegates,
@@ -500,10 +517,8 @@ export class VotesClient {
   async getVotingPowerDistribution(
     fromLedger?: number,
   ): Promise<VotingPowerDistribution> {
-    const [delegationMap, totalSupply] = await Promise.all([
-      this.buildDelegationMap(fromLedger),
-      this.getTotalSupply(),
-    ]);
+    const delegationMap = await this.buildDelegationMap(fromLedger);
+    const totalSupply = await this.getTotalSupply();
 
     if (delegationMap.size === 0) {
       return {
@@ -559,12 +574,13 @@ export class VotesClient {
 
     if (delegators.length === 0) return [];
 
-    const results = await Promise.all(
-      delegators.map(async (delegator) => ({
+    const results: any[] = [];
+    for (const delegator of delegators) {
+      results.push({
         delegator,
         power: await this.getVotes(delegator),
-      })),
-    );
+      });
+    }
 
     return results
       .filter((d) => d.power > 0n)
@@ -587,66 +603,21 @@ export class VotesClient {
     const totalSupply = await this.getTotalSupply();
     if (totalSupply === 0n) return [];
 
-    const delegates = await Promise.all(
-      addresses.map(async (address) => {
-        const votes = await this.getVotes(address);
-        return {
+    const delegates: any[] = [];
+    for (const address of addresses) {
+      const votes = await this.getVotes(address);
+      delegates.push({
           address,
           votes,
           percentOfSupply:
             totalSupply > 0n ? Number((votes * 10000n) / totalSupply) / 100 : 0,
-        };
-      }),
-    );
+      });
+    }
 
     return delegates
       .filter((d) => d.votes > 0n)
       .sort((a, b) => (b.votes > a.votes ? 1 : b.votes < a.votes ? -1 : 0))
       .slice(0, limit);
-  }
-
-  /**
-   * Delegate voting power by signature (gasless for the token holder).
-   *
-   * A relayer submits this on behalf of a token holder who signed a message
-   * off-chain. The holder only needs to sign, no gas required.
-   *
-   * @param owner - The token holder who signed the delegation message
-   * @param delegatee - The address to delegate voting power to
-   * @param nonce - Unique nonce to prevent replay attacks
-   * @param expiry - Unix timestamp after which the signature is invalid
-   * @param signature - Ed25519 signature over (owner, delegatee, nonce, expiry)
-   */
-  async delegateBySig(
-    owner: string,
-    delegatee: string,
-    nonce: bigint,
-    expiry: bigint,
-    signature: Buffer,
-  ): Promise<void> {
-    return this.retry(async () => {
-      const account = await this.server.getAccount(this.contract.contractId());
-
-      const tx = new TransactionBuilder(account, {
-        fee: BASE_FEE,
-        networkPassphrase: this.networkPassphrase,
-      })
-        .addOperation(
-          this.contract.call(
-            "delegate_by_sig",
-            nativeToScVal(owner, { type: "address" }),
-            nativeToScVal(delegatee, { type: "address" }),
-            nativeToScVal(nonce, { type: "u64" }),
-            nativeToScVal(expiry, { type: "u64" }),
-            nativeToScVal(signature, { type: "bytes" }),
-          ),
-        )
-        .setTimeout(30)
-        .build();
-
-      const prepared = await this.server.prepareTransaction(tx);
-      await this.server.sendTransaction(prepared);
-    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   /**
@@ -781,29 +752,262 @@ export class VotesClient {
     };
   }
 
-  /**
-   * Sign a delegation message off-chain for gasless delegation.
-   *
-   * @param signer - Keypair of the token holder
-   * @param delegatee - Address to delegate to
-   * @param nonce - Current nonce for the owner
-   * @param expiry - Unix timestamp after which the signature is invalid
-   * @returns Ed25519 signature bytes
-   */
-  signDelegation(
-    signer: Keypair,
-    delegatee: string,
-    nonce: bigint,
-    expiry: bigint,
-  ): Buffer {
-    const message = Buffer.concat([
-      Buffer.from(signer.publicKey()),
-      Buffer.from(delegatee),
-      Buffer.from(nonce.toString(16).padStart(16, "0"), "hex"),
-      Buffer.from(expiry.toString(16).padStart(16, "0"), "hex"),
-    ]);
+  // Gasless ("delegate by signature") delegation lives in
+  // DelegationSigClient (./delegation-sig.ts) — it needs a full
+  // SorobanAuthorizationEntry, not a raw signature, because verification is
+  // done through Soroban's native auth framework. See that module's docs.
 
-    return signer.sign(message);
+  // ─── Delegation registry (issue #769) ──────────────────────────────────────
+  //
+  // These wrap the on-chain `delegation_registry` module's query/admin
+  // functions directly (single simulated call each), as opposed to the
+  // event-scanning helpers above (getDelegators, getTopDelegates, etc.)
+  // which reconstruct delegation state from `del_chsh`/`del_revk` events.
+
+  private async simulateRead<T>(
+    method: string,
+    args: xdr.ScVal[],
+    parse: (raw: xdr.ScVal) => T,
+    defaultValue: T,
+  ): Promise<T> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(await this.server.getAccount(this.readAccount()), {
+          fee: BASE_FEE,
+          networkPassphrase: this.networkPassphrase,
+        })
+          .addOperation(this.contract.call(method, ...args))
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return defaultValue;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? parse(raw) : defaultValue;
+    });
+  }
+
+  private parseDelegationEntry(native: Record<string, unknown>): DelegationEntry {
+    return {
+      delegator: String(native.delegator),
+      delegatee: String(native.delegatee),
+      delegatedAtLedger: Number(native.delegated_at_ledger),
+      votingPowerAtDelegation: BigInt(native.voting_power_at_delegation as bigint),
+      active: Boolean(native.active),
+      revokedAtLedger:
+        native.revoked_at_ledger === undefined || native.revoked_at_ledger === null
+          ? null
+          : Number(native.revoked_at_ledger),
+    };
+  }
+
+  private parseDelegationHistoryEntry(native: Record<string, unknown>): DelegationHistoryEntry {
+    return {
+      delegatee: String(native.delegatee),
+      delegatedAtLedger: Number(native.delegated_at_ledger),
+      revokedAtLedger:
+        native.revoked_at_ledger === undefined || native.revoked_at_ledger === null
+          ? null
+          : Number(native.revoked_at_ledger),
+      powerAtDelegation: BigInt(native.power_at_delegation as bigint),
+      sequence: Number(native.sequence),
+    };
+  }
+
+  private parseRegistryDelegatorInfo(native: Record<string, unknown>): RegistryDelegatorInfo {
+    return {
+      address: String(native.address),
+      delegatedPower: BigInt(native.delegated_power as bigint),
+      delegatedAtLedger: Number(native.delegated_at_ledger),
+      chainDepth: Number(native.chain_depth),
+    };
+  }
+
+  /** Get full delegation history for a delegator. */
+  async getDelegationHistory(delegator: string): Promise<DelegationHistoryEntry[]> {
+    return this.simulateRead(
+      "get_delegation_history",
+      [nativeToScVal(delegator, { type: "address" })],
+      (raw) => (scValToNative(raw) as Record<string, unknown>[]).map((e) => this.parseDelegationHistoryEntry(e)),
+      [],
+    );
+  }
+
+  /**
+   * Get all current delegators of a delegatee with their power and depth.
+   *
+   * Named `getRegistryDelegators` (rather than `getDelegators`) to avoid
+   * colliding with the existing event-scan-based {@link getDelegators}.
+   */
+  async getRegistryDelegators(
+    delegatee: string,
+    offset = 0,
+    limit = 50,
+  ): Promise<RegistryDelegatorInfo[]> {
+    return this.simulateRead(
+      "get_delegators",
+      [
+        nativeToScVal(delegatee, { type: "address" }),
+        nativeToScVal(offset, { type: "u32" }),
+        nativeToScVal(limit, { type: "u32" }),
+      ],
+      (raw) => (scValToNative(raw) as Record<string, unknown>[]).map((e) => this.parseRegistryDelegatorInfo(e)),
+      [],
+    );
+  }
+
+  /** Get total number of current delegators of a delegatee. */
+  async getDelegatorCount(delegatee: string): Promise<number> {
+    return this.simulateRead(
+      "get_delegator_count",
+      [nativeToScVal(delegatee, { type: "address" })],
+      (raw) => Number(scValToNative(raw)),
+      0,
+    );
+  }
+
+  /** Get the full delegation chain from delegator to the final tip. */
+  async getDelegationChain(delegator: string): Promise<string[]> {
+    return this.simulateRead(
+      "get_delegation_chain",
+      [nativeToScVal(delegator, { type: "address" })],
+      (raw) => scValToNative(raw) as string[],
+      [],
+    );
+  }
+
+  /** Get depth of the delegation chain from this address. */
+  async getChainDepth(delegator: string): Promise<number> {
+    return this.simulateRead(
+      "get_chain_depth",
+      [nativeToScVal(delegator, { type: "address" })],
+      (raw) => Number(scValToNative(raw)),
+      0,
+    );
+  }
+
+  /** Get a comprehensive delegate profile (voting power, delegators, depth limit). */
+  async getDelegateProfile(address: string): Promise<DelegateProfile> {
+    return this.simulateRead(
+      "get_delegate_profile",
+      [nativeToScVal(address, { type: "address" })],
+      (raw) => {
+        const native = scValToNative(raw) as Record<string, unknown>;
+        return {
+          address: String(native.address),
+          currentVotingPower: BigInt(native.current_voting_power as bigint),
+          baseVotingPower: BigInt(native.base_voting_power as bigint),
+          totalDelegators: Number(native.total_delegators),
+          totalDelegatedPower: BigInt(native.total_delegated_power as bigint),
+          delegationDepthLimit: Number(native.delegation_depth_limit),
+          firstDelegatedAtLedger:
+            native.first_delegated_at_ledger === undefined ||
+            native.first_delegated_at_ledger === null
+              ? null
+              : Number(native.first_delegated_at_ledger),
+        };
+      },
+      {
+        address,
+        currentVotingPower: 0n,
+        baseVotingPower: 0n,
+        totalDelegators: 0,
+        totalDelegatedPower: 0n,
+        delegationDepthLimit: 1,
+        firstDelegatedAtLedger: null,
+      },
+    );
+  }
+
+  /** Get all active delegations received by a delegatee (paginated). */
+  async getReceivedDelegations(
+    delegatee: string,
+    offset = 0,
+    limit = 50,
+  ): Promise<DelegationEntry[]> {
+    return this.simulateRead(
+      "get_received_delegations",
+      [
+        nativeToScVal(delegatee, { type: "address" }),
+        nativeToScVal(offset, { type: "u32" }),
+        nativeToScVal(limit, { type: "u32" }),
+      ],
+      (raw) => (scValToNative(raw) as Record<string, unknown>[]).map((e) => this.parseDelegationEntry(e)),
+      [],
+    );
+  }
+
+  /** Check whether delegating from `delegator` to `delegatee` would create a cycle. */
+  async wouldCreateCycle(delegator: string, delegatee: string): Promise<boolean> {
+    return this.simulateRead(
+      "would_create_cycle",
+      [
+        nativeToScVal(delegator, { type: "address" }),
+        nativeToScVal(delegatee, { type: "address" }),
+      ],
+      (raw) => Boolean(scValToNative(raw)),
+      false,
+    );
+  }
+
+  /** Get a snapshot of the full delegation graph for a delegatee at a past ledger (for audit). */
+  async getDelegationSnapshot(
+    delegatee: string,
+    atLedger: number,
+  ): Promise<RegistryDelegatorInfo[]> {
+    return this.simulateRead(
+      "get_delegation_snapshot",
+      [
+        nativeToScVal(delegatee, { type: "address" }),
+        nativeToScVal(atLedger, { type: "u32" }),
+      ],
+      (raw) => (scValToNative(raw) as Record<string, unknown>[]).map((e) => this.parseRegistryDelegatorInfo(e)),
+      [],
+    );
+  }
+
+  /** Get the current delegation depth limit. */
+  async getDelegationDepthLimit(): Promise<number> {
+    return this.simulateRead(
+      "get_delegation_depth_limit",
+      [],
+      (raw) => Number(scValToNative(raw)),
+      1,
+    );
+  }
+
+  /**
+   * Update the maximum delegation chain depth (admin only).
+   *
+   * @returns The Stellar transaction hash, suitable for linking to a block explorer.
+   */
+  async setDelegationDepthLimit(signer: Keypair, newLimit: number): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "set_delegation_depth_limit",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(newLimit, { type: "u32" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   // ─── Internal ──────────────────────────────────────────────────────────────
@@ -964,8 +1168,10 @@ export class VotesClient {
 }
 
 export interface TopDelegatesOptions {
-  /** Maximum number of delegates to return (default 20). */
+  /** Maximum number of delegates to return (default 50). */
   limit?: number;
+  /** Number of delegates to skip before returning results (default 0). */
+  offset?: number;
   /** Earliest ledger to scan events from (default latest - DEFAULT_SCAN_WINDOW). */
   fromLedger?: number;
   /** Opaque pagination cursor returned by a prior call. */

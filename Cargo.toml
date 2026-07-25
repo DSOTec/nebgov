@@ -7,8 +7,9 @@ members = [
     "contracts/treasury",
     "contracts/liquidity",
     "contracts/token-votes-wrapper",
+    "contracts/co-sponsorship",
 ]
-exclude = ["fuzz"]
+exclude = ["fuzz", "tools/sim"]
 resolver = "2"
 
 [workspace.dependencies]

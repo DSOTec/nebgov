@@ -129,6 +129,18 @@
                         "key": {
                           "vec": [
                             {
+                              "symbol": "GovernorList"
+                            }
+                          ]
+                        },
+                        "val": {
+                          "vec": []
+                        }
+                      },
+                      {
+                        "key": {
+                          "vec": [
+                            {
                               "symbol": "GovernorWasm"
                             }
                           ]

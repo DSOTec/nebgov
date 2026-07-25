@@ -2,7 +2,12 @@ import { createServer } from "http";
 import { SorobanRpc } from "@stellar/stellar-sdk";
 import dotenv from "dotenv";
 import { initDb, pool } from "./db";
-import { processEvents, getLastIndexedLedger, updateLastIndexedLedger } from "./events";
+import {
+  processEvents,
+  getLastIndexedLedger,
+  updateLastIndexedLedger,
+  maybeTakeGovernanceSnapshot,
+} from "./events";
 import { createApp } from "./api";
 import { createWsServer } from "./ws";
 
@@ -67,6 +72,7 @@ async function runIndexer(): Promise<void> {
         await updateLastIndexedLedger(latestLedger);
         lastLedger = latestLedger;
         console.log(`Indexed up to ledger ${lastLedger}`);
+        await maybeTakeGovernanceSnapshot(latestLedger);
       }
     })();
     currentBatchPromise = batchPromise.catch((err) => {

@@ -22,7 +22,7 @@ use crate::{
 
 use soroban_sdk::{
     contract, contractimpl, contracttype,
-    testutils::{Address as _, Events, Ledger as _},
+    testutils::{Address as _, Events, Ledger as _, MockAuth, MockAuthInvoke},
     token, Address, Bytes, Env, IntoVal, Symbol, TryIntoVal,
 };
 
@@ -90,6 +90,7 @@ impl MockTarget {
 enum ConfigurableVotesDataKey {
     Votes(Address),
     TotalSupply,
+    Token,
 }
 
 #[contract]
@@ -109,6 +110,12 @@ impl ConfigurableVotesContract {
             .set(&ConfigurableVotesDataKey::TotalSupply, &supply);
     }
 
+    pub fn set_token(env: Env, token: Address) {
+        env.storage()
+            .instance()
+            .set(&ConfigurableVotesDataKey::Token, &token);
+    }
+
     pub fn get_votes(env: Env, account: Address) -> i128 {
         env.storage()
             .instance()
@@ -125,6 +132,13 @@ impl ConfigurableVotesContract {
             .instance()
             .get(&ConfigurableVotesDataKey::TotalSupply)
             .unwrap_or(0)
+    }
+
+    pub fn token(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&ConfigurableVotesDataKey::Token)
+            .expect("token not set")
     }
 }
 
@@ -680,8 +694,7 @@ fn test_cancel_queued_after_window_closes() {
 
     // Advance ledger far past the veto window (min_delay is 100 seconds, roughly 10-20 ledgers)
     // Use a very large advance to ensure we're well past the veto window
-    env.ledger()
-        .with_mut(|l| l.sequence_number += 1000);
+    env.ledger().with_mut(|l| l.sequence_number += 1000);
 
     // Try to cancel after veto window closes — should fail
     governor_client.cancel_queued(&guardian, &proposal_id);
@@ -872,10 +885,8 @@ fn test_multi_token_cast_vote_and_quorum_with_two_weighted_tokens() {
         &120_960,
     );
 
-    let strategy = make_multi_token_strategy(
-        &env,
-        &[(token_a.clone(), 6_000), (token_b.clone(), 4_000)],
-    );
+    let strategy =
+        make_multi_token_strategy(&env, &[(token_a.clone(), 6_000), (token_b.clone(), 4_000)]);
     governor_client.set_voting_strategy(&strategy);
 
     let proposal_id = propose_exec_gov(
@@ -1092,13 +1103,23 @@ fn setup_dynamic_quorum_governor<'a>(
     env: &'a Env,
     total_supply: i128,
     quorum_numerator: u32,
-) -> (GovernorContractClient<'a>, ConfigurableVotesContractClient<'a>, Address, Address) {
+) -> (
+    GovernorContractClient<'a>,
+    ConfigurableVotesContractClient<'a>,
+    Address,
+    Address,
+) {
     let admin = Address::generate(env);
     let guardian = Address::generate(env);
+
+    // Register a real SEP-41 token so the governor can query its decimals (Issue #622).
+    let sac = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = sac.address();
 
     let votes_id = env.register(ConfigurableVotesContract, ());
     let votes_client = ConfigurableVotesContractClient::new(env, &votes_id);
     votes_client.set_total_supply(&total_supply);
+    votes_client.set_token(&token_addr);
 
     let timelock_id = env.register(sorogov_timelock::TimelockContract, ());
     let governor_id = env.register(GovernorContract, ());
@@ -1124,10 +1145,7 @@ fn setup_dynamic_quorum_governor<'a>(
 }
 
 /// Create a minimal proposal and return its ID.
-fn create_minimal_proposal(
-    env: &Env,
-    governor_client: &GovernorContractClient,
-) -> u64 {
+fn create_minimal_proposal(env: &Env, governor_client: &GovernorContractClient) -> u64 {
     let proposer = Address::generate(env);
     let mock_target = env.register(MockTarget, ());
 
@@ -1171,15 +1189,19 @@ fn test_dynamic_quorum_uses_max_of_static_and_dynamic() {
 
     // Sanity: without dynamic quorum, result is the static quorum.
     let static_q = governor_client.quorum(&proposal_id);
-    assert_eq!(static_q, 100_000, "static quorum should be 10% of 1_000_000");
+    assert_eq!(
+        static_q, 100_000,
+        "static quorum should be 10% of 1_000_000"
+    );
 
     // Register a configurable oracle: price = $1 (1_000_000 in 6-decimal).
     let oracle_id = env.register(ConfigurableOracleContract, ());
     let oracle_client = ConfigurableOracleContractClient::new(&env, &oracle_id);
     oracle_client.set_price(&Some(1_000_000_i128));
 
-    // Case A: usd_quorum (50) < static_quorum (100_000) → static wins.
-    // min_quorum_usd = 50 → usd_quorum = 50 / 1_000_000 = 0 (integer div, < 1)
+    // Case A: usd_quorum (500) < static_quorum (100_000) → static wins.
+    // min_quorum_usd = 50, price = 1_000_000, decimals = 7
+    // usd_quorum = (50 * 10_000_000) / 1_000_000 = 500
     governor_client.update_oracle(&Some(oracle_id.clone()), &50_i128, &true);
     let q_static_wins = governor_client.quorum(&proposal_id);
     assert_eq!(
@@ -1188,12 +1210,12 @@ fn test_dynamic_quorum_uses_max_of_static_and_dynamic() {
     );
 
     // Case B: usd_quorum > static_quorum → dynamic wins.
-    // min_quorum_usd = 200_000_000_000, price = 1_000_000
-    // usd_quorum = 200_000_000_000 / 1_000_000 = 200_000 > 100_000 → dynamic wins.
+    // min_quorum_usd = 200_000_000_000, price = 1_000_000, decimals = 7
+    // usd_quorum = (200_000_000_000 * 10_000_000) / 1_000_000 = 2_000_000_000_000
     governor_client.update_oracle(&Some(oracle_id.clone()), &200_000_000_000_i128, &true);
     let q_dynamic_wins = governor_client.quorum(&proposal_id);
     assert_eq!(
-        q_dynamic_wins, 200_000,
+        q_dynamic_wins, 2_000_000_000_000,
         "dynamic quorum should apply when usd_quorum exceeds static"
     );
 }
@@ -1543,9 +1565,10 @@ fn test_unpause_via_governance_restores_functionality() {
         &120_960u32,
     );
 
-    governor_client.set_pauser(&pauser);
-
-    // Setup voters
+    // Verify governance works while unpaused — full lifecycle with mock target
+    let proposer = Address::generate(&env);
+    token_admin.mint(&proposer, &1000_i128);
+    votes_client.delegate(&proposer, &proposer);
     let alice = Address::generate(&env);
     let bob = Address::generate(&env);
     token_admin.mint(&alice, &500_i128);
@@ -1553,25 +1576,12 @@ fn test_unpause_via_governance_restores_functionality() {
     votes_client.delegate(&alice, &alice);
     votes_client.delegate(&bob, &bob);
 
-    // Pause the contract
-    governor_client.pause(&pauser);
-    assert!(governor_client.is_paused(), "contract should be paused");
-
-    // Create a governance proposal targeting mock_target while paused.
-    // Governance functions (propose, cast_vote, queue, execute) are permitted while paused
-    // so the DAO can still act; targeting the governor itself would trigger Soroban
-    // re-entry protection (governor.execute → timelock.execute → governor.<fn>), so we
-    // target an external contract here.
-    let proposer = Address::generate(&env);
-    token_admin.mint(&proposer, &1000_i128);
-    votes_client.delegate(&proposer, &proposer);
-
-    let description = soroban_sdk::String::from_str(&env, "Governance action while paused");
+    let description = soroban_sdk::String::from_str(&env, "Test proposal");
     let description_hash = env
         .crypto()
-        .sha256(&Bytes::from_slice(&env, b"paused-proposal"))
+        .sha256(&Bytes::from_slice(&env, b"test-proposal"))
         .into();
-    let metadata_uri = soroban_sdk::String::from_str(&env, "ipfs://paused-proposal");
+    let metadata_uri = soroban_sdk::String::from_str(&env, "ipfs://test");
 
     let mut targets = soroban_sdk::Vec::new(&env);
     targets.push_back(mock_target_id.clone());
@@ -1590,12 +1600,10 @@ fn test_unpause_via_governance_restores_functionality() {
         &calldatas,
     );
 
-    // Vote to succeed
     env.ledger().with_mut(|l| l.sequence_number = 11);
     governor_client.cast_vote(&alice, &proposal_id, &VoteSupport::For);
     governor_client.cast_vote(&bob, &proposal_id, &VoteSupport::For);
 
-    // Advance past voting period and queue
     env.ledger().with_mut(|l| l.sequence_number = 31);
     assert_eq!(
         governor_client.state(&proposal_id),
@@ -1604,59 +1612,102 @@ fn test_unpause_via_governance_restores_functionality() {
 
     let ts_before_queue = env.ledger().timestamp();
     governor_client.queue(&proposal_id);
-    assert_eq!(
-        governor_client.state(&proposal_id),
-        ProposalState::Queued
-    );
+    assert_eq!(governor_client.state(&proposal_id), ProposalState::Queued);
 
-    // Advance past timelock delay and execute — governance works while paused
     env.ledger()
         .with_mut(|l| l.timestamp = ts_before_queue + min_delay + 1);
     governor_client.execute(&proposal_id);
-
-    // Pauser unpauses the contract directly (unpause takes a caller address)
-    governor_client.unpause(&pauser);
-
-    // Verify contract is unpaused
-    assert!(
-        !governor_client.is_paused(),
-        "contract should be unpaused after pauser calls unpause"
+    assert_eq!(
+        governor_client.state(&proposal_id),
+        ProposalState::Executed
     );
 
-    // Now proposing should succeed
-    let new_proposer = Address::generate(&env);
-    token_admin.mint(&new_proposer, &1000_i128);
-    votes_client.delegate(&new_proposer, &new_proposer);
+    // Pause the contract and verify operations are blocked
+    governor_client.pause(&admin);
+    assert!(governor_client.is_paused(), "contract should be paused");
 
-    let new_description = soroban_sdk::String::from_str(&env, "Post-unpause proposal");
-    let new_description_hash = env
+    // propose must fail while paused
+    let blocked_proposer = Address::generate(&env);
+    token_admin.mint(&blocked_proposer, &1000_i128);
+    votes_client.delegate(&blocked_proposer, &blocked_proposer);
+
+    let blocked_desc = soroban_sdk::String::from_str(&env, "Blocked proposal");
+    let blocked_hash = env
+        .crypto()
+        .sha256(&Bytes::from_slice(&env, b"blocked"))
+        .into();
+    let blocked_uri = soroban_sdk::String::from_str(&env, "ipfs://blocked");
+
+    let mut blocked_targets = soroban_sdk::Vec::new(&env);
+    blocked_targets.push_back(mock_target_id.clone());
+    let mut blocked_fns = soroban_sdk::Vec::new(&env);
+    blocked_fns.push_back(Symbol::new(&env, "exec_gov"));
+    let mut blocked_datas = soroban_sdk::Vec::new(&env);
+    blocked_datas.push_back(Bytes::new(&env));
+
+    let result = governor_client.try_propose(
+        &blocked_proposer,
+        &blocked_desc,
+        &blocked_hash,
+        &blocked_uri,
+        &blocked_targets,
+        &blocked_fns,
+        &blocked_datas,
+    );
+    // propose() is intentionally NOT gated by the paused flag — the DAO must
+    // still be able to submit an emergency unpause proposal while paused.
+    assert!(
+        result.is_ok(),
+        "propose should succeed while paused so the DAO can vote on an unpause"
+    );
+
+    // Unpause directly — governance self-calls are blocked by re-entry
+    // protection, so the pauser/admin calls unpause() directly (auth mocked).
+    // This mirrors how a contract upgrade or admin action would unpause.
+    // admin is the initial pauser (set in initialize); unpause must use the same address.
+    GovernorContractClient::new(&env, &governor_id).unpause(&admin);
+    assert!(
+        !governor_client.is_paused(),
+        "contract should be unpaused after direct unpause"
+    );
+
+    // Verify propose works again after unpause
+    let post_proposer = Address::generate(&env);
+    token_admin.mint(&post_proposer, &1000_i128);
+    votes_client.delegate(&post_proposer, &post_proposer);
+
+    let post_desc = soroban_sdk::String::from_str(&env, "Post-unpause proposal");
+    let post_hash = env
         .crypto()
         .sha256(&Bytes::from_slice(&env, b"post-unpause"))
         .into();
-    let new_metadata_uri = soroban_sdk::String::from_str(&env, "ipfs://post-unpause");
+    let post_uri = soroban_sdk::String::from_str(&env, "ipfs://post-unpause");
 
-    let mut new_targets = soroban_sdk::Vec::new(&env);
-    new_targets.push_back(mock_target_id.clone());
-    let mut new_fn_names = soroban_sdk::Vec::new(&env);
-    new_fn_names.push_back(Symbol::new(&env, "exec_gov"));
-    let mut new_calldatas = soroban_sdk::Vec::new(&env);
-    new_calldatas.push_back(Bytes::new(&env));
+    let mut post_targets = soroban_sdk::Vec::new(&env);
+    post_targets.push_back(mock_target_id.clone());
+    let mut post_fns = soroban_sdk::Vec::new(&env);
+    post_fns.push_back(Symbol::new(&env, "exec_gov"));
+    let mut post_datas = soroban_sdk::Vec::new(&env);
+    post_datas.push_back(Bytes::new(&env));
 
     let new_proposal_id = governor_client.propose(
-        &new_proposer,
-        &new_description,
-        &new_description_hash,
-        &new_metadata_uri,
-        &new_targets,
-        &new_fn_names,
-        &new_calldatas,
+        &post_proposer,
+        &post_desc,
+        &post_hash,
+        &post_uri,
+        &post_targets,
+        &post_fns,
+        &post_datas,
     );
 
-    assert_eq!(new_proposal_id, 2, "new proposal should be created after unpause");
+    assert_eq!(
+        new_proposal_id, 3,
+        "new proposal should be created after unpause"
+    );
     assert_eq!(
         governor_client.state(&new_proposal_id),
         ProposalState::Pending,
-        "new proposal should be in Pending state"
+        "new proposal should be in Pending state after unpause"
     );
 }
 
@@ -1707,32 +1758,125 @@ fn test_only_pauser_can_pause() {
     governor_client.pause(&non_pauser);
 }
 
-/// Test 5: set_pauser only via self-auth
+/// Test 5: Only pauser can unpause
+/// non-pauser address calls unpause() → expect UnauthorizedPause error (code 8)
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn test_only_pauser_can_unpause() {
+    let env = Env::default();
+    env.mock_all_auths_allowing_non_root_auth();
+
+    // Setup
+    let admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = sac.address();
+
+    let votes_id = env.register(TokenVotesContract, ());
+    let votes_client = TokenVotesContractClient::new(&env, &votes_id);
+    votes_client.initialize(&admin, &token_addr);
+
+    let timelock_id = env.register(TimelockContract, ());
+    let governor_id = env.register(GovernorContract, ());
+
+    let timelock_client = TimelockContractClient::new(&env, &timelock_id);
+    let governor_client = GovernorContractClient::new(&env, &governor_id);
+
+    timelock_client.initialize(&admin, &governor_id, &1, &1_209_600);
+
+    let pauser = Address::generate(&env);
+    governor_client.initialize(
+        &admin,
+        &votes_id,
+        &timelock_id,
+        &10_u32,
+        &20_u32,
+        &0_u32,
+        &0_i128,
+        &pauser,
+        &VoteType::Extended,
+        &120_960u32,
+    );
+
+    governor_client.set_pauser(&pauser);
+    assert_eq!(governor_client.pauser(), pauser);
+
+    // Pause the contract first
+    governor_client.pause(&pauser);
+    assert!(governor_client.is_paused());
+
+    // Non-pauser tries to unpause - should fail with UnauthorizedPause (code 8)
+    let non_pauser = Address::generate(&env);
+    governor_client.unpause(&non_pauser);
+}
+
+/// Test 6: set_pauser only via self-auth
 /// direct call to set_pauser() with an external caller → expect auth error
 #[test]
-#[should_panic]
 fn test_set_pauser_requires_self_auth() {
     let env = Env::default();
 
+    // Setup
+    let admin = Address::generate(&env);
+    let sac = env.register_stellar_asset_contract_v2(admin.clone());
+    let token_addr = sac.address();
+
+    let votes_id = env.register(TokenVotesContract, ());
+    let votes_client = TokenVotesContractClient::new(&env, &votes_id);
+
+    let timelock_id = env.register(TimelockContract, ());
+    let timelock_client = TimelockContractClient::new(&env, &timelock_id);
     let governor_id = env.register(GovernorContract, ());
     let governor_client = GovernorContractClient::new(&env, &governor_id);
 
-    // Mock auth as an external admin — NOT the contract's own address.
-    // set_pauser() requires env.current_contract_address().require_auth(),
-    // so this external auth cannot satisfy it and the call must panic.
-    let admin = Address::generate(&env);
+    let pauser = Address::generate(&env);
+
+    // Use mock_all_auths for setup, then replace with specific mock for the test call.
+    // This ensures set_pauser's env.current_contract_address().require_auth() is NOT mocked.
+    env.mock_all_auths();
+
+    votes_client.initialize(&admin, &token_addr);
+    timelock_client.initialize(&admin, &governor_id, &1, &1_209_600);
+    governor_client.initialize(
+        &admin,
+        &votes_id,
+        &timelock_id,
+        &10_u32,
+        &20_u32,
+        &0_u32,
+        &0_i128,
+        &pauser,
+        &VoteType::Extended,
+        &120_960u32,
+    );
+
+    // Replace mock_all_auths with a specific mock for admin only.
+    // set_pauser requires env.current_contract_address().require_auth() — not admin.
+    // This mock won't satisfy the contract's self-auth, so it must panic.
     let new_pauser = Address::generate(&env);
-    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+    env.mock_auths(&[MockAuth {
         address: &admin,
-        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+        invoke: &MockAuthInvoke {
             contract: &governor_id,
             fn_name: "set_pauser",
-            args: (new_pauser.clone(),).into_val(&env),
+            args: (&new_pauser,).into_val(&env),
             sub_invokes: &[],
         },
     }]);
 
-    governor_client.set_pauser(&new_pauser);
+    let result = governor_client.try_set_pauser(&new_pauser);
+    assert!(
+        result.is_err(),
+        "set_pauser should fail when called directly, not through governance"
+    );
+
+    // Direct call to set_pauser by admin (not through governance) should fail
+    // because set_pauser requires env.current_contract_address().require_auth()
+    let new_pauser = Address::generate(&env);
+    let result = governor_client.try_set_pauser(&new_pauser);
+    assert!(
+        result.is_err(),
+        "set_pauser should fail without contract self-auth"
+    );
 }
 
 /// Regression test for issue #600: cancel_queued used /10 instead of /5 to
@@ -1823,7 +1967,10 @@ fn test_cancel_queued_veto_window_uses_correct_conversion_factor() {
     governor_client.cast_vote(&alice, &proposal_id, &VoteSupport::For);
 
     env.ledger().with_mut(|l| l.sequence_number = 31);
-    assert_eq!(governor_client.state(&proposal_id), ProposalState::Succeeded);
+    assert_eq!(
+        governor_client.state(&proposal_id),
+        ProposalState::Succeeded
+    );
 
     // Record the ledger at queue time; advance 11 ledgers (old buggy boundary +1).
     let queue_ledger = env.ledger().sequence();
@@ -1857,9 +2004,7 @@ fn test_cancel_queued_veto_window_uses_correct_conversion_factor() {
 /// Helper: deploy governor backed by ConfigurableVotesContract (no real token
 /// needed) and submit a single proposal.  Returns (governor_id, proposal_id,
 /// start_ledger, end_ledger).
-fn setup_governor_with_proposal(
-    env: &Env,
-) -> (Address, Address, u64, u32, u32) {
+fn setup_governor_with_proposal(env: &Env) -> (Address, Address, u64, u32, u32) {
     env.mock_all_auths_allowing_non_root_auth();
 
     let admin = Address::generate(env);
@@ -1894,7 +2039,13 @@ fn setup_governor_with_proposal(
     );
 
     let mock_target_id = env.register(MockTarget, ());
-    let proposal_id = propose_exec_gov(env, &governor_client, &proposer, &mock_target_id, b"issue-603");
+    let proposal_id = propose_exec_gov(
+        env,
+        &governor_client,
+        &proposer,
+        &mock_target_id,
+        b"issue-603",
+    );
 
     let proposal = governor_client.get_proposal(&proposal_id);
     let start_ledger = proposal.start_ledger;
@@ -1930,7 +2081,8 @@ fn test_cast_vote_after_end_ledger_is_rejected() {
     let voter = Address::generate(&env);
 
     // Advance one ledger past end — voting period has closed.
-    env.ledger().with_mut(|l| l.sequence_number = end_ledger + 1);
+    env.ledger()
+        .with_mut(|l| l.sequence_number = end_ledger + 1);
 
     // Must panic with ProposalNotActive (error code 31).
     governor_client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
@@ -1945,7 +2097,8 @@ fn test_cast_vote_with_reason_after_end_ledger_is_rejected() {
     let governor_client = GovernorContractClient::new(&env, &governor_id);
     let voter = Address::generate(&env);
 
-    env.ledger().with_mut(|l| l.sequence_number = end_ledger + 1);
+    env.ledger()
+        .with_mut(|l| l.sequence_number = end_ledger + 1);
 
     let reason = soroban_sdk::String::from_str(&env, "late vote attempt");
     // Must panic with ProposalNotActive (error code 31).
@@ -1967,11 +2120,13 @@ fn test_post_deadline_vote_cannot_flip_defeated_proposal() {
     votes_client.set_votes(&against_voter, &1_000_000);
 
     // Cast "against" vote during Active window → proposal ends Defeated.
-    env.ledger().with_mut(|l| l.sequence_number = start_ledger + 1);
+    env.ledger()
+        .with_mut(|l| l.sequence_number = start_ledger + 1);
     governor_client.cast_vote(&against_voter, &proposal_id, &VoteSupport::Against);
 
     // Advance past end_ledger.
-    env.ledger().with_mut(|l| l.sequence_number = end_ledger + 1);
+    env.ledger()
+        .with_mut(|l| l.sequence_number = end_ledger + 1);
     assert_eq!(
         governor_client.state(&proposal_id),
         ProposalState::Defeated,
@@ -1980,8 +2135,7 @@ fn test_post_deadline_vote_cannot_flip_defeated_proposal() {
 
     // Attacker tries to flip the outcome by voting after deadline.
     // try_cast_vote returns Err when the contract panics — no std required.
-    let flip_result =
-        governor_client.try_cast_vote(&for_voter, &proposal_id, &VoteSupport::For);
+    let flip_result = governor_client.try_cast_vote(&for_voter, &proposal_id, &VoteSupport::For);
     assert!(
         flip_result.is_err(),
         "post-deadline vote must be rejected by the contract"
@@ -2020,6 +2174,14 @@ fn test_cast_vote_succeeds_at_start_and_end_ledger_boundaries() {
     governor_client.cast_vote(&voter_b, &proposal_id, &VoteSupport::Against);
 
     // Both receipts recorded.
-    assert!(governor_client.get_receipt(&proposal_id, &voter_a).has_voted);
-    assert!(governor_client.get_receipt(&proposal_id, &voter_b).has_voted);
+    assert!(
+        governor_client
+            .get_receipt(&proposal_id, &voter_a)
+            .has_voted
+    );
+    assert!(
+        governor_client
+            .get_receipt(&proposal_id, &voter_b)
+            .has_voted
+    );
 }

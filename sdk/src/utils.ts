@@ -1,3 +1,63 @@
+import { nativeToScVal, scValToNative, xdr } from "@stellar/stellar-sdk";
+
+/**
+ * Encode an array of native JavaScript values into XDR calldata bytes suitable
+ * for use in governance proposals and contract invocations.
+ *
+ * Each value is converted to a ScVal using nativeToScVal and then serialized
+ * into a contiguous Bytes buffer.
+ *
+ * @example
+ * ```ts
+ * const calldata = encodeCalldata([
+ *   "GABC...",                    // address
+ *   1000n,                        // i128 amount
+ *   Buffer.from("0102", "hex"),   // bytes
+ * ]);
+ * ```
+ *
+ * @param args - Array of native values to encode (strings, numbers, bigints,
+ *               booleans, arrays, buffers, or hex strings starting with "0x")
+ * @returns A Buffer containing the XDR-encoded calldata
+ */
+export function encodeCalldata(args: unknown[]): Buffer {
+  const scVals = args.map((arg) => {
+    if (typeof arg === "string" && arg.startsWith("0x")) {
+      const hex = arg.slice(2);
+      const bytes = Buffer.from(hex, "hex");
+      return nativeToScVal(bytes, { type: "bytes" });
+    }
+    return nativeToScVal(arg);
+  });
+  const vec = xdr.ScVal.scvVec(scVals);
+  return Buffer.from(vec.toXDR());
+}
+
+/**
+ * Decode XDR calldata bytes back into native JavaScript values.
+ *
+ * This is useful for inspecting calldata received from events or when
+ * building integrations that need to read encoded function arguments.
+ *
+ * @example
+ * ```ts
+ * const values = decodeCalldata(calldataBuffer);
+ * // values is an array of decoded native JS values
+ * ```
+ *
+ * @param data - Buffer or Uint8Array containing XDR-encoded ScVal vector
+ * @returns Array of decoded native JavaScript values
+ */
+export function decodeCalldata(data: Buffer | Uint8Array): unknown[] {
+  const buf = Buffer.isBuffer(data) ? data : Buffer.from(data);
+  const scVal = xdr.ScVal.fromXDR(buf);
+  const decoded = scValToNative(scVal);
+  if (!Array.isArray(decoded)) {
+    throw new Error("Expected calldata to decode to an array");
+  }
+  return decoded;
+}
+
 /**
  * Computes the effective vote weight under quadratic voting.
  *
@@ -52,13 +112,15 @@ export async function withRetry<T>(
   opts?: {
     maxAttempts?: number;
     baseDelayMs?: number;
+    maxDelayMs?: number;
     retryOn?: (e: unknown) => boolean;
     onRetry?: (attempt: number, error: unknown) => void;
   }
 ): Promise<T> {
   const maxAttempts = opts?.maxAttempts ?? 3;
   const baseDelayMs = opts?.baseDelayMs ?? 1000;
-  
+  const maxDelayMs = opts?.maxDelayMs ?? 30_000;
+
   let lastError: unknown;
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
@@ -71,7 +133,9 @@ export async function withRetry<T>(
       if (attempt === maxAttempts) {
         break;
       }
-      const delay = baseDelayMs * Math.pow(2, attempt - 1);
+      const exponential = Math.min(baseDelayMs * Math.pow(2, attempt - 1), maxDelayMs);
+      const jitter = Math.random() * exponential * 0.3;
+      const delay = exponential + jitter;
       if (opts?.onRetry) {
         opts.onRetry(attempt, e);
       }
@@ -82,11 +146,25 @@ export async function withRetry<T>(
 }
 
 export function isNetworkError(e: unknown): boolean {
-  if (e instanceof TypeError && e.message.toLowerCase().includes("fetch")) {
-    return true;
+  if (e instanceof Error) {
+    const msg = e.message.toLowerCase();
+    if (
+      msg.includes("fetch") ||
+      msg.includes("network") ||
+      msg.includes("timeout") ||
+      msg.includes("aborted") ||
+      msg.includes("connection refused") ||
+      msg.includes("econnrefused") ||
+      msg.includes("500") ||
+      msg.includes("502") ||
+      msg.includes("503") ||
+      msg.includes("504")
+    ) {
+      return true;
+    }
   }
   const status = (e as any)?.response?.status;
-  if (status >= 500 && status < 600) {
+  if (typeof status === "number" && status >= 500 && status < 600) {
     return true;
   }
   return false;

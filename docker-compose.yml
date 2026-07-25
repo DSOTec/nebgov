@@ -28,6 +28,7 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-nebgov}:${POSTGRES_PASSWORD:-nebgov}@db:5432/${POSTGRES_DB:-nebgov}
       STELLAR_RPC_URL: ${STELLAR_RPC_URL:-https://soroban-testnet.stellar.org}
       GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS:-}
+      TIMELOCK_ADDRESS: ${TIMELOCK_ADDRESS:-}
       POLL_INTERVAL_MS: ${POLL_INTERVAL_MS:-5000}
       PORT: 3002
     ports:

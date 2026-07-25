@@ -15,6 +15,7 @@ function makeEvent(params: {
   type: string;
   topicArgs?: any[];
   value: unknown;
+  ledgerClosedAt?: string;
 }): SorobanRpc.Api.EventResponse {
   const topic = [
     nativeToScVal(params.type, { type: "symbol" }),
@@ -24,6 +25,7 @@ function makeEvent(params: {
   return {
     type: "contract",
     ledger: params.ledger,
+    ledgerClosedAt: params.ledgerClosedAt ?? "2026-01-01T00:00:00Z",
     contractId: params.contractId as any,
     topic,
     value,
@@ -59,6 +61,7 @@ describe("governor event indexing (integration)", () => {
       contractId: GOVERNOR,
       ledger: 200,
       type: "ConfigUpdated",
+      ledgerClosedAt: "2026-06-01T12:00:00Z",
       value: {
         old_settings: {
           voting_delay: 1,
@@ -89,14 +92,16 @@ describe("governor event indexing (integration)", () => {
     expect(latest).toBe(200);
 
     const rows = await pool.query(
-      "SELECT ledger, new_settings FROM config_updates ORDER BY id DESC LIMIT 1",
+      "SELECT ledger, old_settings, new_settings, ledger_closed_at FROM config_updates ORDER BY id DESC LIMIT 1",
     );
     expect(rows.rows.length).toBe(1);
     expect(rows.rows[0].ledger).toBe(200);
+    expect(rows.rows[0].old_settings.voting_delay).toBe(1);
     const settings = rows.rows[0].new_settings;
     expect(settings.voting_delay).toBe(2);
     expect(settings.voting_period).toBe(3);
     expect(settings.quorum_numerator).toBe(35);
+    expect(rows.rows[0].ledger_closed_at.toISOString()).toBe("2026-06-01T12:00:00.000Z");
   });
 
   it("indexes GovernorUpgraded event into governor_upgrades", async () => {
@@ -162,9 +167,10 @@ describe("governor event indexing (integration)", () => {
     expect(latest).toBe(202);
 
     const rows = await pool.query(
-      "SELECT new_settings FROM config_updates WHERE ledger = 202 ORDER BY id DESC LIMIT 1",
+      "SELECT old_settings, new_settings FROM config_updates WHERE ledger = 202 ORDER BY id DESC LIMIT 1",
     );
     expect(rows.rows.length).toBe(1);
+    expect(rows.rows[0].old_settings).toBeNull();
     expect(rows.rows[0].new_settings.voting_delay).toBe(3);
   });
 
@@ -191,7 +197,80 @@ describe("governor event indexing (integration)", () => {
       "SELECT new_wasm_hash FROM governor_upgrades WHERE ledger = 203 ORDER BY id DESC LIMIT 1",
     );
     expect(rows.rows.length).toBe(1);
-    expect(rows.rows[0].new_wasm_hash).toBe("fffefdj");
+    expect(rows.rows[0].new_wasm_hash).toBe("fffefd");
+  });
+
+  it("indexes ProposalCancelled from cancel_queued() — value is a tuple (proposal_id, queue_time, current_ledger)", async () => {
+    // Insert a proposal row so the UPDATE has something to affect
+    await pool.query(
+      `INSERT INTO proposals (id, proposer, description, start_ledger, end_ledger)
+       VALUES ('77', 'GCALLER00000000000000000000000000000000000000000000000000', 'cancel_queued test', 1, 100)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+
+    // cancel_queued() raw event shape:
+    //   topic[0] = Symbol("ProposalCancelled")
+    //   topic[1] = caller address
+    //   value    = array [proposal_id, queue_time, current_ledger]
+    const cancelQueuedEvent = {
+      type: "contract",
+      ledger: 210,
+      ledgerClosedAt: "2026-06-01T00:00:00Z",
+      contractId: GOVERNOR,
+      topic: [
+        nativeToScVal("ProposalCancelled", { type: "symbol" }),
+        nativeToScVal("GCALLER00000000000000000000000000000000000000000000000000", { type: "address" }),
+      ],
+      value: nativeToScVal([77n, 50n, 210n]),
+    } as unknown as SorobanRpc.Api.EventResponse;
+
+    const server = new FakeServer([cancelQueuedEvent]) as unknown as SorobanRpc.Server;
+    await processEvents(
+      server,
+      { rpcUrl: "http://fake", governorAddress: GOVERNOR, pollIntervalMs: 1 },
+      1,
+    );
+
+    const rows = await pool.query(
+      "SELECT cancelled FROM proposals WHERE id = '77'",
+    );
+    expect(rows.rows.length).toBe(1);
+    expect(rows.rows[0].cancelled).toBe(true);
+  });
+
+  it("indexes ProposalCancelled from cancel() — value is an object { proposal_id, caller }", async () => {
+    await pool.query(
+      `INSERT INTO proposals (id, proposer, description, start_ledger, end_ledger)
+       VALUES ('78', 'GPROPOSER0000000000000000000000000000000000000000000000000', 'cancel test', 1, 100)
+       ON CONFLICT (id) DO NOTHING`,
+    );
+
+    // cancel() / emit_proposal_cancelled event shape:
+    //   topic[0] = Symbol("ProposalCancelled")
+    //   value    = { proposal_id, caller }
+    const cancelEvent = {
+      type: "contract",
+      ledger: 211,
+      ledgerClosedAt: "2026-06-01T00:00:00Z",
+      contractId: GOVERNOR,
+      topic: [
+        nativeToScVal("ProposalCancelled", { type: "symbol" }),
+      ],
+      value: nativeToScVal({ proposal_id: 78n, caller: "GPROPOSER0000000000000000000000000000000000000000000000000" }),
+    } as unknown as SorobanRpc.Api.EventResponse;
+
+    const server = new FakeServer([cancelEvent]) as unknown as SorobanRpc.Server;
+    await processEvents(
+      server,
+      { rpcUrl: "http://fake", governorAddress: GOVERNOR, pollIntervalMs: 1 },
+      1,
+    );
+
+    const rows = await pool.query(
+      "SELECT cancelled FROM proposals WHERE id = '78'",
+    );
+    expect(rows.rows.length).toBe(1);
+    expect(rows.rows[0].cancelled).toBe(true);
   });
 
   it("includes treasuryAddress in contractIds when configured", async () => {

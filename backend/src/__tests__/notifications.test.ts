@@ -145,5 +145,170 @@ describe("Notification Endpoints", () => {
       );
     });
   });
+
+  describe("Notification Rules Endpoints", () => {
+    let ruleId: number;
+
+    it("POST /notifications/rules creates a rule", async () => {
+      const res = await request(app)
+        .post("/notifications/rules")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          name: "Notify me on new proposals",
+          trigger_type: "proposal_created",
+          channels: [{ type: "in_app" }],
+        })
+        .expect(201);
+
+      expect(res.body).toHaveProperty("id");
+      expect(res.body.trigger_type).toBe("proposal_created");
+      expect(res.body.enabled).toBe(true);
+      expect(res.body.cooldown_seconds).toBe(300);
+      ruleId = res.body.id;
+    });
+
+    it("rejects a rule with no channels", async () => {
+      await request(app)
+        .post("/notifications/rules")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ name: "No channels", trigger_type: "proposal_created", channels: [] })
+        .expect(400);
+    });
+
+    it("GET /notifications/rules lists the caller's rules", async () => {
+      const res = await request(app)
+        .get("/notifications/rules")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(Array.isArray(res.body)).toBe(true);
+      expect(res.body.some((r: { id: number }) => r.id === ruleId)).toBe(true);
+    });
+
+    it("masks a webhook channel's secret after creation but not on create response", async () => {
+      const created = await request(app)
+        .post("/notifications/rules")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({
+          name: "Webhook rule",
+          trigger_type: "vote_cast",
+          channels: [{ type: "webhook", url: "https://example.com/hook" }],
+        })
+        .expect(201);
+
+      const webhookChannel = created.body.channels.find((c: { type: string }) => c.type === "webhook");
+      expect(webhookChannel.secret).toBeDefined();
+      expect(webhookChannel.secret).not.toBe("***");
+
+      const list = await request(app)
+        .get("/notifications/rules")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      const listed = list.body.find((r: { id: number }) => r.id === created.body.id);
+      const listedChannel = listed.channels.find((c: { type: string }) => c.type === "webhook");
+      expect(listedChannel.secret).toBe("***");
+
+      await pool.query("DELETE FROM notification_rules WHERE id = $1", [created.body.id]);
+    });
+
+    it("PUT /notifications/rules/:id updates a rule owned by the caller", async () => {
+      const res = await request(app)
+        .put(`/notifications/rules/${ruleId}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ enabled: false })
+        .expect(200);
+
+      expect(res.body.enabled).toBe(false);
+    });
+
+    it("PUT /notifications/rules/:id returns 404 for another user's rule", async () => {
+      await request(app)
+        .put("/notifications/rules/999999")
+        .set("Authorization", `Bearer ${authToken}`)
+        .send({ enabled: true })
+        .expect(404);
+    });
+
+    it("POST /notifications/rules/:id/test delivers to in_app and appears in the inbox", async () => {
+      await request(app)
+        .post(`/notifications/rules/${ruleId}/test`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      const inbox = await request(app)
+        .get("/notifications/inbox")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(inbox.body.data.length).toBeGreaterThan(0);
+      expect(inbox.body.data[0].title).toMatch(/^\[Test\]/);
+    });
+
+    it("PUT /notifications/inbox/:id/read marks a single notification read", async () => {
+      const inbox = await request(app)
+        .get("/notifications/inbox?unread_only=true")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      const notificationId = inbox.body.data[0].id;
+      await request(app)
+        .put(`/notifications/inbox/${notificationId}/read`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      const after = await request(app)
+        .get("/notifications/inbox?unread_only=true")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(after.body.data.some((n: { id: number }) => n.id === notificationId)).toBe(false);
+    });
+
+    it("PUT /notifications/inbox/read-all clears unread count", async () => {
+      await request(app)
+        .put("/notifications/inbox/read-all")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      const inbox = await request(app)
+        .get("/notifications/inbox")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(inbox.body.meta.unread).toBe(0);
+    });
+
+    it("GET /notifications/deliveries returns delivery history", async () => {
+      const res = await request(app)
+        .get("/notifications/deliveries")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(Array.isArray(res.body.data)).toBe(true);
+      expect(res.body.data.some((d: { rule_id: number }) => d.rule_id === ruleId)).toBe(true);
+    });
+
+    it("DELETE /notifications/rules/:id removes the rule", async () => {
+      await request(app)
+        .delete(`/notifications/rules/${ruleId}`)
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      const list = await request(app)
+        .get("/notifications/rules")
+        .set("Authorization", `Bearer ${authToken}`)
+        .expect(200);
+
+      expect(list.body.some((r: { id: number }) => r.id === ruleId)).toBe(false);
+    });
+
+    it("requires authentication on rules and inbox endpoints", async () => {
+      await request(app).get("/notifications/rules").expect(401);
+      await request(app).post("/notifications/rules").send({}).expect(401);
+      await request(app).get("/notifications/inbox").expect(401);
+      await request(app).get("/notifications/deliveries").expect(401);
+    });
+  });
 });
 

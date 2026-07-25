@@ -13,12 +13,16 @@
  */
 
 export { GovernorClient, hashDescription, uploadProposalMetadata } from "./governor";
+export type { MetadataUploadOptions } from "./governor";
 export { VotesClient } from "./votes";
 export type { TopDelegatesOptions, TopDelegatesResult } from "./votes";
+export { DelegationSigClient } from "./delegation-sig";
+export type { DelegationSigConfig, DelegationTxResult } from "./delegation-sig";
 export { FactoryClient } from "./factory";
 export type { GovernorEntry, DeploySettings } from "./factory";
 export { TimelockClient } from "./timelock";
 export { TreasuryClient } from "./treasury";
+export { LiquidityClient } from "./liquidity";
 export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
 export { CoSponsorshipClient } from "./cosponsor";
@@ -32,10 +36,13 @@ export {
   VotesErrorCode,
   TreasuryError,
   TreasuryErrorCode,
+  CoSponsorshipError,
+  CoSponsorshipErrorCode,
   parseGovernorError,
   parseTimelockError,
   parseVotesError,
   parseTreasuryError,
+  parseCoSponsorshipError,
   extractContractErrorCode,
 } from "./errors";
 export type { SorobanRpcError } from "./errors";
@@ -81,6 +88,6 @@ export {
   parseUnpauseEvent,
 } from "./events";
 export * from "./types";
-export { computeQuadraticWeight, hexToBytes32 } from "./utils";
+export { computeQuadraticWeight, hexToBytes32, encodeCalldata, decodeCalldata } from "./utils";
 export { streamEvents } from "./streamEvents";
 export type { IndexerEvent, WsEventType, StreamEventsOptions, UnsubscribeFn } from "./streamEvents";

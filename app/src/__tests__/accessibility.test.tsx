@@ -1,10 +1,19 @@
 /**
  * @jest-environment jsdom
  */
+/// <reference types="@testing-library/jest-dom" />
 
 import React from 'react';
 import { render } from '@testing-library/react';
 import { axe, toHaveNoViolations } from 'jest-axe';
+
+declare global {
+  namespace jest {
+    interface Matchers<R> {
+      toHaveNoViolations(): R;
+    }
+  }
+}
 import { VotingModal } from '../components/VotingModal';
 import { ProposalStateBadge } from '../components/ProposalStateBadge';
 import { ProposalState, VoteSupport } from '@nebgov/sdk';

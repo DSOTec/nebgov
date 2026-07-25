@@ -305,15 +305,19 @@ export default function TreasuryPage() {
     setSubmitting(true);
     setError(null);
     try {
+      let fnName: string;
       let data: Uint8Array;
       if (calldataMode === "raw") {
+        fnName = "";
         data = hexToBytes(submitDataHex);
       } else {
+        fnName = submitFn.trim();
         data = encodeCallableCalldata(submitFn, argRows);
       }
       const newId = await treasuryClient.submit(
         publicKey,
         submitTarget.trim(),
+        fnName,
         data,
         signTransaction,
       );
@@ -352,7 +356,15 @@ export default function TreasuryPage() {
 
   return (
     <div className="max-w-3xl mx-auto px-4 py-8">
-      <h1 className="text-3xl font-bold text-gray-900 mb-8">Treasury</h1>
+      <div className="flex items-center justify-between mb-8">
+        <h1 className="text-3xl font-bold text-gray-900">Treasury</h1>
+        <a
+          href="/treasury/streams"
+          className="text-sm text-indigo-600 hover:text-indigo-700 hover:underline"
+        >
+          Budget Streams →
+        </a>
+      </div>
 
       {error && (
         <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
@@ -696,7 +708,7 @@ export default function TreasuryPage() {
             >
               <div className="min-w-0 flex-1">
                 <p className="text-sm font-medium text-gray-900 leading-snug">
-                  {labelPendingTx(tx.target, tx.dataHex)}
+                  {labelPendingTx(tx.target, tx.dataHex, tx.fnName)}
                 </p>
                 <p className="text-xs text-gray-400 font-mono mt-1">
                   #{tx.id.toString()}

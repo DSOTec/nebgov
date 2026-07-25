@@ -9,7 +9,7 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
-import { GovernorConfig, Network } from "./types";
+import { GovernorConfig, Network, PartialBatchExecutionState, DependencyGraph } from "./types";
 import {
   TimelockError,
   TimelockErrorCode,
@@ -79,10 +79,11 @@ export class TimelockClient {
    * Only the governor may call this. The operation becomes executable once
    * `delay` seconds have elapsed since scheduling.
    *
-   * @param signer  - Keypair authorising the call (must be the governor signer)
-   * @param target  - Strkey address of the contract to invoke on execution
-   * @param data    - Encoded calldata for the target invocation
-   * @param delay   - Delay in seconds; must be >= the contract's `minDelay`
+   * @param signer       - Keypair authorising the call (must be the governor signer)
+   * @param target       - Strkey address of the contract to invoke on execution
+   * @param data         - Encoded calldata for the target invocation
+   * @param fnNameOrDelay - Function name to invoke on the target, or delay in seconds (legacy 4-arg form)
+   * @param delayArg      - Delay in seconds; must be >= the contract's `minDelay` (omit when fnNameOrDelay is a bigint)
    * @returns Hex-encoded operation ID (SHA-256 of `data`)
    */
   async schedule(
@@ -459,6 +460,335 @@ export class TimelockClient {
     const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
       .result?.retval;
     return raw ? BigInt(scValToNative(raw)) : 0n;
+  }
+
+  /**
+   * Schedule an operation with multiple predecessor dependencies.
+   *
+   * @param signer       - Keypair authorising the call (must be the governor signer)
+   * @param target       - Strkey address of the contract to invoke on execution
+   * @param data         - Encoded calldata for the target invocation
+   * @param fnName       - Function name to invoke on the target
+   * @param delay        - Delay in seconds; must be >= the contract's `minDelay`
+   * @param predecessors - Array of predecessor operation IDs (op_ids)
+   * @param salt         - Unique salt to disambiguate operations with identical inputs
+   * @returns Hex-encoded operation ID
+   */
+  async scheduleWithDeps(
+    signer: Keypair,
+    target: string,
+    data: Buffer,
+    fnName: string,
+    delay: bigint,
+    predecessors: Buffer[],
+    salt: Buffer,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const predecessorsScVal = xdr.ScVal.scvVec(
+        predecessors.map((item) => nativeToScVal(item, { type: "bytes" })),
+      );
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "schedule_with_deps",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(target, { type: "address" }),
+            nativeToScVal(data, { type: "bytes" }),
+            nativeToScVal(fnName, { type: "symbol" }),
+            nativeToScVal(delay, { type: "u64" }),
+            predecessorsScVal,
+            nativeToScVal(salt, { type: "bytes" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTimelockError(result);
+      }
+
+      const confirmed = await this.pollForConfirmation(result.hash);
+      const returnVal = confirmed.returnValue;
+      if (!returnVal) {
+        throw new TimelockError(
+          TimelockErrorCode.MissingReturnValue,
+          "No return value from schedule_with_deps",
+        );
+      }
+
+      const bytes = scValToNative(returnVal) as Uint8Array;
+      return Buffer.from(bytes).toString("hex");
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Check if all predecessors of an op_id are complete.
+   *
+   * @param opId - Hex-encoded operation ID
+   * @returns true if all predecessors are done, false otherwise
+   */
+  async allPredecessorsDone(opId: string): Promise<boolean> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "all_predecessors_done",
+              nativeToScVal(Buffer.from(opId, "hex"), { type: "bytes" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return false;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? (scValToNative(raw) as boolean) : false;
+    });
+  }
+
+  /**
+   * Get the full dependency graph for a batch operation.
+   *
+   * @param batchOpId - Hex-encoded batch operation ID
+   * @returns The dependency graph structure or null if not found
+   */
+  async getBatchDependencyGraph(batchOpId: string): Promise<DependencyGraph | null> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_batch_dependency_graph",
+              nativeToScVal(Buffer.from(batchOpId, "hex"), { type: "bytes" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return null;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? (scValToNative(raw) as DependencyGraph) : null;
+    });
+  }
+
+  /**
+   * Validate that a set of operations forms a DAG (no cycles).
+   *
+   * @param opIds - Array of operation IDs to validate
+   * @returns Object with valid boolean and optional cyclePath if invalid
+   */
+  async validateDependencyDag(
+    opIds: Buffer[],
+  ): Promise<{ valid: boolean; cyclePath?: Buffer[] }> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "validate_dependency_dag",
+              xdr.ScVal.scvVec(
+                opIds.map((item) => nativeToScVal(item, { type: "bytes" })),
+              ),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        return { valid: false };
+      }
+
+      return { valid: true };
+    });
+  }
+
+  /**
+   * Execute a batch with partial completion tolerance.
+   *
+   * Operations that succeed are marked complete. Failed operations enter recovery mode.
+   *
+   * @param signer      - Keypair authorising the call (must be the governor signer)
+   * @param batchOpId   - Hex-encoded batch operation ID
+   * @returns Partial batch execution state
+   */
+  async executePartialBatch(
+    signer: Keypair,
+    batchOpId: string,
+  ): Promise<PartialBatchExecutionState> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "execute_batch_partial",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(Buffer.from(batchOpId, "hex"), { type: "bytes" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTimelockError(result);
+      }
+
+      const confirmed = await this.pollForConfirmation(result.hash);
+      const returnVal = confirmed.returnValue;
+      if (!returnVal) {
+        throw new TimelockError(
+          TimelockErrorCode.MissingReturnValue,
+          "No return value from execute_batch_partial",
+        );
+      }
+
+      return scValToNative(returnVal) as PartialBatchExecutionState;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Retry a specific failed operation within a batch in recovery mode.
+   *
+   * @param signer     - Keypair authorising the call (must be the governor signer)
+   * @param batchOpId  - Hex-encoded batch operation ID
+   * @param opId       - Hex-encoded operation ID to retry
+   */
+  async retryFailedOperation(
+    signer: Keypair,
+    batchOpId: string,
+    opId: string,
+  ): Promise<void> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "retry_failed_operation",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(Buffer.from(batchOpId, "hex"), { type: "bytes" }),
+            nativeToScVal(Buffer.from(opId, "hex"), { type: "bytes" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTimelockError(result);
+      }
+      await this.pollForConfirmation(result.hash);
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Get current partial execution state for a batch.
+   *
+   * @param batchOpId - Hex-encoded batch operation ID
+   * @returns Partial batch execution state or null if not found
+   */
+  async getPartialBatchState(
+    batchOpId: string,
+  ): Promise<PartialBatchExecutionState | null> {
+    return this.retry(async () => {
+      const result = await this.server.simulateTransaction(
+        new TransactionBuilder(
+          await this.server.getAccount(this.readAccount()),
+          { fee: BASE_FEE, networkPassphrase: this.networkPassphrase },
+        )
+          .addOperation(
+            this.contract.call(
+              "get_partial_batch_state",
+              nativeToScVal(Buffer.from(batchOpId, "hex"), { type: "bytes" }),
+            ),
+          )
+          .setTimeout(30)
+          .build(),
+      );
+
+      if (SorobanRpc.Api.isSimulationError(result)) return null;
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      return raw ? (scValToNative(raw) as PartialBatchExecutionState) : null;
+    });
+  }
+
+  /**
+   * Mark a failed operation as permanently skipped.
+   *
+   * @param signer    - Keypair authorising the call (must be the governor signer)
+   * @param batchOpId - Hex-encoded batch operation ID
+   * @param opId      - Hex-encoded operation ID to skip
+   */
+  async skipFailedOperation(
+    signer: Keypair,
+    batchOpId: string,
+    opId: string,
+  ): Promise<void> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "skip_failed_operation",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            nativeToScVal(Buffer.from(batchOpId, "hex"), { type: "bytes" }),
+            nativeToScVal(Buffer.from(opId, "hex"), { type: "bytes" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseTimelockError(result);
+      }
+      await this.pollForConfirmation(result.hash);
+    }, (e) => this.isRetryableSubmissionError(e));
   }
 
   // --- Internal ---
