@@ -61,6 +61,8 @@ export default function DelegatesPage() {
   const [currentDelegatee, setCurrentDelegatee] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(false);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [delegationMap, setDelegationMap] = useState<Map<string, string> | undefined>(undefined);
   const [client, setClient] = useState<VotesClient | null>(null);
   const { publicKey } = useWallet();
 
@@ -93,6 +95,10 @@ export default function DelegatesPage() {
         const result = await votesClient.getTopDelegates({ limit: PAGE_SIZE, offset: 0 });
         const page = Array.isArray(result) ? result : result.delegates;
         setDelegates(page);
+        if (!Array.isArray(result)) {
+          setCursor(result.nextCursor);
+          setDelegationMap(result.delegationMap);
+        }
         let total = 0n;
         for (const d of page) {
           total += d.votingPower;
@@ -123,9 +129,18 @@ export default function DelegatesPage() {
     if (!client || loadingMore) return;
     setLoadingMore(true);
     try {
-      const result = await client.getTopDelegates({ limit: PAGE_SIZE, offset });
+      const result = await client.getTopDelegates({
+        limit: PAGE_SIZE,
+        offset,
+        cursor: cursor ?? undefined,
+        delegationMap,
+      });
       const page = Array.isArray(result) ? result : result.delegates;
       setDelegates((prev) => [...prev, ...page]);
+      if (!Array.isArray(result)) {
+        setCursor(result.nextCursor);
+        setDelegationMap(result.delegationMap);
+      }
       setOffset((prev) => prev + PAGE_SIZE);
       setHasMore(page.length === PAGE_SIZE);
     } catch (err) {

@@ -32,7 +32,10 @@ export default function StreamDetailPage() {
   const treasuryAddress = process.env.NEXT_PUBLIC_TREASURY_ADDRESS ?? "";
 
   const fetchData = useCallback(async () => {
-    if (!client || !publicKey) return;
+    if (!client || !publicKey) {
+      setLoading(false);
+      return;
+    }
     try {
       const [s, r, sp, gov] = await Promise.all([
         client.getStream(publicKey, streamId),
@@ -111,6 +114,17 @@ export default function StreamDetailPage() {
     return (
       <div className="max-w-4xl mx-auto p-4">
         <p className="text-gray-400">Loading stream...</p>
+      </div>
+    );
+  }
+
+  if (!publicKey) {
+    return (
+      <div className="max-w-4xl mx-auto p-4">
+        <Link href="/treasury/streams" className="text-xs text-gray-400 hover:text-gray-600">
+          ← Back to Streams
+        </Link>
+        <p className="text-gray-500 mt-4">Connect your wallet to view this stream</p>
       </div>
     );
   }

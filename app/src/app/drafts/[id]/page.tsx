@@ -40,18 +40,19 @@ export default function DraftDetailPage() {
     !!publicKey && !!draft && draft.coSponsors.includes(publicKey);
 
   async function withWallet(action: (publicKey: string) => Promise<void>) {
-    if (!isConnected || !publicKey) {
+    let pk = publicKey;
+    if (!isConnected || !pk) {
       try {
-        await connect();
+        pk = await connect();
       } catch {
         toast.error("Please connect your wallet to continue.");
         return;
       }
     }
-    if (!publicKey) return;
+    if (!pk) return;
     setBusy(true);
     try {
-      await action(publicKey);
+      await action(pk);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : String(err));
     } finally {

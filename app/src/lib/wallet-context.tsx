@@ -43,8 +43,8 @@ interface WalletContextValue {
   isConnected: boolean;
   isConnecting: boolean;
   error: string | null;
-  /** Opens the StellarWalletsKit modal */
-  connect: () => Promise<void>;
+  /** Opens the StellarWalletsKit modal. Resolves with the connected public key, or null if cancelled/failed. */
+  connect: () => Promise<string | null>;
   disconnect: () => void;
   /** Sign a prepared Soroban transaction XDR (fee-bump / classic TX). */
   signTransaction: (unsignedXdr: string) => Promise<string>;
@@ -88,7 +88,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const connect = useCallback(async () => {
+  const connect = useCallback(async (): Promise<string | null> => {
     // E2E test mock — skip the Freighter modal and inject directly
     if (typeof window !== "undefined") {
       const mock = (window as unknown as Record<string, unknown>).__E2E_MOCK_WALLET__ as
@@ -97,15 +97,17 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
       if (mock) {
         setPublicKey(mock.publicKey);
         setAddress(mock.address);
-        return;
+        return mock.publicKey;
       }
     }
 
     const kit = kitRef.current;
-    if (!kit) return;
+    if (!kit) return null;
 
     setError(null);
     setIsConnecting(true);
+
+    let connectedPublicKey: string | null = null;
 
     try {
       await kit.openModal({
@@ -113,6 +115,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
           try {
             kit.setWallet(option.id);
             const { address: rawAddress } = await kit.getAddress();
+            connectedPublicKey = rawAddress;
             setAddress(truncateAddress(rawAddress));
             setPublicKey(rawAddress);
             if (typeof window !== "undefined" && "Notification" in window) {
@@ -144,6 +147,8 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setIsConnecting(false);
     }
+
+    return connectedPublicKey;
   }, []);
 
   const disconnect = useCallback(async () => {
