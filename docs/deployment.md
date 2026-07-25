@@ -228,6 +228,7 @@ services:
       DATABASE_URL: postgresql://nebgov_prod:${POSTGRES_PASSWORD}@db:5432/nebgov_prod
       STELLAR_RPC_URL: https://soroban-rpc.mainnet.stellar.gateway.fm
       GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS}
+      TIMELOCK_ADDRESS: ${TIMELOCK_ADDRESS}
       POLL_INTERVAL_MS: 5000
       PORT: 3002
     depends_on:
@@ -290,6 +291,7 @@ Run a smoke-test checklist before announcing the deployment complete:
 | Indexer | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | Indexer | `STELLAR_RPC_URL` | Yes | Dedicated RPC endpoint |
 | Indexer | `GOVERNOR_ADDRESS` | Yes | Governor contract address to index |
+| Indexer | `TIMELOCK_ADDRESS` | No | Timelock contract address to index |
 | Indexer | `POLL_INTERVAL_MS` | No | Polling interval |
 | Indexer | `PORT` | No | Indexer listen port |
 

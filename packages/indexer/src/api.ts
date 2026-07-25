@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
 import { SorobanRpc } from "@stellar/stellar-sdk";
 import { pool } from "./db";
-import { cached, getMetrics } from "./cache";
+import { cached } from "./cache";
 import { getLastIndexedLedger } from "./events";
 import { startTime } from "./index";
 import swaggerUi from "swagger-ui-express";
@@ -20,8 +20,6 @@ interface RateLimitEntry {
   windowStart: number;
 }
 
-const rateLimitStore = new Map<string, RateLimitEntry>();
-
 /**
  * Build an Express middleware that limits each IP to `max` requests within
  * a rolling `windowMs` millisecond window.
@@ -36,6 +34,7 @@ function createRateLimiter(options: {
   message?: string;
 }) {
   const { windowMs, max, message = "Too many requests, please try again later." } = options;
+  const store = new Map<string, RateLimitEntry>();
 
   return function rateLimitMiddleware(
     req: Request,
@@ -50,17 +49,17 @@ function createRateLimiter(options: {
     const now = Date.now();
 
     // Prune stale entries to keep the store from growing unboundedly.
-    for (const [key, entry] of rateLimitStore.entries()) {
+    for (const [key, entry] of store.entries()) {
       if (now - entry.windowStart > windowMs) {
-        rateLimitStore.delete(key);
+        store.delete(key);
       }
     }
 
-    const entry = rateLimitStore.get(ip);
+    const entry = store.get(ip);
 
     if (!entry || now - entry.windowStart > windowMs) {
       // First request in this window (or window has expired).
-      rateLimitStore.set(ip, { count: 1, windowStart: now });
+      store.set(ip, { count: 1, windowStart: now });
       res.setHeader("X-RateLimit-Limit", max);
       res.setHeader("X-RateLimit-Remaining", max - 1);
       res.setHeader("X-RateLimit-Reset", Math.ceil((now + windowMs) / 1000));
@@ -1393,6 +1392,111 @@ export function createApp(server: SorobanRpc.Server): express.Application {
           [draftId],
         );
         res.json({ data: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // --- Timelock endpoints (#906) ---
+
+  // GET /timelock/operations/:opId
+  app.get(
+    "/timelock/operations/:opId",
+    async (req: Request, res: Response): Promise<void> => {
+      const { opId } = req.params;
+      const key = `timelock:op:${opId}`;
+      try {
+        const data = await cached(key, TTL.proposals, async () => {
+          const result = await pool.query(
+            `SELECT * FROM timelock_operations WHERE op_id = $1`,
+            [opId],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (!data) {
+          res.status(404).json({ error: "Operation not found" });
+          return;
+        }
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /timelock/batches/:batchOpId
+  app.get(
+    "/timelock/batches/:batchOpId",
+    async (req: Request, res: Response): Promise<void> => {
+      const { batchOpId } = req.params;
+      const key = `timelock:batch:${batchOpId}`;
+      try {
+        const data = await cached(key, TTL.proposals, async () => {
+          const result = await pool.query(
+            `SELECT * FROM timelock_batch_operations WHERE batch_op_id = $1`,
+            [batchOpId],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (!data) {
+          res.status(404).json({ error: "Batch operation not found" });
+          return;
+        }
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /timelock/batches/:batchOpId/dag
+  app.get(
+    "/timelock/batches/:batchOpId/dag",
+    async (req: Request, res: Response): Promise<void> => {
+      const { batchOpId } = req.params;
+      const key = `timelock:dag:${batchOpId}`;
+      try {
+        const data = await cached(key, TTL.proposals, async () => {
+          const result = await pool.query(
+            `SELECT * FROM timelock_dependency_graphs
+             WHERE batch_op_id = $1
+             ORDER BY ledger DESC
+             LIMIT 1`,
+            [batchOpId],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (!data) {
+          res.status(404).json({ error: "Dependency DAG not found" });
+          return;
+        }
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /timelock/batches/:batchOpId/partial-state
+  app.get(
+    "/timelock/batches/:batchOpId/partial-state",
+    async (req: Request, res: Response): Promise<void> => {
+      const { batchOpId } = req.params;
+      const key = `timelock:partial_state:${batchOpId}`;
+      try {
+        const data = await cached(key, TTL.proposals, async () => {
+          const result = await pool.query(
+            `SELECT * FROM timelock_partial_batch_state WHERE batch_op_id = $1`,
+            [batchOpId],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (!data) {
+          res.status(404).json({ error: "Partial batch state not found" });
+          return;
+        }
+        res.json(data);
       } catch {
         res.status(500).json({ error: "Internal server error" });
       }
