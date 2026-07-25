@@ -261,6 +261,35 @@ describe("VotesError", () => {
 });
 
 describe("parseVotesError", () => {
+  const contractCodes = numericEnumValues(VotesErrorCode).filter(
+    (code) => code < 100,
+  );
+
+  it("returns typed VotesError for known codes", () => {
+    const err = parseVotesError({ error: "Error(Contract, #10)" });
+    expect(err).toBeInstanceOf(VotesError);
+    expect(err.code).toBe(VotesErrorCode.InvalidSignature);
+    expect(err.message).toContain("delegation signature");
+  });
+
+  it.each(contractCodes)("handles VotesErrorCode contract value %i", (code) => {
+    const err = parseVotesError({ error: `Error(Contract, #${code})` });
+    expect(err).toBeInstanceOf(VotesError);
+    expect(err.code).toBe(code);
+    expect(err.message.length).toBeGreaterThan(0);
+  });
+
+  it("does not drop the raw code for unrecognized codes", () => {
+    expect(() =>
+      parseVotesError({ error: "Error(Contract, #999)" }),
+    ).not.toThrow();
+
+    const err = parseVotesError({ error: "Error(Contract, #999)" });
+    expect(err).toBeInstanceOf(VotesError);
+    expect(err.code).toBe(999 as VotesErrorCode);
+    expect(err.message).toBe("Votes contract error #999");
+  });
+
   it("maps transaction failures", () => {
     const err = parseVotesError({
       status: "ERROR",
