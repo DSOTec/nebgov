@@ -20,6 +20,7 @@ export default function StreamsPage() {
   const [streams, setStreams] = useState<TreasuryBudgetStream[]>([]);
   const [summary, setSummary] = useState<TreasuryBudgetSummary | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [client, setClient] = useState<TreasuryClient | null>(null);
 
@@ -36,8 +37,12 @@ export default function StreamsPage() {
       ]);
       setStreams(streamList);
       setSummary(budgetSummary);
-    } catch {
-      // ignore — may not have streams yet
+      setError(null);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setStreams([]);
+      setSummary(null);
     } finally {
       setLoading(false);
     }
@@ -87,6 +92,17 @@ export default function StreamsPage() {
         <div className="md:col-span-2">
           {loading ? (
             <div className="text-center py-8 text-gray-400">Loading streams...</div>
+          ) : error ? (
+            <div className="border border-red-200 bg-red-50 rounded-lg p-8 text-center">
+              <p className="text-sm text-red-600">Failed to load streams</p>
+              <p className="text-xs text-red-500 mt-2">{error}</p>
+              <button
+                onClick={() => fetchData()}
+                className="mt-3 text-red-600 text-sm hover:underline"
+              >
+                Retry
+              </button>
+            </div>
           ) : streams.length === 0 ? (
             <div className="border border-dashed border-gray-200 rounded-lg p-8 text-center">
               <p className="text-sm text-gray-400">No budget streams yet</p>

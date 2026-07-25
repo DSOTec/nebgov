@@ -587,6 +587,56 @@ export interface BatchTransferEvent {
   ledger: number;
 }
 
+/** Event from a budget stream (created, spend, batch, revoked, extended, topped-up, or exhausted) */
+export type StreamEvent =
+  | {
+      type: "stream_created";
+      streamId: bigint;
+      name: string;
+      owner: string;
+      ledger: number;
+    }
+  | {
+      type: "stream_spend";
+      streamId: bigint;
+      recipient: string;
+      amount: bigint;
+      ledger: number;
+    }
+  | {
+      type: "stream_batch";
+      streamId: bigint;
+      totalAmount: bigint;
+      recipientCount: number;
+      ledger: number;
+    }
+  | {
+      type: "stream_revoked";
+      streamId: bigint;
+      caller: string;
+      unspentReturned: bigint;
+      ledger: number;
+    }
+  | {
+      type: "stream_extended";
+      streamId: bigint;
+      oldEndLedger: number;
+      newEndLedger: number;
+      ledger: number;
+    }
+  | {
+      type: "stream_topped_up";
+      streamId: bigint;
+      additionalAmount: bigint;
+      newTotalAmount: bigint;
+      ledger: number;
+    }
+  | {
+      type: "stream_exhausted";
+      streamId: bigint;
+      ledger: number;
+    };
+
 /** Result of checking whether an address can propose. */
 export interface CanProposeResult {
   /** Whether the address is allowed to propose */
