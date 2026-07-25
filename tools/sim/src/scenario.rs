@@ -138,6 +138,29 @@ pub enum SimStep {
     AssertQuorumReached {
         proposal_id: u64,
     },
+    AssertReputationScore {
+        actor: String,
+        min_score: Option<i32>,
+        max_score: Option<i32>,
+    },
+    CreateDraft {
+        actor: String,
+        targets: Vec<String>,
+        fn_names: Vec<String>,
+        description: String,
+    },
+    CoSponsorDraft {
+        actor: String,
+        draft_id: u64,
+    },
+    FinalizeDraft {
+        actor: String,
+        draft_id: u64,
+    },
+    CancelDraft {
+        actor: String,
+        draft_id: u64,
+    },
 }
 
 impl SimStep {
@@ -161,6 +184,11 @@ impl SimStep {
             SimStep::TakeAnalyticsSnapshot => "TakeAnalyticsSnapshot",
             SimStep::AssertParticipation { .. } => "AssertParticipation",
             SimStep::AssertQuorumReached { .. } => "AssertQuorumReached",
+            SimStep::AssertReputationScore { .. } => "AssertReputationScore",
+            SimStep::CreateDraft { .. } => "CreateDraft",
+            SimStep::CoSponsorDraft { .. } => "CoSponsorDraft",
+            SimStep::FinalizeDraft { .. } => "FinalizeDraft",
+            SimStep::CancelDraft { .. } => "CancelDraft",
         }
     }
 }
