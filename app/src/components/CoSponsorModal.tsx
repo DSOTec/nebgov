@@ -26,15 +26,16 @@ export function CoSponsorModal({ draftId, onClose, onSuccess }: Props) {
   const [submitting, setSubmitting] = useState(false);
 
   async function handleConfirm() {
-    if (!isConnected || !publicKey) {
+    let pk = publicKey;
+    if (!isConnected || !pk) {
       try {
-        await connect();
+        pk = await connect();
       } catch {
         toast.error("Please connect your wallet to continue.");
         return;
       }
     }
-    if (!publicKey) return;
+    if (!pk) return;
 
     const config = readGovernorConfig();
     if (!config || !config.coSponsorshipAddress) {
@@ -45,7 +46,7 @@ export function CoSponsorModal({ draftId, onClose, onSuccess }: Props) {
     setSubmitting(true);
     try {
       const client = new CoSponsorshipClient(config);
-      const txHash = await client.coSponsorWithSign(publicKey, draftId, signTransaction);
+      const txHash = await client.coSponsorWithSign(pk, draftId, signTransaction);
       toast.success(
         <div>
           Co-sponsorship submitted!{" "}

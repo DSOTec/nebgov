@@ -41,7 +41,13 @@ export function StreamSpendModal({
       return;
     }
 
-    const amt = BigInt(amount);
+    let amt: bigint;
+    try {
+      amt = BigInt(amount);
+    } catch {
+      toast.error("Enter a whole-number amount");
+      return;
+    }
     if (amt > remaining) {
       toast.error("Amount exceeds remaining budget");
       return;

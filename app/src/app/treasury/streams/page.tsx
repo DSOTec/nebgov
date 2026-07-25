@@ -29,7 +29,10 @@ export default function StreamsPage() {
   const tokenAddress = process.env.NEXT_PUBLIC_TREASURY_TOKEN_ADDRESS ?? "";
 
   const fetchData = useCallback(async () => {
-    if (!client || !publicKey) return;
+    if (!client || !publicKey) {
+      setLoading(false);
+      return;
+    }
     try {
       const [streamList, budgetSummary] = await Promise.all([
         client.getStreams(publicKey, 0, 50),
@@ -92,6 +95,10 @@ export default function StreamsPage() {
         <div className="md:col-span-2">
           {loading ? (
             <div className="text-center py-8 text-gray-400">Loading streams...</div>
+          ) : !publicKey ? (
+            <div className="border border-dashed border-gray-200 rounded-lg p-8 text-center">
+              <p className="text-sm text-gray-400">Connect your wallet to view streams</p>
+            </div>
           ) : error ? (
             <div className="border border-red-200 bg-red-50 rounded-lg p-8 text-center">
               <p className="text-sm text-red-600">Failed to load streams</p>
