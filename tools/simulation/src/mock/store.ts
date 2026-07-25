@@ -38,10 +38,9 @@ export interface GovernorSettingsState {
   proposalCooldown: number;
   maxProposalsPerPeriod: number;
   proposalPeriodDuration: number;
-  useDynamicQuorum: boolean;
-  reflectorOracle: string | null;
-  minQuorumUsd: bigint;
   maxCalldataSize: number;
+  isPaused: boolean;
+  pauser: string;
 }
 
 export interface GovernorState {

@@ -29,6 +29,10 @@ export interface GovernorSimulationSettings {
   maxProposalsPerPeriod?: number;
   /** Period length in ledgers for the max-proposals-per-period cap. Defaults to 10_000. */
   proposalPeriodDuration?: number;
+  /** Maximum calldata size per action in bytes. Defaults to 10_000. */
+  maxCalldataSize?: number;
+  /** Address authorized to pause/unpause the contract. Defaults to the guardian. */
+  pauser?: string;
 }
 
 export interface SimulationConfig {
@@ -67,6 +71,7 @@ const DEFAULT_GRACE_PERIOD = 120_960; // ~7 days at 5s/ledger.
 const DEFAULT_COOLDOWN = 100;
 const DEFAULT_MAX_PER_PERIOD = 5;
 const DEFAULT_PERIOD_DURATION = 10_000;
+const DEFAULT_MAX_CALLDATA_SIZE = 10_000;
 const DEFAULT_GUARDIAN = Keypair.fromRawEd25519Seed(
   createHash("sha256").update("nebgov-simulation-actor:default-guardian").digest(),
 ).publicKey();
@@ -113,21 +118,21 @@ export class SimulationHarness {
 
   private buildSettingsState(): GovernorSettingsState {
     const s = this.config.settings;
+    const guardian = s.guardian ?? DEFAULT_GUARDIAN;
     return {
       votingDelay: s.votingDelay,
       votingPeriod: s.votingPeriod,
       quorumNumerator: s.quorumNumerator,
       proposalThreshold: s.proposalThreshold,
-      guardian: s.guardian ?? DEFAULT_GUARDIAN,
+      guardian,
       voteType: s.voteType,
       proposalGracePeriod: s.proposalGracePeriod ?? DEFAULT_GRACE_PERIOD,
       proposalCooldown: s.proposalCooldown ?? DEFAULT_COOLDOWN,
       maxProposalsPerPeriod: s.maxProposalsPerPeriod ?? DEFAULT_MAX_PER_PERIOD,
       proposalPeriodDuration: s.proposalPeriodDuration ?? DEFAULT_PERIOD_DURATION,
-      useDynamicQuorum: false,
-      reflectorOracle: null,
-      minQuorumUsd: 0n,
-      maxCalldataSize: 10_000,
+      maxCalldataSize: s.maxCalldataSize ?? DEFAULT_MAX_CALLDATA_SIZE,
+      isPaused: false,
+      pauser: s.pauser ?? guardian,
     };
   }
 

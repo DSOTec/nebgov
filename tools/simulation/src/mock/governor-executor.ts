@@ -87,11 +87,36 @@ export const governorExecutor = {
     if (caller !== proposer) {
       throw new MockContractError(100, "propose: proposer must authorize this call");
     }
-    if (targets.length === 0 || targets.length !== fnNames.length || targets.length !== calldatas.length) {
-      throw new MockContractError(GovernorErrorCode.InvalidVectorLengths, "propose: targets/fnNames/calldatas length mismatch");
-    }
 
     const gov = store.governor;
+
+    // Check if contract is paused (Issue #885)
+    if (gov.settings.isPaused) {
+      throw new MockContractError(GovernorErrorCode.ContractPaused, "propose: contract is paused");
+    }
+
+    // Split vector validation to match real contract behavior (Issue #883)
+    // First check: length mismatch
+    if (targets.length !== fnNames.length || targets.length !== calldatas.length) {
+      throw new MockContractError(GovernorErrorCode.InvalidVectorLengths, "propose: length mismatch");
+    }
+    // Second check: empty targets (must come AFTER length check)
+    if (targets.length === 0) {
+      throw new MockContractError(GovernorErrorCode.NoTargets, "propose: no targets");
+    }
+
+    // Validate calldata size and count (Issue #884)
+    const maxCalldataSize = gov.settings.maxCalldataSize;
+    for (let i = 0; i < calldatas.length; i++) {
+      if (calldatas[i].length > maxCalldataSize) {
+        throw new MockContractError(GovernorErrorCode.CalldataTooLarge, "propose: calldata exceeds maximum size");
+      }
+    }
+
+    const MAX_CALLDATA_COUNT = 10;
+    if (calldatas.length > MAX_CALLDATA_COUNT) {
+      throw new MockContractError(GovernorErrorCode.TooManyCalldataEntries, "propose: too many calldata entries");
+    }
     const proposerVotes = tokenVotesExecutor.get_votes(store.votes, clock, proposer, [proposer]);
     if (proposerVotes < gov.settings.proposalThreshold) {
       throw new MockContractError(GovernorErrorCode.ProposalThresholdNotMet, "propose: proposal threshold not met");
@@ -146,8 +171,15 @@ export const governorExecutor = {
     if (caller !== voter) {
       throw new MockContractError(100, "cast_vote: voter must authorize this call");
     }
-    const support = supportVariant[0];
+
     const gov = store.governor;
+
+    // Check if contract is paused (Issue #885)
+    if (gov.settings.isPaused) {
+      throw new MockContractError(GovernorErrorCode.ContractPaused, "cast_vote: contract is paused");
+    }
+
+    const support = supportVariant[0];
     const proposal = mustGetProposal(store, proposalId);
 
     if (proposal.hasVoted[voter]) {
@@ -316,113 +348,22 @@ export const governorExecutor = {
     return store.governor.proposalCount;
   },
 
-  update_config(store: MockLedgerStore, _clock: LedgerClock, _caller: string, args: unknown[]): null {
-    const [newSettings] = args as [
-      {
-        voting_delay: number;
-        voting_period: number;
-        quorum_numerator: number;
-        proposal_threshold: bigint;
-        guardian: string;
-        vote_type: string;
-        proposal_grace_period: number;
-        use_dynamic_quorum: boolean;
-        reflector_oracle: string | null;
-        min_quorum_usd: bigint;
-        max_calldata_size: number;
-        proposal_cooldown: number;
-        max_proposals_per_period: number;
-        proposal_period_duration: number;
-      },
-    ];
-
-    if (newSettings.max_calldata_size === 0) {
-      throw new MockContractError(GovernorErrorCode.InvalidMaxCalldataSize, "update_config: max_calldata_size cannot be 0");
+  pause(store: MockLedgerStore, _clock: LedgerClock, caller: string, _args: unknown[]): null {
+    const gov = store.governor;
+    if (caller !== gov.settings.pauser) {
+      throw new MockContractError(GovernorErrorCode.UnauthorizedPause, "pause: only pauser can pause");
     }
-
-    store.governor.settings.votingDelay = newSettings.voting_delay;
-    store.governor.settings.votingPeriod = newSettings.voting_period;
-    store.governor.settings.quorumNumerator = newSettings.quorum_numerator;
-    store.governor.settings.proposalThreshold = newSettings.proposal_threshold;
-    store.governor.settings.guardian = newSettings.guardian;
-    store.governor.settings.voteType = newSettings.vote_type as typeof store.governor.settings.voteType;
-    store.governor.settings.proposalGracePeriod = newSettings.proposal_grace_period;
-    store.governor.settings.useDynamicQuorum = newSettings.use_dynamic_quorum;
-    store.governor.settings.reflectorOracle = newSettings.reflector_oracle;
-    store.governor.settings.minQuorumUsd = newSettings.min_quorum_usd;
-    store.governor.settings.maxCalldataSize = newSettings.max_calldata_size;
-    store.governor.settings.proposalCooldown = newSettings.proposal_cooldown;
-    store.governor.settings.maxProposalsPerPeriod = newSettings.max_proposals_per_period;
-    store.governor.settings.proposalPeriodDuration = newSettings.proposal_period_duration;
-
+    gov.settings.isPaused = true;
     return null;
   },
 
-  set_guardian(store: MockLedgerStore, _clock: LedgerClock, _caller: string, args: unknown[]): null {
-    const [newGuardian] = args as [string];
-    if (store.governor.settings.guardian === newGuardian) {
-      return null;
+  unpause(store: MockLedgerStore, _clock: LedgerClock, caller: string, _args: unknown[]): null {
+    const gov = store.governor;
+    if (caller !== gov.settings.pauser) {
+      throw new MockContractError(GovernorErrorCode.UnauthorizedPause, "unpause: only pauser can unpause");
     }
-    store.governor.settings.guardian = newGuardian;
+    gov.settings.isPaused = false;
     return null;
-  },
-
-  set_voting_strategy(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
-    return null;
-  },
-
-  migrate(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
-    return null;
-  },
-
-  pause(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
-    return null;
-  },
-
-  unpause(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
-    return null;
-  },
-
-  get_proposal(store: MockLedgerStore, _clock: LedgerClock, _caller: string, args: unknown[]): Record<string, unknown> {
-    const [proposalId] = args as [bigint];
-    const proposal = mustGetProposal(store, proposalId);
-    return {
-      id: proposal.id,
-      proposer: proposal.proposer,
-      description: proposal.description,
-      description_hash: proposal.descriptionHash,
-      metadata_uri: proposal.metadataUri,
-      targets: proposal.targets,
-      fn_names: proposal.fnNames,
-      calldatas: proposal.calldatas,
-      start_ledger: proposal.startLedger,
-      end_ledger: proposal.endLedger,
-      votes_for: proposal.votesFor,
-      votes_against: proposal.votesAgainst,
-      votes_abstain: proposal.votesAbstain,
-      executed: proposal.executed,
-      cancelled: proposal.cancelled,
-      queued: proposal.queued,
-      op_ids: proposal.opIds,
-    };
-  },
-
-  proposals_count_by_state(store: MockLedgerStore, clock: LedgerClock): Record<string, bigint> {
-    const counts: Record<string, bigint> = {
-      pending: 0n,
-      active: 0n,
-      defeated: 0n,
-      succeeded: 0n,
-      queued: 0n,
-      executed: 0n,
-      cancelled: 0n,
-      expired: 0n,
-    };
-    for (const proposal of store.governor.proposals.values()) {
-      const state = computeProposalState(store, clock, proposal);
-      counts[state.toLowerCase()] = (counts[state.toLowerCase()] ?? 0n) + 1n;
-    }
-    return counts;
   },
 };
 
