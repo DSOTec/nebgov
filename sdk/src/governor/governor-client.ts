@@ -21,6 +21,9 @@ import {
   ProposalVotes,
   CanProposeResult,
   VotingHistoryEntry,
+  CommitVoteParams,
+  CommitmentResult,
+  CommitRevealStatus,
 } from "../types";
 
 import { GovernorError, GovernorErrorCode, parseGovernorError } from "../errors";
@@ -72,6 +75,15 @@ import {
 import {
   getProposalsForAddress as _getProposalsForAddress,
 } from "./events";
+import {
+  generateCommitment as _generateCommitment,
+  commitVote as _commitVote,
+  revealVote as _revealVote,
+  hasCommitted as _hasCommitted,
+  getCommitDeadline as _getCommitDeadline,
+  getRevealDeadline as _getRevealDeadline,
+  getCommitRevealStatus as _getCommitRevealStatus,
+} from "./commitReveal";
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -452,6 +464,36 @@ export class GovernorClient {
 
   async getVotesCastByAddress(voter: string, opts?: { fromLedger?: number; limit?: number }): Promise<VotingHistoryEntry[]> {
     return _getVotesCastByAddress(this, voter, opts);
+  }
+
+  // ── Commit-reveal voting methods (Issue #766) ───────────────────────────────
+
+  generateCommitment(params: CommitVoteParams): CommitmentResult {
+    return _generateCommitment(params);
+  }
+
+  async commitVote(signer: Keypair, proposalId: bigint, commitment: Buffer): Promise<string> {
+    return _commitVote(this, signer, proposalId, commitment);
+  }
+
+  async revealVote(signer: Keypair, params: { proposalId: bigint; support: VoteSupport; weightSeed: bigint; salt: Buffer }): Promise<string> {
+    return _revealVote(this, signer, params);
+  }
+
+  async hasCommitted(proposalId: bigint, voter: string): Promise<boolean> {
+    return _hasCommitted(this, proposalId, voter);
+  }
+
+  async getCommitDeadline(proposalId: bigint): Promise<number> {
+    return _getCommitDeadline(this, proposalId);
+  }
+
+  async getRevealDeadline(proposalId: bigint): Promise<number> {
+    return _getRevealDeadline(this, proposalId);
+  }
+
+  async getCommitRevealStatus(proposalId: bigint): Promise<CommitRevealStatus> {
+    return _getCommitRevealStatus(this, proposalId);
   }
 
   // ── Query methods ─────────────────────────────────────────────────────────

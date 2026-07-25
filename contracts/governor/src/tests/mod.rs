@@ -1,3 +1,4 @@
+mod commit_reveal;
 mod governance_cancel;
 mod integration;
 mod registry;
@@ -89,6 +90,8 @@ fn settings_with_defaults(_env: &Env, guardian: Address) -> GovernorSettings {
         max_proposals_per_period: 5,
         proposal_period_duration: 10_000,
         co_sponsorship_registry: None,
+        use_commit_reveal: false,
+        commit_phase_fraction: 5_000,
     }
 }
 
@@ -229,6 +232,8 @@ fn update_config_rejects_caller_that_is_not_the_contract_address() {
         max_proposals_per_period: 5,
         proposal_period_duration: 10_000,
         co_sponsorship_registry: None,
+        use_commit_reveal: false,
+        commit_phase_fraction: 5_000,
     };
 
     env.mock_auths(&[MockAuth {
@@ -348,6 +353,8 @@ fn update_config_succeeds_with_contract_self_auth() {
         max_proposals_per_period: 5,
         proposal_period_duration: 10_000,
         co_sponsorship_registry: None,
+        use_commit_reveal: false,
+        commit_phase_fraction: 5_000,
     };
 
     client.update_config(&new_settings);
@@ -383,9 +390,15 @@ fn update_governor_limit_settings_succeed_with_contract_self_auth() {
         &120_960u32,
     );
 
-    client.update_max_calldata_size(&20_000u32);
-    client.update_proposal_cooldown(&250u32);
-    client.update_max_proposals_per_period(&10u32);
+    // update_max_calldata_size/update_proposal_cooldown/update_max_proposals_per_period
+    // were removed as redundant single-field wrappers around update_config (no
+    // external caller in sdk/app/indexer ever used them) to reclaim WASM budget;
+    // update_config is the one path governance uses to change these settings.
+    let mut new_settings = client.get_settings();
+    new_settings.max_calldata_size = 20_000;
+    new_settings.proposal_cooldown = 250;
+    new_settings.max_proposals_per_period = 10;
+    client.update_config(&new_settings);
 
     let updated = client.get_settings();
     assert_eq!(updated.max_calldata_size, 20_000);

@@ -76,7 +76,7 @@ fn test_flow_1_deposit_delegate_vote() {
     governor_client.cast_vote(&delegatee, &proposal_id, &VoteSupport::For);
 
     // 6. Assert voting power
-    let (votes_for, _, _) = governor_client.proposal_votes(&proposal_id);
+    let votes_for = governor_client.get_proposal(&proposal_id).votes_for;
     assert_eq!(votes_for, 1000);
 }
 
@@ -199,6 +199,6 @@ fn test_flow_5_quadratic_voting() {
     env.ledger().with_mut(|l| l.sequence_number = 2);
     governor_client.cast_vote(&user, &proposal_id, &VoteSupport::For);
 
-    let (votes_for, _, _) = governor_client.proposal_votes(&proposal_id);
+    let votes_for = governor_client.get_proposal(&proposal_id).votes_for;
     assert_eq!(votes_for, 10); // sqrt(100) = 10
 }

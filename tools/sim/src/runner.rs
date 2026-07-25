@@ -412,9 +412,8 @@ impl SimulationRunner {
                 proposal_id,
                 min_bps,
             } => {
-                let (for_v, against_v, abstain_v) = self.governor.proposal_votes(proposal_id);
-                let total_cast = for_v + against_v + abstain_v;
                 let proposal = self.governor.get_proposal(proposal_id);
+                let total_cast = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
                 let supply = self
                     .token_votes
                     .get_past_total_supply(&proposal.start_ledger);
@@ -715,10 +714,13 @@ fn merge_settings(current: &GovernorSettings, overrides: &SimGovernorSettings) -
         proposal_cooldown: overrides.proposal_cooldown,
         max_proposals_per_period: overrides.max_proposals_per_period,
         proposal_period_duration: overrides.proposal_period_duration,
-        // Not modeled in the scenario DSL (no co-sponsorship concept in
-        // SimGovernorSettings) — carried through unchanged from whatever's
-        // currently configured, same treatment as `guardian`/`reflector_oracle`.
+        // Not modeled in the scenario DSL (no co-sponsorship or commit-reveal
+        // concept in SimGovernorSettings) — carried through unchanged from
+        // whatever's currently configured, same treatment as `guardian`/
+        // `reflector_oracle`.
         co_sponsorship_registry: current.co_sponsorship_registry.clone(),
+        use_commit_reveal: current.use_commit_reveal,
+        commit_phase_fraction: current.commit_phase_fraction,
     }
 }
 

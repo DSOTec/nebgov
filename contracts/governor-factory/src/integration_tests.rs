@@ -261,10 +261,10 @@ fn factory_deploy_produces_working_governor() {
     governor_client.cast_vote(&alice, &proposal_id, &VoteSupport::For);
     governor_client.cast_vote(&bob, &proposal_id, &VoteSupport::For);
 
-    let (votes_for, votes_against, votes_abstain) = governor_client.proposal_votes(&proposal_id);
-    assert_eq!(votes_for, 1000, "total votes should be 1000 (500 + 500)");
-    assert_eq!(votes_against, 0);
-    assert_eq!(votes_abstain, 0);
+    let proposal = governor_client.get_proposal(&proposal_id);
+    assert_eq!(proposal.votes_for, 1000, "total votes should be 1000 (500 + 500)");
+    assert_eq!(proposal.votes_against, 0);
+    assert_eq!(proposal.votes_abstain, 0);
 
     // Advance past voting period
     env.ledger().with_mut(|l| l.sequence_number = 31);

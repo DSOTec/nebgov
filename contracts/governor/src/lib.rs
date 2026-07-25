@@ -4,6 +4,7 @@
 // state machine (issue #439).
 #![deny(unreachable_patterns)]
 
+mod commit_reveal;
 pub mod error;
 mod events;
 mod reputation;
@@ -155,17 +156,8 @@ pub struct GovernorSettings {
     pub max_proposals_per_period: u32,
     pub proposal_period_duration: u32,
     pub co_sponsorship_registry: Option<Address>,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub struct ExecutionGasEstimate {
-    pub proposal_id: u64,
-    pub action_count: u32,
-    pub calldata_bytes: u32,
-    pub estimated_cpu_insns: u64,
-    pub estimated_mem_bytes: u64,
-    pub estimated_fee_stroops: i128,
+    pub use_commit_reveal: bool,
+    pub commit_phase_fraction: u32,
 }
 
 #[contracttype]
@@ -233,55 +225,58 @@ pub enum DataKey {
     VoteType,
     ProposalGracePeriod,
     HasVoted(u64, Address),
-    VoteReason(u64, Address),
     VoteReceipt(u64, Address),
-    /// The timelock op-id (Bytes) for a proposal after queue() is called.
-    QueuedOpId(u64),
-    /// The ledger sequence number when a proposal was queued (for veto window tracking).
+    // The ledger sequence number when a proposal was queued (for veto window tracking).
     QueueTime(u64),
     ProposalExpiredEmitted(u64),
     CurrentWasmHash,
-    /// Active voting strategy (Single or MultiToken).
+    // Active voting strategy (Single or MultiToken).
     VotingStrategy,
-    /// Whether dynamic quorum is enabled.
+    // Whether dynamic quorum is enabled.
     UseDynamicQuorum,
-    /// Address of the Reflector oracle for dynamic quorum.
+    // Address of the Reflector oracle for dynamic quorum.
     ReflectorOracle,
-    /// Minimum quorum floor in USD (6-decimal format).
+    // Minimum quorum floor in USD (6-decimal format).
     MinQuorumUsd,
-    /// Address authorized to pause/unpause the contract.
+    // Address authorized to pause/unpause the contract.
     Pauser,
-    /// Whether the contract is currently paused.
+    // Whether the contract is currently paused.
     IsPaused,
-    /// Last proposal ledger for an address (for cooldown).
+    // Last proposal ledger for an address (for cooldown).
     LastProposalLedger(Address),
-    /// Proposal count for an address in current period.
+    // Proposal count for an address in current period.
     ProposalsInPeriod(Address, u32),
-    /// Maximum calldata size per action in bytes.
+    // Maximum calldata size per action in bytes.
     MaxCalldataSize,
-    /// Minimum ledgers between proposals from the same address (cooldown period).
+    // Minimum ledgers between proposals from the same address (cooldown period).
     ProposalCooldown,
-    /// Maximum proposals per period (period measured in ledgers).
+    // Maximum proposals per period (period measured in ledgers).
     MaxProposalsPerPeriod,
-    /// Period duration in ledgers for proposal rate limiting.
+    // Period duration in ledgers for proposal rate limiting.
     ProposalPeriodDuration,
-    /// Cached timelock min_delay (seconds) written once at initialize time.
+    // Cached timelock min_delay/execution_window (seconds), written once at initialize time.
     CachedTimelockDelay,
-    /// Cached timelock execution_window (seconds) written once at initialize time.
     CachedExecutionWindow,
-    /// Ordered list of proposal ids for pagination.
+    // Ordered list of proposal ids for pagination.
     ProposalList,
-    /// Current storage schema version (for migration tracking).
+    // Current storage schema version (for migration tracking).
     StorageVersion,
-    /// Address of the trusted co-sponsorship registry contract authorized
-    /// to call `propose_via_registry`, if one has been configured.
+    // Address of the trusted co-sponsorship registry contract, if configured.
     CoSponsorshipRegistry,
-    /// Per-address proposer reputation record (Issue #771).
+    // Per-address proposer reputation record (Issue #771).
     ProposerReputation(Address),
-    /// Idempotency guard so a proposal that concludes via grace-period
-    /// expiry (succeeded but not executed in time) only records its
-    /// reputation penalty once, no matter how many times `state()` is read.
+    // Idempotency guard: a proposal expiring via grace-period only records its
+    // reputation penalty once, no matter how many times state() is read.
     ReputationExpiredRecorded(u64),
+    // Commitment hash a voter submitted (Issue #766); presence doubles as "has committed".
+    VoteCommitment(u64, Address),
+    // Ledger after which a proposal's commit phase ends, snapshotted at creation.
+    CommitDeadline(u64),
+    RevealDeadline(u64),
+    // Whether commit-reveal voting is enabled governor-wide for new proposals.
+    UseCommitReveal,
+    // Fraction (bps) of a new proposal's voting_period allotted to the commit phase.
+    CommitPhaseFraction,
 }
 
 #[contract]
@@ -485,6 +480,16 @@ impl GovernorContract {
         env.storage()
             .instance()
             .set(&DataKey::ProposalPeriodDuration, &10_000u32); // ~24 hour period
+        // Commit-reveal voting disabled by default (Issue #766); when a
+        // governance proposal turns it on, new proposals split their voting
+        // period 50/50 between commit and reveal unless overridden.
+        env.storage()
+            .instance()
+            .set(&DataKey::UseCommitReveal, &false);
+        env.storage().instance().set(
+            &DataKey::CommitPhaseFraction,
+            &commit_reveal::DEFAULT_COMMIT_PHASE_FRACTION_BPS,
+        );
         // Initialize pause state (not paused by default)
         env.storage().instance().set(&DataKey::IsPaused, &false);
         // Set admin as initial pauser
@@ -547,6 +552,17 @@ impl GovernorContract {
             env.storage()
                 .persistent()
                 .set(&DataKey::ProposalList, &Vec::<u64>::new(env));
+        }
+        if !env.storage().instance().has(&DataKey::UseCommitReveal) {
+            env.storage()
+                .instance()
+                .set(&DataKey::UseCommitReveal, &false);
+        }
+        if !env.storage().instance().has(&DataKey::CommitPhaseFraction) {
+            env.storage().instance().set(
+                &DataKey::CommitPhaseFraction,
+                &commit_reveal::DEFAULT_COMMIT_PHASE_FRACTION_BPS,
+            );
         }
     }
 
@@ -847,6 +863,7 @@ impl GovernorContract {
         );
 
         reputation::record_proposal_created(env, proposer);
+        commit_reveal::start_phase_if_enabled(env, proposal_id, proposal.start_ledger, proposal.end_ledger);
 
         events::emit_proposal_created(env, &proposal);
 
@@ -895,6 +912,13 @@ impl GovernorContract {
 
     pub fn cast_vote(env: Env, voter: Address, proposal_id: u64, support: VoteSupport) {
         voter.require_auth();
+
+        // Commit-reveal proposals must be voted on via commit_vote/reveal_vote —
+        // allowing a direct cast_vote here would let a voter bypass the hidden
+        // commitment and defeat the anti-bribery/anti-copying guarantee (Issue #766).
+        if commit_reveal::is_enabled_for_proposal(&env, proposal_id) {
+            env.panic_with_error(GovernorError::ProposalNotActive);
+        }
 
         // Validate vote support against configured vote type
         Self::validate_vote_support(&env, &support).unwrap_or_else(|e| env.panic_with_error(e));
@@ -976,6 +1000,12 @@ impl GovernorContract {
     ) {
         voter.require_auth();
 
+        // Commit-reveal proposals must be voted on via commit_vote/reveal_vote
+        // (see cast_vote's identical guard above for the rationale).
+        if commit_reveal::is_enabled_for_proposal(&env, proposal_id) {
+            env.panic_with_error(GovernorError::ProposalNotActive);
+        }
+
         // Validate vote support against configured vote type
         Self::validate_vote_support(&env, &support).unwrap_or_else(|e| env.panic_with_error(e));
 
@@ -1030,11 +1060,6 @@ impl GovernorContract {
             .persistent()
             .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
 
-        // Store the reason in persistent storage
-        env.storage()
-            .persistent()
-            .set(&DataKey::VoteReason(proposal_id, voter.clone()), &reason);
-
         // Store voting receipt with reason
         let receipt = VotingReceipt {
             has_voted: true,
@@ -1048,6 +1073,140 @@ impl GovernorContract {
 
         // Emit VoteCastWithReason event
         events::emit_vote_cast_with_reason(&env, &voter, proposal_id, &support, weight, reason);
+    }
+
+    fn ensure_not_finalized(env: &Env, proposal: &Proposal) {
+        if proposal.cancelled || proposal.executed || proposal.queued {
+            env.panic_with_error(GovernorError::ProposalNotActive);
+        }
+    }
+
+    /// Two-phase commit-reveal voting (Issue #766): hides `support` until `reveal_vote`.
+    pub fn commit_vote(env: Env, voter: Address, proposal_id: u64, commitment: BytesN<32>) {
+        voter.require_auth();
+
+        let commit_deadline = commit_reveal::commit_deadline(&env, proposal_id)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::CommitRevealNotEnabled));
+
+        let proposal = Self::must_get_proposal(&env, proposal_id);
+        Self::ensure_not_finalized(&env, &proposal);
+
+        let current = env.ledger().sequence();
+        if current < proposal.start_ledger {
+            env.panic_with_error(GovernorError::ProposalNotActive);
+        }
+        if current > commit_deadline {
+            env.panic_with_error(GovernorError::CommitPhaseEnded);
+        }
+
+        if commit_reveal::has_committed(&env, proposal_id, &voter) {
+            env.panic_with_error(GovernorError::AlreadyVoted);
+        }
+
+        commit_reveal::store_commitment(&env, proposal_id, &voter, &commitment);
+        events::emit_vote_committed(&env, proposal_id, &voter, &commitment);
+    }
+
+    /// Discloses a `commit_vote` preimage and applies the vote to the tally (Issue #766).
+    pub fn reveal_vote(
+        env: Env,
+        voter: Address,
+        proposal_id: u64,
+        support: VoteSupport,
+        weight_seed: u128,
+        salt: BytesN<32>,
+    ) {
+        voter.require_auth();
+
+        let commit_deadline = commit_reveal::commit_deadline(&env, proposal_id)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::CommitRevealNotEnabled));
+        let reveal_deadline = commit_reveal::reveal_deadline(&env, proposal_id)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::CommitRevealNotEnabled));
+
+        Self::validate_vote_support(&env, &support).unwrap_or_else(|e| env.panic_with_error(e));
+
+        let voted: bool = env
+            .storage()
+            .persistent()
+            .get(&DataKey::HasVoted(proposal_id, voter.clone()))
+            .unwrap_or(false);
+        if voted {
+            env.panic_with_error(GovernorError::AlreadyVoted);
+        }
+
+        let mut proposal = Self::must_get_proposal(&env, proposal_id);
+        Self::ensure_not_finalized(&env, &proposal);
+
+        let current = env.ledger().sequence();
+        if current <= commit_deadline {
+            env.panic_with_error(GovernorError::RevealPhaseNotStarted);
+        }
+        if current > reveal_deadline {
+            env.panic_with_error(GovernorError::RevealPhaseEnded);
+        }
+
+        if !commit_reveal::has_committed(&env, proposal_id, &voter) {
+            env.panic_with_error(GovernorError::NoCommitmentToReveal);
+        }
+
+        let stored_commitment = commit_reveal::get_commitment(&env, proposal_id, &voter)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::NoCommitmentToReveal));
+
+        let recomputed = commit_reveal::compute_commitment(&env, proposal_id, &support, weight_seed, &salt);
+        if recomputed != stored_commitment {
+            env.panic_with_error(GovernorError::CommitmentMismatch);
+        }
+
+        let raw_weight: i128 = Self::compute_votes(&env, &voter, &proposal.start_ledger);
+        let vote_type: VoteType = env
+            .storage()
+            .instance()
+            .get(&DataKey::VoteType)
+            .unwrap_or(VoteType::Extended);
+        let weight = Self::apply_vote_type(vote_type, raw_weight);
+
+        if weight > 0 {
+            match support {
+                VoteSupport::For => proposal.votes_for += weight,
+                VoteSupport::Against => proposal.votes_against += weight,
+                VoteSupport::Abstain => proposal.votes_abstain += weight,
+            }
+
+            env.storage()
+                .persistent()
+                .set(&DataKey::Proposal(proposal_id), &proposal);
+            Self::extend_proposal_ttl(&env, proposal_id, &proposal);
+        }
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::HasVoted(proposal_id, voter.clone()), &true);
+
+        let receipt = VotingReceipt {
+            has_voted: true,
+            support: support.clone(),
+            weight,
+            reason: String::from_str(&env, ""),
+        };
+        env.storage()
+            .persistent()
+            .set(&DataKey::VoteReceipt(proposal_id, voter.clone()), &receipt);
+
+        events::emit_vote_revealed(&env, proposal_id, &voter, &support, weight);
+    }
+
+    pub fn get_commit_deadline(env: Env, proposal_id: u64) -> u32 {
+        commit_reveal::commit_deadline(&env, proposal_id)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::CommitRevealNotEnabled))
+    }
+
+    pub fn get_reveal_deadline(env: Env, proposal_id: u64) -> u32 {
+        commit_reveal::reveal_deadline(&env, proposal_id)
+            .unwrap_or_else(|| env.panic_with_error(GovernorError::CommitRevealNotEnabled))
+    }
+
+    pub fn has_committed(env: Env, proposal_id: u64, voter: Address) -> bool {
+        commit_reveal::has_committed(&env, proposal_id, &voter)
     }
 
     pub fn vote(env: Env, voter: Address, proposal_id: u64, vote_choice: u32) {
@@ -1658,27 +1817,10 @@ impl GovernorContract {
         static_quorum
     }
 
-    pub fn get_quorum(env: Env, proposal_id: u64) -> i128 {
-        Self::quorum(env, proposal_id)
-    }
-
     pub fn is_quorum_reached(env: Env, proposal_id: u64) -> bool {
         let proposal = Self::must_get_proposal(&env, proposal_id);
         let required = Self::quorum(env, proposal_id);
         proposal.votes_for + proposal.votes_abstain >= required
-    }
-
-    pub fn proposal_votes(env: Env, proposal_id: u64) -> (i128, i128, i128) {
-        let proposal: Proposal = env
-            .storage()
-            .persistent()
-            .get(&DataKey::Proposal(proposal_id))
-            .unwrap_or_else(|| env.panic_with_error(GovernorError::ProposalNotFound));
-        (
-            proposal.votes_for,
-            proposal.votes_against,
-            proposal.votes_abstain,
-        )
     }
 
     pub fn voting_delay(env: Env) -> u32 {
@@ -1699,13 +1841,6 @@ impl GovernorContract {
         env.storage()
             .instance()
             .get(&DataKey::ProposalThreshold)
-            .unwrap_or(0)
-    }
-
-    pub fn quorum_numerator(env: Env) -> u32 {
-        env.storage()
-            .instance()
-            .get(&DataKey::QuorumNumerator)
             .unwrap_or(0)
     }
 
@@ -1781,6 +1916,16 @@ impl GovernorContract {
                 .storage()
                 .instance()
                 .get(&DataKey::CoSponsorshipRegistry),
+            use_commit_reveal: env
+                .storage()
+                .instance()
+                .get(&DataKey::UseCommitReveal)
+                .unwrap_or(false),
+            commit_phase_fraction: env
+                .storage()
+                .instance()
+                .get(&DataKey::CommitPhaseFraction)
+                .unwrap_or(commit_reveal::DEFAULT_COMMIT_PHASE_FRACTION_BPS),
         }
     }
 
@@ -1805,6 +1950,10 @@ impl GovernorContract {
         }
         if new_settings.proposal_period_duration == 0 {
             env.panic_with_error(GovernorError::InvalidProposalPeriodDuration);
+        }
+        // Must leave room for both a commit and a reveal sub-window.
+        if new_settings.commit_phase_fraction == 0 || new_settings.commit_phase_fraction >= 10_000 {
+            env.panic_with_error(GovernorError::InvalidVotingPeriod);
         }
     }
 
@@ -1881,6 +2030,13 @@ impl GovernorContract {
                 .instance()
                 .remove(&DataKey::CoSponsorshipRegistry),
         }
+        env.storage()
+            .instance()
+            .set(&DataKey::UseCommitReveal, &new_settings.use_commit_reveal);
+        env.storage().instance().set(
+            &DataKey::CommitPhaseFraction,
+            &new_settings.commit_phase_fraction,
+        );
 
         events::emit_config_updated(&env, &old_settings, &new_settings);
     }
@@ -1911,47 +2067,6 @@ impl GovernorContract {
         events::emit_guardian_changed(&env, &old_guardian, &new_guardian);
     }
 
-    pub fn update_max_calldata_size(env: Env, max_calldata_size: u32) {
-        env.current_contract_address().require_auth();
-        if max_calldata_size == 0 {
-            env.panic_with_error(GovernorError::InvalidMaxCalldataSize);
-        }
-
-        let old_settings = Self::get_settings(env.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxCalldataSize, &max_calldata_size);
-        let new_settings = Self::get_settings(env.clone());
-
-        events::emit_config_updated(&env, &old_settings, &new_settings);
-    }
-
-    pub fn update_proposal_cooldown(env: Env, proposal_cooldown: u32) {
-        env.current_contract_address().require_auth();
-
-        let old_settings = Self::get_settings(env.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::ProposalCooldown, &proposal_cooldown);
-        let new_settings = Self::get_settings(env.clone());
-
-        events::emit_config_updated(&env, &old_settings, &new_settings);
-    }
-
-    pub fn update_max_proposals_per_period(env: Env, max_proposals_per_period: u32) {
-        env.current_contract_address().require_auth();
-        if max_proposals_per_period == 0 {
-            env.panic_with_error(GovernorError::InvalidMaxProposalsPerPeriod);
-        }
-
-        let old_settings = Self::get_settings(env.clone());
-        env.storage()
-            .instance()
-            .set(&DataKey::MaxProposalsPerPeriod, &max_proposals_per_period);
-        let new_settings = Self::get_settings(env.clone());
-
-        events::emit_config_updated(&env, &old_settings, &new_settings);
-    }
 
     pub fn proposal_count(env: Env) -> u64 {
         env.storage()
@@ -1990,26 +2105,6 @@ impl GovernorContract {
         counts
     }
 
-    pub fn last_proposal_ledger(env: Env, address: Address) -> u32 {
-        env.storage()
-            .persistent()
-            .get(&DataKey::LastProposalLedger(address))
-            .unwrap_or(0)
-    }
-
-    pub fn proposals_in_period(env: Env, address: Address) -> u32 {
-        let period_duration: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ProposalPeriodDuration)
-            .unwrap_or(10_000);
-        let current_ledger = env.ledger().sequence();
-        let current_period = current_ledger / period_duration;
-        env.storage()
-            .persistent()
-            .get(&DataKey::ProposalsInPeriod(address, current_period))
-            .unwrap_or(0)
-    }
 
     pub fn can_propose(env: Env, proposer: Address) -> CanProposeResult {
         // Check if contract is paused
@@ -2120,12 +2215,6 @@ impl GovernorContract {
             voting_power,
             threshold,
         }
-    }
-
-    pub fn get_vote_reason(env: Env, proposal_id: u64, voter: Address) -> Option<String> {
-        env.storage()
-            .persistent()
-            .get(&DataKey::VoteReason(proposal_id, voter))
     }
 
     pub fn get_receipt(env: Env, proposal_id: u64, voter: Address) -> VotingReceipt {
@@ -2429,24 +2518,11 @@ impl GovernorContract {
     // UUPS Proxy Pattern (Issue #195)
     // ============================================================================
 
-    pub fn implementation(env: Env) -> Address {
-        env.current_contract_address()
-    }
-
-    pub fn proxy_admin(env: Env) -> Address {
-        env.current_contract_address()
-    }
-
     pub fn get_queue_time(env: Env, proposal_id: u64) -> u32 {
         env.storage()
             .persistent()
             .get(&DataKey::QueueTime(proposal_id))
             .unwrap_or(0)
-    }
-
-    pub fn get_queued_op_ids(env: Env, proposal_id: u64) -> Vec<Bytes> {
-        let proposal = Self::must_get_proposal(&env, proposal_id);
-        proposal.op_ids
     }
 
     pub fn get_proposal(env: Env, proposal_id: u64) -> Proposal {
@@ -2480,51 +2556,6 @@ impl GovernorContract {
         proposals
     }
 
-    // ============================================================================
-    // Execution Gas Estimation (Issue #715)
-    // ============================================================================
-
-    /// Base CPU instructions per action.
-    const BASE_CPU_PER_ACTION: u64 = 25_000;
-    /// CPU instructions per byte of calldata.
-    const CPU_PER_CALLDATA_BYTE: u64 = 10;
-    /// Fixed base CPU cost for gas estimation overhead.
-    const BASE_CPU_FIXED: u64 = 50_000;
-    /// Base memory bytes per action.
-    const BASE_MEM_PER_ACTION: u64 = 5_000;
-    /// Memory bytes per calldata byte.
-    const MEM_PER_CALLDATA_BYTE: u64 = 2;
-    /// Fixed base memory cost.
-    const BASE_MEM_FIXED: u64 = 10_000;
-    /// Stroops per CPU instruction for fee estimation.
-    const STROOPS_PER_CPU_INSN: i128 = 100;
-    /// Stroops per memory byte for fee estimation.
-    const STROOPS_PER_MEM_BYTE: i128 = 10;
-
-    pub fn estimate_execution_gas(env: Env, proposal_id: u64) -> ExecutionGasEstimate {
-        let proposal = Self::must_get_proposal(&env, proposal_id);
-        let action_count = proposal.targets.len();
-        let mut calldata_bytes: u32 = 0;
-        for i in 0..proposal.calldatas.len() {
-            calldata_bytes += proposal.calldatas.get(i).unwrap().len();
-        }
-        let estimated_cpu_insns = Self::BASE_CPU_FIXED
-            + (action_count as u64) * Self::BASE_CPU_PER_ACTION
-            + (calldata_bytes as u64) * Self::CPU_PER_CALLDATA_BYTE;
-        let estimated_mem_bytes = Self::BASE_MEM_FIXED
-            + (action_count as u64) * Self::BASE_MEM_PER_ACTION
-            + (calldata_bytes as u64) * Self::MEM_PER_CALLDATA_BYTE;
-        let estimated_fee_stroops = (estimated_cpu_insns as i128) * Self::STROOPS_PER_CPU_INSN
-            + (estimated_mem_bytes as i128) * Self::STROOPS_PER_MEM_BYTE;
-        ExecutionGasEstimate {
-            proposal_id,
-            action_count,
-            calldata_bytes,
-            estimated_cpu_insns,
-            estimated_mem_bytes,
-            estimated_fee_stroops,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -2658,8 +2689,8 @@ mod test {
         let reason = String::from_str(&env, "I support this because it improves governance");
         client.cast_vote_with_reason(&voter, &proposal_id, &VoteSupport::For, &reason);
 
-        let stored_reason = client.get_vote_reason(&proposal_id, &voter);
-        assert_eq!(stored_reason, Some(reason));
+        let stored_reason = client.get_receipt(&proposal_id, &voter).reason;
+        assert_eq!(stored_reason, reason);
     }
 
     #[test]
@@ -2749,11 +2780,11 @@ mod test {
         client.cast_vote_with_reason(&voter1, &proposal_id, &VoteSupport::For, &reason1);
         client.cast_vote_with_reason(&voter2, &proposal_id, &VoteSupport::Against, &reason2);
 
-        let stored_reason1 = client.get_vote_reason(&proposal_id, &voter1);
-        let stored_reason2 = client.get_vote_reason(&proposal_id, &voter2);
+        let stored_reason1 = client.get_receipt(&proposal_id, &voter1).reason;
+        let stored_reason2 = client.get_receipt(&proposal_id, &voter2).reason;
 
-        assert_eq!(stored_reason1, Some(reason1));
-        assert_eq!(stored_reason2, Some(reason2));
+        assert_eq!(stored_reason1, reason1);
+        assert_eq!(stored_reason2, reason2);
     }
 
     #[test]
@@ -3365,7 +3396,8 @@ mod test {
         // Cast vote - raw weight is 1_000_000, quadratic should be sqrt(1_000_000) = 1000
         client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
-        let (votes_for, _, _) = client.proposal_votes(&proposal_id);
+        let __proposal = client.get_proposal(&proposal_id);
+        let (votes_for, _, _) = (__proposal.votes_for, __proposal.votes_against, __proposal.votes_abstain);
         assert_eq!(votes_for, 1000); // Quadratic weighting applied
     }
 
@@ -3523,7 +3555,8 @@ mod test {
         // Expected weight: 1_000_000 * 10000/10000 + 1_000_000 * 20000/10000 = 3_000_000
         client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
-        let (votes_for, _, _) = client.proposal_votes(&proposal_id);
+        let __proposal = client.get_proposal(&proposal_id);
+        let (votes_for, _, _) = (__proposal.votes_for, __proposal.votes_against, __proposal.votes_abstain);
         assert_eq!(
             votes_for, 3_000_000,
             "weighted votes should total 3_000_000"
@@ -3757,7 +3790,8 @@ mod test {
         client.cast_vote(&voter, &proposal_id, &VoteSupport::For);
 
         // Verify votes are recorded
-        let (votes_for, _, _) = client.proposal_votes(&proposal_id);
+        let __proposal = client.get_proposal(&proposal_id);
+        let (votes_for, _, _) = (__proposal.votes_for, __proposal.votes_against, __proposal.votes_abstain);
         assert_eq!(votes_for, 1_000_000);
 
         // Advance well into the long voting period (but not past end)
@@ -3950,7 +3984,13 @@ mod test {
 
         // Submit one proposal at ledger 0 (period 0).
         propose_dummy(&env, &client, &proposer);
-        assert_eq!(client.proposals_in_period(&proposer), 1);
+        let period0_count: u32 = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::ProposalsInPeriod(proposer.clone(), 0u32))
+                .unwrap_or(0)
+        });
+        assert_eq!(period0_count, 1);
 
         // Advance to period 1 (ledger 5).  This is a small jump that won't
         // cause the instance key to be treated as archived.
@@ -3970,7 +4010,13 @@ mod test {
         );
 
         // The current period-1 count must be 1.
-        assert_eq!(client.proposals_in_period(&proposer), 1);
+        let period1_count: u32 = env.as_contract(&contract_id, || {
+            env.storage()
+                .persistent()
+                .get(&DataKey::ProposalsInPeriod(proposer.clone(), 1u32))
+                .unwrap_or(0)
+        });
+        assert_eq!(period1_count, 1);
     }
 
     #[test]
@@ -4148,7 +4194,8 @@ mod test {
         // Should accept vote_choice = 0 (Against)
         client.vote(&voter, &proposal_id, &0u32);
 
-        let (votes_for, votes_against, votes_abstain) = client.proposal_votes(&proposal_id);
+        let __proposal = client.get_proposal(&proposal_id);
+        let (votes_for, votes_against, votes_abstain) = (__proposal.votes_for, __proposal.votes_against, __proposal.votes_abstain);
         assert_eq!(votes_for, 0);
         assert_eq!(votes_against, 1_000_000);
         assert_eq!(votes_abstain, 0);
@@ -4186,7 +4233,8 @@ mod test {
         // Should accept vote_choice = 1 (For)
         client.vote(&voter, &proposal_id, &1u32);
 
-        let (votes_for, votes_against, votes_abstain) = client.proposal_votes(&proposal_id);
+        let __proposal = client.get_proposal(&proposal_id);
+        let (votes_for, votes_against, votes_abstain) = (__proposal.votes_for, __proposal.votes_against, __proposal.votes_abstain);
         assert_eq!(votes_for, 1_000_000);
         assert_eq!(votes_against, 0);
         assert_eq!(votes_abstain, 0);
@@ -4224,7 +4272,8 @@ mod test {
         // Should accept vote_choice = 2 (Abstain)
         client.vote(&voter, &proposal_id, &2u32);
 
-        let (votes_for, votes_against, votes_abstain) = client.proposal_votes(&proposal_id);
+        let __proposal = client.get_proposal(&proposal_id);
+        let (votes_for, votes_against, votes_abstain) = (__proposal.votes_for, __proposal.votes_against, __proposal.votes_abstain);
         assert_eq!(votes_for, 0);
         assert_eq!(votes_against, 0);
         assert_eq!(votes_abstain, 1_000_000);

@@ -48,4 +48,15 @@ pub enum GovernorError {
     ProposalAlreadyCancelled = 42,
     InvalidVoteChoice = 43,
     UnauthorizedRegistry = 44,
+    // Soroban's #[contracterror] enum caps out at 50 cases (ScSpecUdtErrorEnumV0::cases
+    // is a VecM<_, 50>), so these 6 are the only new variants Issue #766 gets — the
+    // rest of its otherwise-listed error names (CommitmentNotFound, AlreadyCommitted,
+    // CommitRevealRequired) are folded into the closest existing/new variant below
+    // rather than exhausting the last of the budget.
+    CommitPhaseEnded = 45,
+    RevealPhaseNotStarted = 46,
+    RevealPhaseEnded = 47,
+    CommitmentMismatch = 48,
+    NoCommitmentToReveal = 49,
+    CommitRevealNotEnabled = 50,
 }

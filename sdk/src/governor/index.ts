@@ -70,6 +70,16 @@ export {
   getProposalsForAddress,
 } from "./events";
 
+export {
+  generateCommitment,
+  commitVote,
+  revealVote,
+  hasCommitted,
+  getCommitDeadline,
+  getRevealDeadline,
+  getCommitRevealStatus,
+} from "./commitReveal";
+
 // Re-export MetadataUploadOptions from the original governor.ts
 export type { MetadataUploadOptions } from "../governor";
 
