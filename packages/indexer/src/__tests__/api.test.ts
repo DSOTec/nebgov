@@ -12,7 +12,7 @@ jest.mock("../db", () => ({
 
 // Mock the cache module
 jest.mock("../cache", () => ({
-  cached: jest.fn((key, ttl, fn) => fn()),
+  cached: jest.fn((_key, _ttl, fn) => fn()),
   getMetrics: jest.fn(() => ({ hits: 0, misses: 0, size: 0 })),
 }));
 
@@ -160,16 +160,6 @@ describe("API Endpoints", () => {
 
   describe("GET /stats", () => {
     it("should return governance stats", async () => {
-      const mockStats = {
-        total_proposals: 47,
-        active_proposals: 3,
-        total_votes_cast: 1204,
-        unique_voters: 89,
-        total_delegates: 34,
-        participation_rate: 0.42,
-        last_updated: "2026-04-25T08:00:00Z",
-      };
-
       const mockServer = {
         getLatestLedger: jest.fn().mockResolvedValue({ sequence: 1050 }),
       } as any;
@@ -316,6 +306,52 @@ describe("GET /proposals with cursor pagination", () => {
 
       expect(response.status).toBe(500);
       expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
+
+  describe("GET /timelock endpoints", () => {
+    it("GET /timelock/operations/:opId returns operation", async () => {
+      const mockOp = { op_id: "010203", target: "G123", fn_name: "test", ready_at: "100", expires_at: "200", status: "scheduled", ledger: 50 };
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockOp] });
+
+      const res = await request(app).get("/timelock/operations/010203");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(mockOp);
+    });
+
+    it("GET /timelock/operations/:opId returns 404 when not found", async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [] });
+
+      const res = await request(app).get("/timelock/operations/nonexistent");
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: "Operation not found" });
+    });
+
+    it("GET /timelock/batches/:batchOpId returns batch operation", async () => {
+      const mockBatch = { batch_op_id: "0a0b0c", targets: ["G1"], fn_names: ["f1"], ready_at: "100", expires_at: "200", status: "scheduled", ledger: 50 };
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockBatch] });
+
+      const res = await request(app).get("/timelock/batches/0a0b0c");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(mockBatch);
+    });
+
+    it("GET /timelock/batches/:batchOpId/dag returns DAG graph", async () => {
+      const mockDag = { validation_id: "event-1", batch_op_id: "0a0b0c", op_count: 5, has_cycle: false, ledger: 50 };
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockDag] });
+
+      const res = await request(app).get("/timelock/batches/0a0b0c/dag");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(mockDag);
+    });
+
+    it("GET /timelock/batches/:batchOpId/partial-state returns partial state", async () => {
+      const mockPartial = { batch_op_id: "0a0b0c", total_ops: 5, completed_ops: 2, status: "in_progress", started_at_ledger: 50, updated_at_ledger: 52 };
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [mockPartial] });
+
+      const res = await request(app).get("/timelock/batches/0a0b0c/partial-state");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual(mockPartial);
     });
   });
 });

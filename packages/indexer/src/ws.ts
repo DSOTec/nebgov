@@ -27,7 +27,23 @@ export type WsEventType =
   | "delegation_depth_limit_updated"
   | "analytics_snapshot_taken"
   | "reputation_updated"
-  | "effective_threshold_changed";
+  | "effective_threshold_changed"
+  | "timelock_operation_scheduled"
+  | "timelock_operation_executed"
+  | "timelock_operation_cancelled"
+  | "timelock_batch_operation_scheduled"
+  | "timelock_batch_operation_executed"
+  | "timelock_batch_operation_cancelled"
+  | "timelock_min_delay_updated"
+  | "timelock_dependency_dag_validated"
+  | "timelock_cycle_detected"
+  | "timelock_partial_batch_started"
+  | "timelock_partial_op_succeeded"
+  | "timelock_partial_op_failed"
+  | "timelock_batch_recovery_entered"
+  | "timelock_failed_op_retried"
+  | "timelock_failed_op_skipped"
+  | "timelock_batch_fully_complete";
 
 export interface WsEvent {
   type: WsEventType;
@@ -147,6 +163,7 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
       }
     }
   }, HEARTBEAT_INTERVAL_MS);
+  heartbeat.unref();
 
   wss.on("close", () => {
     clearInterval(heartbeat);

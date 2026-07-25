@@ -119,6 +119,7 @@ Edit `.env` with your configuration:
 DATABASE_URL=postgres://nebgov:nebgov@localhost:5432/nebgov
 STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 GOVERNOR_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+TIMELOCK_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 WRAPPER_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 TREASURY_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 LIQUIDITY_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
@@ -218,6 +219,7 @@ docker run --env-file packages/indexer/.env \
 | `DATABASE_URL` | Yes | `postgres://nebgov:nebgov@localhost:5432/nebgov` | PostgreSQL connection string |
 | `STELLAR_RPC_URL` | Yes | `https://soroban-testnet.stellar.org` | Stellar Soroban RPC endpoint |
 | `GOVERNOR_ADDRESS` | Yes | - | Stellar contract address of the governor |
+| `TIMELOCK_ADDRESS` | No | - | Stellar contract address of the timelock |
 | `WRAPPER_ADDRESS` | No | - | Stellar contract address of the token wrapper |
 | `TOKEN_VOTES_ADDRESS` | No | - | Stellar contract address of the token-votes contract (delegation registry events) |
 | `TREASURY_ADDRESS` | No | - | Stellar contract address of the treasury |
@@ -237,6 +239,7 @@ STELLAR_RPC_URL=https://soroban-testnet.stellar.org
 
 # Contract Addresses
 GOVERNOR_ADDRESS=CDLZFC3SYJYDZT7S64ZDSBLDV4G6N7JPPG2RLFHRXVJMPWI33YCH4HVD
+TIMELOCK_ADDRESS=CCTIMELOCKZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 WRAPPER_ADDRESS=CA3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 TOKEN_VOTES_ADDRESS=CBTOKENVOTESZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 TREASURY_ADDRESS=CB3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
@@ -827,6 +830,30 @@ Get governor upgrade history.
   }
 }
 ```
+
+### Timelock
+
+The timelock endpoints return the latest indexed state for an operation or
+batch. IDs are lowercase hexadecimal encodings of the contract's `Bytes`
+identifiers.
+
+#### GET /timelock/operations/:opId
+
+Get a scheduled, executed, or cancelled timelock operation.
+
+#### GET /timelock/batches/:batchOpId
+
+Get a scheduled, executed, or cancelled batch operation.
+
+#### GET /timelock/batches/:batchOpId/dag
+
+Get the batch's latest dependency-DAG validation result.
+
+#### GET /timelock/batches/:batchOpId/partial-state
+
+Get the latest partial-execution or recovery state for a batch.
+
+Each endpoint returns `404` when no indexed record exists for the supplied ID.
 
 ### Leaderboard
 
