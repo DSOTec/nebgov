@@ -80,10 +80,10 @@ function encodeGovernorSettings(settings: MockLedgerStore["governor"]["settings"
     guardian: encAddress(settings.guardian),
     vote_type: encEnum(settings.voteType),
     proposal_grace_period: encU32(settings.proposalGracePeriod),
-    use_dynamic_quorum: encBool(false),
-    reflector_oracle: encVoid(),
-    min_quorum_usd: encI128(0n),
-    max_calldata_size: encU32(10_000),
+    use_dynamic_quorum: encBool(settings.useDynamicQuorum),
+    reflector_oracle: settings.reflectorOracle ? encAddress(settings.reflectorOracle) : encVoid(),
+    min_quorum_usd: encI128(settings.minQuorumUsd),
+    max_calldata_size: encU32(settings.maxCalldataSize),
     proposal_cooldown: encU32(settings.proposalCooldown),
     max_proposals_per_period: encU32(settings.maxProposalsPerPeriod),
     proposal_period_duration: encU32(settings.proposalPeriodDuration),
@@ -101,6 +101,12 @@ function encodeReturn(contract: "governor" | "timelock" | "votes", fnName: strin
       case "execute":
       case "cancel":
       case "cancel_queued":
+      case "update_config":
+      case "set_guardian":
+      case "set_voting_strategy":
+      case "migrate":
+      case "pause":
+      case "unpause":
         return encVoid();
       case "state":
         return encEnum(value as string);
@@ -115,6 +121,10 @@ function encodeReturn(contract: "governor" | "timelock" | "votes", fnName: strin
         return encVec((value as bigint[]).map(encI128));
       case "has_voted":
         return encBool(value as boolean);
+      case "get_proposal":
+        return encVoid();
+      case "proposals_count_by_state":
+        return encVoid();
       default:
         throw new Error(`MockSorobanServer: no encoder for governor.${fnName}`);
     }
@@ -127,6 +137,13 @@ function encodeReturn(contract: "governor" | "timelock" | "votes", fnName: strin
       case "min_delay":
       case "execution_window":
         return encU64(value as bigint);
+      case "schedule_with_deps":
+        return value ? encAddress(value as string) : encVoid();
+      case "validate_dependency_dag":
+      case "execute_batch_partial":
+      case "retry_failed_operation":
+      case "skip_failed_operation":
+        return encVoid();
       default:
         throw new Error(`MockSorobanServer: no encoder for timelock.${fnName}`);
     }

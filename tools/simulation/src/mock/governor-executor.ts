@@ -315,6 +315,115 @@ export const governorExecutor = {
   proposal_count(store: MockLedgerStore): bigint {
     return store.governor.proposalCount;
   },
+
+  update_config(store: MockLedgerStore, _clock: LedgerClock, _caller: string, args: unknown[]): null {
+    const [newSettings] = args as [
+      {
+        voting_delay: number;
+        voting_period: number;
+        quorum_numerator: number;
+        proposal_threshold: bigint;
+        guardian: string;
+        vote_type: string;
+        proposal_grace_period: number;
+        use_dynamic_quorum: boolean;
+        reflector_oracle: string | null;
+        min_quorum_usd: bigint;
+        max_calldata_size: number;
+        proposal_cooldown: number;
+        max_proposals_per_period: number;
+        proposal_period_duration: number;
+      },
+    ];
+
+    if (newSettings.max_calldata_size === 0) {
+      throw new MockContractError(GovernorErrorCode.InvalidMaxCalldataSize, "update_config: max_calldata_size cannot be 0");
+    }
+
+    store.governor.settings.votingDelay = newSettings.voting_delay;
+    store.governor.settings.votingPeriod = newSettings.voting_period;
+    store.governor.settings.quorumNumerator = newSettings.quorum_numerator;
+    store.governor.settings.proposalThreshold = newSettings.proposal_threshold;
+    store.governor.settings.guardian = newSettings.guardian;
+    store.governor.settings.voteType = newSettings.vote_type as typeof store.governor.settings.voteType;
+    store.governor.settings.proposalGracePeriod = newSettings.proposal_grace_period;
+    store.governor.settings.useDynamicQuorum = newSettings.use_dynamic_quorum;
+    store.governor.settings.reflectorOracle = newSettings.reflector_oracle;
+    store.governor.settings.minQuorumUsd = newSettings.min_quorum_usd;
+    store.governor.settings.maxCalldataSize = newSettings.max_calldata_size;
+    store.governor.settings.proposalCooldown = newSettings.proposal_cooldown;
+    store.governor.settings.maxProposalsPerPeriod = newSettings.max_proposals_per_period;
+    store.governor.settings.proposalPeriodDuration = newSettings.proposal_period_duration;
+
+    return null;
+  },
+
+  set_guardian(store: MockLedgerStore, _clock: LedgerClock, _caller: string, args: unknown[]): null {
+    const [newGuardian] = args as [string];
+    if (store.governor.settings.guardian === newGuardian) {
+      return null;
+    }
+    store.governor.settings.guardian = newGuardian;
+    return null;
+  },
+
+  set_voting_strategy(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
+    return null;
+  },
+
+  migrate(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
+    return null;
+  },
+
+  pause(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
+    return null;
+  },
+
+  unpause(_store: MockLedgerStore, _clock: LedgerClock, _caller: string, _args: unknown[]): null {
+    return null;
+  },
+
+  get_proposal(store: MockLedgerStore, _clock: LedgerClock, _caller: string, args: unknown[]): Record<string, unknown> {
+    const [proposalId] = args as [bigint];
+    const proposal = mustGetProposal(store, proposalId);
+    return {
+      id: proposal.id,
+      proposer: proposal.proposer,
+      description: proposal.description,
+      description_hash: proposal.descriptionHash,
+      metadata_uri: proposal.metadataUri,
+      targets: proposal.targets,
+      fn_names: proposal.fnNames,
+      calldatas: proposal.calldatas,
+      start_ledger: proposal.startLedger,
+      end_ledger: proposal.endLedger,
+      votes_for: proposal.votesFor,
+      votes_against: proposal.votesAgainst,
+      votes_abstain: proposal.votesAbstain,
+      executed: proposal.executed,
+      cancelled: proposal.cancelled,
+      queued: proposal.queued,
+      op_ids: proposal.opIds,
+    };
+  },
+
+  proposals_count_by_state(store: MockLedgerStore, clock: LedgerClock): Record<string, bigint> {
+    const counts: Record<string, bigint> = {
+      pending: 0n,
+      active: 0n,
+      defeated: 0n,
+      succeeded: 0n,
+      queued: 0n,
+      executed: 0n,
+      cancelled: 0n,
+      expired: 0n,
+    };
+    for (const proposal of store.governor.proposals.values()) {
+      const state = computeProposalState(store, clock, proposal);
+      counts[state.toLowerCase()] = (counts[state.toLowerCase()] ?? 0n) + 1n;
+    }
+    return counts;
+  },
 };
 
 export type GovernorFunction = keyof typeof governorExecutor;

@@ -124,6 +124,10 @@ export class SimulationHarness {
       proposalCooldown: s.proposalCooldown ?? DEFAULT_COOLDOWN,
       maxProposalsPerPeriod: s.maxProposalsPerPeriod ?? DEFAULT_MAX_PER_PERIOD,
       proposalPeriodDuration: s.proposalPeriodDuration ?? DEFAULT_PERIOD_DURATION,
+      useDynamicQuorum: false,
+      reflectorOracle: null,
+      minQuorumUsd: 0n,
+      maxCalldataSize: 10_000,
     };
   }
 
@@ -143,6 +147,7 @@ export class SimulationHarness {
         minDelay: this.config.settings.timelockDelay,
         executionWindow: this.config.settings.executionWindow ?? DEFAULT_EXECUTION_WINDOW,
         operations: new Map(),
+        dependencies: new Map(),
       },
       votes: {
         balances: new Map(),
