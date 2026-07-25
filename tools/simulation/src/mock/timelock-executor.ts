@@ -29,9 +29,9 @@ function computeOpId(target: string, data: Uint8Array, fnName: string, delay: bi
     .digest("hex");
 }
 
-export function requireGovernor(state: TimelockState, governorAddress: string, caller: string): void {
+function requireGovernor(state: TimelockState, governorAddress: string, caller: string): void {
   if (caller !== governorAddress) {
-    throw new MockContractError(TimelockErrorCode.PredecessorNotDone, "timelock: caller is not the governor");
+    throw new MockContractError(0, "only governor");
   }
 }
 
