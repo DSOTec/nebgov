@@ -13,6 +13,8 @@ import {
 } from "../../../../lib/treasury-client";
 import { StreamUtilizationBar } from "../../../../components/StreamUtilizationBar";
 import { StreamSpendModal } from "../../../../components/StreamSpendModal";
+import { ExtendStreamModal } from "../../../../components/ExtendStreamModal";
+import { TopUpStreamModal } from "../../../../components/TopUpStreamModal";
 
 type StellarNetwork = "mainnet" | "testnet" | "futurenet";
 
@@ -26,6 +28,9 @@ export default function StreamDetailPage() {
   const [loading, setLoading] = useState(true);
   const [isGovernor, setIsGovernor] = useState(false);
   const [showSpend, setShowSpend] = useState(false);
+  const [showExtend, setShowExtend] = useState(false);
+  const [showTopUp, setShowTopUp] = useState(false);
+  const [actionBusy, setActionBusy] = useState(false);
   const [client, setClient] = useState<TreasuryClient | null>(null);
 
   const network: StellarNetwork = (process.env.NEXT_PUBLIC_NETWORK as StellarNetwork) ?? "testnet";
@@ -73,40 +78,17 @@ export default function StreamDetailPage() {
   };
 
   const handleRevoke = async () => {
-    if (!client || !publicKey || !stream) return;
+    if (!client || !publicKey || !stream || actionBusy) return;
     if (!confirm("Are you sure you want to revoke this stream?")) return;
+    setActionBusy(true);
     try {
       await client.revokeStream(publicKey, streamId, handleSignXdr);
       toast.success("Stream revoked");
       fetchData();
     } catch (err) {
       toast.error(`Revoke failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const handleExtend = async () => {
-    if (!client || !publicKey || !stream) return;
-    const newEnd = prompt("Enter new end ledger:", String(stream.endLedger + 50000));
-    if (!newEnd) return;
-    try {
-      await client.extendStream(publicKey, streamId, Number(newEnd), handleSignXdr);
-      toast.success("Stream extended");
-      fetchData();
-    } catch (err) {
-      toast.error(`Extend failed: ${err instanceof Error ? err.message : String(err)}`);
-    }
-  };
-
-  const handleTopUp = async () => {
-    if (!client || !publicKey || !stream) return;
-    const amount = prompt("Enter additional allocation amount:");
-    if (!amount) return;
-    try {
-      await client.topUpStream(publicKey, streamId, BigInt(amount), handleSignXdr);
-      toast.success("Stream topped up");
-      fetchData();
-    } catch (err) {
-      toast.error(`Top-up failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -248,28 +230,29 @@ export default function StreamDetailPage() {
               {isOwner && stream.isActive && (
                 <button
                   onClick={() => setShowSpend(true)}
-                  className="bg-indigo-600 text-white rounded-md px-3 py-1.5 text-xs hover:bg-indigo-700"
+                  disabled={actionBusy}
+                  className="bg-indigo-600 text-white rounded-md px-3 py-1.5 text-xs hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Spend
                 </button>
               )}
               <button
-                onClick={handleExtend}
-                disabled={!isGovernor || stream.isRevoked}
+                onClick={() => setShowExtend(true)}
+                disabled={!isGovernor || stream.isRevoked || actionBusy}
                 className="border border-gray-300 text-gray-700 rounded-md px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
               >
                 Extend
               </button>
               <button
-                onClick={handleTopUp}
-                disabled={!isGovernor || stream.isRevoked}
+                onClick={() => setShowTopUp(true)}
+                disabled={!isGovernor || stream.isRevoked || actionBusy}
                 className="border border-gray-300 text-gray-700 rounded-md px-3 py-1.5 text-xs hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
               >
                 Top Up
               </button>
               <button
                 onClick={handleRevoke}
-                disabled={!isGovernor || stream.isRevoked}
+                disabled={!isGovernor || stream.isRevoked || actionBusy}
                 className="border border-red-300 text-red-600 rounded-md px-3 py-1.5 text-xs hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-white"
               >
                 Revoke
@@ -306,6 +289,32 @@ export default function StreamDetailPage() {
           signUnsignedXdr={handleSignXdr}
           onClose={() => setShowSpend(false)}
           onSpent={fetchData}
+        />
+      )}
+
+      {showExtend && client && publicKey && stream && (
+        <ExtendStreamModal
+          client={client}
+          stream={stream}
+          signerPublicKey={publicKey}
+          signUnsignedXdr={handleSignXdr}
+          busy={actionBusy}
+          setBusy={setActionBusy}
+          onClose={() => setShowExtend(false)}
+          onExtended={fetchData}
+        />
+      )}
+
+      {showTopUp && client && publicKey && stream && (
+        <TopUpStreamModal
+          client={client}
+          stream={stream}
+          signerPublicKey={publicKey}
+          signUnsignedXdr={handleSignXdr}
+          busy={actionBusy}
+          setBusy={setActionBusy}
+          onClose={() => setShowTopUp(false)}
+          onToppedUp={fetchData}
         />
       )}
     </div>
