@@ -1,7 +1,10 @@
 import {
+  CoSponsorshipError,
+  CoSponsorshipErrorCode,
   extractContractErrorCode,
   GovernorError,
   GovernorErrorCode,
+  parseCoSponsorshipError,
   parseGovernorError,
   parseTimelockError,
   parseTreasuryError,
@@ -84,6 +87,21 @@ describe("GovernorError", () => {
     const err = new GovernorError(code as GovernorErrorCode, `message-${code}`);
     expect(err.code).toBe(code);
     expect(err.message).toBe(`message-${code}`);
+  });
+});
+
+describe("parseCoSponsorshipError", () => {
+  it("maps finalize_draft governor failures to a generic nested-governor message", () => {
+    const err = parseCoSponsorshipError(
+      { error: "Error(Contract, #6)" },
+      undefined,
+      "finalize_draft",
+    );
+
+    expect(err).toBeInstanceOf(CoSponsorshipError);
+    expect(err.code).toBe(CoSponsorshipErrorCode.TransactionFailed);
+    expect(err.message).toContain("Governor rejected the underlying proposal");
+    expect(err.message).toContain("rate-limited");
   });
 });
 

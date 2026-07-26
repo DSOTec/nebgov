@@ -525,15 +525,10 @@ fn test_initialize_rejects_reinitialization() {
     client.initialize(&admin, &gov_id, &votes_id, &7_200u32, &20u32);
 }
 
-/// Regression test for #866: a successful `finalize_draft` rechecks each
+/// Regression test for #866/#850: a successful `finalize_draft` rechecks each
 /// co-sponsor's *current* voting power (not their power at pledge time)
-/// and updates `draft.total_power` to the rechecked sum.
-///
-/// However, `draft.co_sponsor_power[i]` and `get_co_sponsor_power()` are
-/// **not** updated to reflect the live recheck — they still return the
-/// stale pledge-time values.  This test documents that inconsistency so
-/// it has a guardrail against accidental regressions and a clear assertion
-/// of today's behaviour.
+/// and updates both `draft.total_power` and the per-sponsor breakdown to the
+/// rechecked values.
 #[test]
 fn test_finalize_draft_success_with_changed_sponsor_power() {
     let (env, client, votes, _admin) = setup(1_000);
@@ -565,18 +560,15 @@ fn test_finalize_draft_success_with_changed_sponsor_power() {
     assert_eq!(finalized.total_power, 1_300,
         "total_power must be rechecked against live voting power");
 
-    // Per-sponsor entries are NOT updated to match the recheck —
-    // they still hold the stale pledge-time values.
-    // This assertion documents today's behaviour; the underlying
-    // inconsistency is tracked in issue #866.
-    assert_eq!(finalized.co_sponsor_power.get(0).unwrap(), 600,
-        "co_sponsor_power[0] is currently stale (pledge-time value)");
+    // Per-sponsor entries must also be rechecked to match the live values.
+    assert_eq!(finalized.co_sponsor_power.get(0).unwrap(), 800,
+        "co_sponsor_power[0] should reflect the sponsor's latest live power");
     assert_eq!(finalized.co_sponsor_power.get(1).unwrap(), 500,
-        "co_sponsor_power[1] is currently stale (pledge-time value)");
+        "co_sponsor_power[1] should remain unchanged when its power is unchanged");
 
     // Same for the per-sponsor storage key.
-    assert_eq!(client.get_co_sponsor_power(&draft_id, &sponsor_a), 600,
-        "get_co_sponsor_power returns stale pledge-time power");
+    assert_eq!(client.get_co_sponsor_power(&draft_id, &sponsor_a), 800,
+        "get_co_sponsor_power should return the latest live power");
     assert_eq!(client.get_co_sponsor_power(&draft_id, &sponsor_b), 500,
-        "get_co_sponsor_power returns stale pledge-time power");
+        "get_co_sponsor_power should return the latest live power");
 }
