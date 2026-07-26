@@ -372,6 +372,20 @@ pub fn stream_spend(
     assert!(owner == stream.owner, "not stream owner");
 
     let current_ledger = env.ledger().sequence();
+    assert!(
+        current_ledger >= stream.start_ledger,
+        "stream not started"
+    );
+
+    // Lazily deactivate and emit expiration the first time an expired
+    // stream is touched, so `emit_stream_expired` actually fires.
+    if current_ledger > stream.end_ledger && stream.is_active {
+        stream.is_active = false;
+        remove_active_stream(&env, stream_id);
+        let unspent = stream.total_allocated - stream.total_spent;
+        emit_stream_expired(&env, stream_id, unspent);
+        save_stream(&env, &stream);
+    }
     assert!(current_ledger <= stream.end_ledger, "stream expired");
 
     assert!(amount > 0, "amount must be positive");
@@ -452,6 +466,20 @@ pub fn stream_batch_spend(
     assert!(owner == stream.owner, "not stream owner");
 
     let current_ledger = env.ledger().sequence();
+    assert!(
+        current_ledger >= stream.start_ledger,
+        "stream not started"
+    );
+
+    // Lazily deactivate and emit expiration the first time an expired
+    // stream is touched, so `emit_stream_expired` actually fires.
+    if current_ledger > stream.end_ledger && stream.is_active {
+        stream.is_active = false;
+        remove_active_stream(&env, stream_id);
+        let unspent = stream.total_allocated - stream.total_spent;
+        emit_stream_expired(&env, stream_id, unspent);
+        save_stream(&env, &stream);
+    }
     assert!(current_ledger <= stream.end_ledger, "stream expired");
 
     // Validate all amounts
@@ -547,6 +575,10 @@ pub fn extend_stream(env: Env, caller: Address, stream_id: u64, new_end_ledger: 
     let mut stream = load_stream(&env, stream_id);
     assert!(!stream.is_revoked, "stream revoked");
     assert!(new_end_ledger > stream.end_ledger, "new end must be later");
+    assert!(
+        new_end_ledger > env.ledger().sequence(),
+        "new end must be in the future"
+    );
 
     let old_end = stream.end_ledger;
     stream.end_ledger = new_end_ledger;
@@ -568,6 +600,18 @@ pub fn top_up_stream(env: Env, caller: Address, stream_id: u64, additional_amoun
         .total_allocated
         .checked_add(additional_amount)
         .expect("allocation overflow");
+
+    // Reactivate the stream if it was deactivated by exhaustion (not
+    // revocation or expiry), so the owner can resume spending the
+    // topped-up budget.
+    let current_ledger = env.ledger().sequence();
+    if !stream.is_active
+        && !stream.is_revoked
+        && current_ledger <= stream.end_ledger
+    {
+        stream.is_active = true;
+        add_active_stream(&env, stream_id);
+    }
 
     let new_total = stream.total_allocated;
     add_total_streamed_by_token(&env, &stream.token, additional_amount);
@@ -632,11 +676,18 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
         0
     };
     let current_ledger = env.ledger().sequence();
-    let days_remaining = if current_ledger < stream.end_ledger {
-        (stream.end_ledger - current_ledger) / 17_280
-    } else {
+    let naturally_expired = current_ledger > stream.end_ledger;
+    let days_remaining = if stream.is_revoked
+        || naturally_expired
+        || current_ledger < stream.start_ledger
+    {
         0
+    } else {
+        (stream.end_ledger - current_ledger) / 17_280
     };
+    let effective_active = stream.is_active
+        && !stream.is_revoked
+        && !naturally_expired;
     let avg_spend = if stream.spend_count > 0 {
         stream.total_spent / (stream.spend_count as i128)
     } else {
@@ -650,7 +701,7 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
         total_spent: stream.total_spent,
         remaining,
         utilization_bps,
-        is_active: stream.is_active,
+        is_active: effective_active,
         days_remaining,
         spend_count: stream.spend_count,
         avg_spend,
@@ -661,8 +712,19 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
 pub fn get_budget_summary(env: Env) -> TreasuryBudgetSummary {
     let list = get_stream_list(&env);
     let total_streams = list.len();
+    let current_ledger = env.ledger().sequence();
     let active_ids = get_active_streams(&env);
-    let active_streams = active_ids.len();
+    let mut active_streams: u32 = 0;
+    for i in 0..active_ids.len() {
+        let id = active_ids.get(i).unwrap();
+        let stream = load_stream(&env, id);
+        if stream.is_active
+            && !stream.is_revoked
+            && current_ledger <= stream.end_ledger
+        {
+            active_streams += 1;
+        }
+    }
 
     let mut token_set: Vec<Address> = Vec::new(&env);
     let mut allocated_by_token: Vec<(Address, i128)> = Vec::new(&env);
