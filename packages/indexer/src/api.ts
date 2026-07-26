@@ -1123,24 +1123,52 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
-  // GET /reputation/leaderboard?limit=50
+  // GET /reputation/:address/threshold-history?offset=0&limit=50
+  app.get(
+    "/reputation/:address/threshold-history",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+      try {
+        const result = await pool.query(
+          `SELECT ledger, old_threshold, new_threshold, created_at
+           FROM effective_threshold_history
+           WHERE proposer_address = $1
+           ORDER BY ledger DESC
+           OFFSET $2 LIMIT $3`,
+          [address, offset, limit],
+        );
+        res.json({
+          history: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /reputation/leaderboard?limit=50&offset=0
   app.get(
     "/reputation/leaderboard",
     async (req: Request, res: Response): Promise<void> => {
       const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
-      const key = `reputation:leaderboard:${limit}`;
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const key = `reputation:leaderboard:${limit}:${offset}`;
       try {
         const data = await cached(key, TTL.reputation, async () => {
           const result = await pool.query(
             `SELECT proposer_address, reputation_score, last_updated_ledger
              FROM proposer_reputation
              ORDER BY reputation_score DESC
-             LIMIT $1`,
-            [limit],
+             LIMIT $1 OFFSET $2`,
+            [limit, offset],
           );
           return {
             leaderboard: result.rows.map((r, i) => ({
-              rank: i + 1,
+              rank: offset + i + 1,
               address: r.proposer_address,
               reputation_score: r.reputation_score,
               last_updated_ledger: r.last_updated_ledger,

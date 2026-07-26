@@ -15,6 +15,7 @@ import {
   EXPIRY_PRESET_LABELS,
   type ExpiryPreset,
 } from "../hooks/useGaslessDelegation";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -48,6 +49,7 @@ export function GaslessDelegateModal({
   const [expiryPreset, setExpiryPreset] = useState<ExpiryPreset>("1month");
   const { isConnected, publicKey, connect } = useWallet();
   const { delegateGasless, submitting } = useGaslessDelegation();
+  const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
 
   useEffect(() => {
     setDelegatee(prefillAddress ?? "");
@@ -102,11 +104,27 @@ export function GaslessDelegateModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="gasless-delegate-modal-title"
+      tabIndex={-1}
+    >
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-        <h2 className="text-lg font-bold text-gray-900 mb-1">
-          Delegate for free — we pay the fee
-        </h2>
+        <div className="flex items-start justify-between mb-1">
+          <h2 id="gasless-delegate-modal-title" className="text-lg font-bold text-gray-900">
+            Delegate for free — we pay the fee
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 p-1 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
         <p className="text-sm text-gray-500 mb-4">
           Sign a delegation permit with your wallet. No transaction, no gas —
           our relayer submits it and pays the network fee for you.

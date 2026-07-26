@@ -4,6 +4,7 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 import type { TreasuryClient, TreasuryBudgetStream } from "../lib/treasury-client";
 import { isValidStellarAddress } from "../lib/utils/stellarAddress";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface StreamSpendModalProps {
   client: TreasuryClient;
@@ -27,6 +28,7 @@ export function StreamSpendModal({
   const [amount, setAmount] = useState("");
   const [memo, setMemo] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const dialogRef = useFocusTrap<HTMLDivElement>(true, onClose);
 
   const remaining = stream.totalAllocated - stream.totalSpent;
 
@@ -78,9 +80,27 @@ export function StreamSpendModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="stream-spend-modal-title"
+      tabIndex={-1}
+    >
       <div className="bg-white rounded-lg p-6 w-full max-w-md">
-        <h2 className="text-lg font-semibold mb-1">Spend from Stream</h2>
+        <div className="flex items-start justify-between mb-1">
+          <h2 id="stream-spend-modal-title" className="text-lg font-semibold">
+            Spend from Stream
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 p-1 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
         <p className="text-xs text-gray-500 mb-4">
           {stream.name} — Remaining: {remaining.toString()} / Max: {stream.maxSingleSpend.toString()}
         </p>

@@ -50,6 +50,11 @@ describe("governor event indexing (integration)", () => {
     } catch {
       // Table may not exist if migration hasn't run
     }
+    try {
+      await pool.query("DELETE FROM effective_threshold_history");
+    } catch {
+      // Table may not exist if migration hasn't run
+    }
   });
 
   afterAll(async () => {
@@ -307,11 +312,7 @@ describe("governor event indexing (integration)", () => {
       ledger: 204,
       type: "ReputationUpdated",
       topicArgs: [proposer],
-      value: {
-        old_score: 100n,
-        new_score: 150n,
-        reason: "active_proposal_passed",
-      },
+      value: [proposer, 100, 150, "active_proposal_passed"],
     });
 
     const server = new FakeServer([reputationUpdated]) as unknown as SorobanRpc.Server;
@@ -324,12 +325,39 @@ describe("governor event indexing (integration)", () => {
     expect(latest).toBe(204);
 
     const rows = await pool.query(
-      "SELECT proposer, old_score, new_score, reason FROM proposer_reputation WHERE ledger = 204",
+      "SELECT proposer_address, reputation_score, last_updated_ledger FROM proposer_reputation WHERE proposer_address = $1",
+      [proposer],
     );
     expect(rows.rows.length).toBe(1);
-    expect(rows.rows[0].proposer).toBe(proposer);
-    expect(rows.rows[0].old_score).toBe(100);
-    expect(rows.rows[0].new_score).toBe(150);
-    expect(rows.rows[0].reason).toBe("active_proposal_passed");
+    expect(rows.rows[0].reputation_score).toBe(150);
+    expect(rows.rows[0].last_updated_ledger).toBe(204);
+  });
+
+  it("indexes EffectiveThresholdChanged event into effective_threshold_history (issue #919)", async () => {
+    const proposer = "GPROPOSER222222222222222222222222222222222";
+    const thresholdChanged = makeEvent({
+      contractId: GOVERNOR,
+      ledger: 205,
+      type: "EffectiveThresholdChanged",
+      topicArgs: [proposer],
+      value: [proposer, 1000n, 1200n],
+    });
+
+    const server = new FakeServer([thresholdChanged]) as unknown as SorobanRpc.Server;
+    const latest = await processEvents(
+      server,
+      { rpcUrl: "http://fake", governorAddress: GOVERNOR, pollIntervalMs: 1 },
+      1,
+    );
+
+    expect(latest).toBe(205);
+
+    const rows = await pool.query(
+      "SELECT proposer_address, ledger, old_threshold, new_threshold FROM effective_threshold_history WHERE ledger = 205",
+    );
+    expect(rows.rows.length).toBe(1);
+    expect(rows.rows[0].proposer_address).toBe(proposer);
+    expect(Number(rows.rows[0].old_threshold)).toBe(1000);
+    expect(Number(rows.rows[0].new_threshold)).toBe(1200);
   });
 });

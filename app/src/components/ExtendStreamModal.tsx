@@ -3,6 +3,7 @@
 import { useState } from "react";
 import toast from "react-hot-toast";
 import type { TreasuryClient, TreasuryBudgetStream } from "../lib/treasury-client";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface ExtendStreamModalProps {
   client: TreasuryClient;
@@ -27,6 +28,7 @@ export function ExtendStreamModal({
 }: ExtendStreamModalProps) {
   const [newEndLedger, setNewEndLedger] = useState(String(stream.endLedger + 50000));
   const [error, setError] = useState("");
+  const dialogRef = useFocusTrap<HTMLDivElement>(true, onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -54,9 +56,27 @@ export function ExtendStreamModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="extend-stream-modal-title"
+      tabIndex={-1}
+    >
       <div className="bg-white rounded-lg p-6 w-full max-w-md">
-        <h2 className="text-lg font-semibold mb-1">Extend Stream</h2>
+        <div className="flex items-start justify-between mb-1">
+          <h2 id="extend-stream-modal-title" className="text-lg font-semibold">
+            Extend Stream
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 p-1 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
         <p className="text-xs text-gray-500 mb-4">
           {stream.name} — Current End Ledger: {stream.endLedger}
         </p>

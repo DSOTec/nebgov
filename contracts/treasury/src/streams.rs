@@ -546,6 +546,10 @@ pub fn extend_stream(env: Env, caller: Address, stream_id: u64, new_end_ledger: 
     let mut stream = load_stream(&env, stream_id);
     assert!(!stream.is_revoked, "stream revoked");
     assert!(new_end_ledger > stream.end_ledger, "new end must be later");
+    assert!(
+        new_end_ledger > env.ledger().sequence(),
+        "new end must be in the future"
+    );
 
     let old_end = stream.end_ledger;
     stream.end_ledger = new_end_ledger;
@@ -567,6 +571,18 @@ pub fn top_up_stream(env: Env, caller: Address, stream_id: u64, additional_amoun
         .total_allocated
         .checked_add(additional_amount)
         .expect("allocation overflow");
+
+    // Reactivate the stream if it was deactivated by exhaustion (not
+    // revocation or expiry), so the owner can resume spending the
+    // topped-up budget.
+    let current_ledger = env.ledger().sequence();
+    if !stream.is_active
+        && !stream.is_revoked
+        && current_ledger <= stream.end_ledger
+    {
+        stream.is_active = true;
+        add_active_stream(&env, stream_id);
+    }
 
     let new_total = stream.total_allocated;
     add_total_streamed_by_token(&env, &stream.token, additional_amount);
@@ -651,11 +667,18 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
         0
     };
     let current_ledger = env.ledger().sequence();
-    let days_remaining = if current_ledger < stream.end_ledger {
-        (stream.end_ledger - current_ledger) / 17_280
-    } else {
+    let naturally_expired = current_ledger > stream.end_ledger;
+    let days_remaining = if stream.is_revoked
+        || naturally_expired
+        || current_ledger < stream.start_ledger
+    {
         0
+    } else {
+        (stream.end_ledger - current_ledger) / 17_280
     };
+    let effective_active = stream.is_active
+        && !stream.is_revoked
+        && !naturally_expired;
     let avg_spend = if stream.spend_count > 0 {
         stream.total_spent / (stream.spend_count as i128)
     } else {
@@ -669,7 +692,7 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
         total_spent: stream.total_spent,
         remaining,
         utilization_bps,
-        is_active: stream.is_active,
+        is_active: effective_active,
         days_remaining,
         spend_count: stream.spend_count,
         avg_spend,

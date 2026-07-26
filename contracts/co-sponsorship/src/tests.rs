@@ -524,3 +524,59 @@ fn test_initialize_rejects_reinitialization() {
     client.initialize(&admin, &gov_id, &votes_id, &7_200u32, &20u32);
     client.initialize(&admin, &gov_id, &votes_id, &7_200u32, &20u32);
 }
+
+/// Regression test for #866: a successful `finalize_draft` rechecks each
+/// co-sponsor's *current* voting power (not their power at pledge time)
+/// and updates `draft.total_power` to the rechecked sum.
+///
+/// However, `draft.co_sponsor_power[i]` and `get_co_sponsor_power()` are
+/// **not** updated to reflect the live recheck — they still return the
+/// stale pledge-time values.  This test documents that inconsistency so
+/// it has a guardrail against accidental regressions and a clear assertion
+/// of today's behaviour.
+#[test]
+fn test_finalize_draft_success_with_changed_sponsor_power() {
+    let (env, client, votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let sponsor_a = Address::generate(&env);
+    let sponsor_b = Address::generate(&env);
+    votes.set_power(&sponsor_a, &600);
+    votes.set_power(&sponsor_b, &500);
+
+    let draft_id = create_draft(&env, &client, &creator);
+    client.co_sponsor(&sponsor_a, &draft_id);
+    client.co_sponsor(&sponsor_b, &draft_id);
+
+    let draft = client.get_draft(&draft_id);
+    assert_eq!(draft.total_power, 1_100);
+    assert_eq!(draft.co_sponsor_power.get(0).unwrap(), 600);
+    assert_eq!(draft.co_sponsor_power.get(1).unwrap(), 500);
+
+    // Sponsor A's live power increases (still above threshold even alone)
+    votes.set_power(&sponsor_a, &800);
+
+    let proposal_id = client.finalize_draft(&creator, &draft_id);
+    assert_eq!(proposal_id, 1);
+
+    let finalized = client.get_draft(&draft_id);
+    assert!(finalized.finalized);
+
+    // total_power reflects live recheck (800 + 500 = 1300, not stale 1100)
+    assert_eq!(finalized.total_power, 1_300,
+        "total_power must be rechecked against live voting power");
+
+    // Per-sponsor entries are NOT updated to match the recheck —
+    // they still hold the stale pledge-time values.
+    // This assertion documents today's behaviour; the underlying
+    // inconsistency is tracked in issue #866.
+    assert_eq!(finalized.co_sponsor_power.get(0).unwrap(), 600,
+        "co_sponsor_power[0] is currently stale (pledge-time value)");
+    assert_eq!(finalized.co_sponsor_power.get(1).unwrap(), 500,
+        "co_sponsor_power[1] is currently stale (pledge-time value)");
+
+    // Same for the per-sponsor storage key.
+    assert_eq!(client.get_co_sponsor_power(&draft_id, &sponsor_a), 600,
+        "get_co_sponsor_power returns stale pledge-time power");
+    assert_eq!(client.get_co_sponsor_power(&draft_id, &sponsor_b), 500,
+        "get_co_sponsor_power returns stale pledge-time power");
+}
