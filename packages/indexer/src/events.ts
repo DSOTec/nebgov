@@ -772,6 +772,138 @@ async function handleStreamExhausted(
   );
 }
 
+// --- Co-sponsorship / draft events (#767) ---
+
+async function handleDraftCreated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const creator = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const draftId = String(data.draft_id as bigint);
+  const descriptionHashRaw = data.description_hash as Uint8Array | undefined;
+  const descriptionHash = descriptionHashRaw
+    ? Buffer.from(descriptionHashRaw).toString("hex")
+    : null;
+  const metadataUri = (data.metadata_uri as string) ?? null;
+  const createdLedger = Number(data.created_ledger);
+  const expiryLedger = Number(data.expiry_ledger);
+
+  await pool.query(
+    `INSERT INTO drafts (draft_id, creator_address, description_hash, metadata_uri, created_ledger, expiry_ledger)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (draft_id) DO NOTHING`,
+    [draftId, creator, descriptionHash, metadataUri, createdLedger, expiryLedger],
+  );
+  invalidatePattern("drafts:");
+  broadcast({
+    type: "draft_created",
+    data: { draft_id: draftId, creator, metadata_uri: metadataUri, ledger: event.ledger },
+  });
+}
+
+async function handleCoSponsored(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const sponsor = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const draftId = String(data[0] as bigint);
+  const power = String(data[1] as bigint);
+  const totalPower = String(data[2] as bigint);
+
+  await pool.query(
+    `INSERT INTO draft_co_sponsors (draft_id, sponsor_address, pledged_power, pledged_at_ledger)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (draft_id, sponsor_address)
+     DO UPDATE SET pledged_power = EXCLUDED.pledged_power, withdrawn = FALSE`,
+    [draftId, sponsor, power, event.ledger],
+  );
+  await pool.query(`UPDATE drafts SET total_power = $1 WHERE draft_id = $2`, [
+    totalPower,
+    draftId,
+  ]);
+  invalidatePattern("drafts:");
+  broadcast({
+    type: "co_sponsored",
+    data: { draft_id: draftId, sponsor, power, total_power: totalPower, ledger: event.ledger },
+  });
+}
+
+async function handleCoSponsorshipWithdrawn(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const sponsor = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const draftId = String(data[0] as bigint);
+  const totalPower = String(data[2] as bigint);
+
+  await pool.query(
+    `UPDATE draft_co_sponsors SET withdrawn = TRUE WHERE draft_id = $1 AND sponsor_address = $2`,
+    [draftId, sponsor],
+  );
+  await pool.query(`UPDATE drafts SET total_power = $1 WHERE draft_id = $2`, [
+    totalPower,
+    draftId,
+  ]);
+  invalidatePattern("drafts:");
+  broadcast({
+    type: "co_sponsorship_withdrawn",
+    data: { draft_id: draftId, sponsor, total_power: totalPower, ledger: event.ledger },
+  });
+}
+
+async function handleDraftFinalized(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const draftId = String(data[0] as bigint);
+  const proposalId = String(data[1] as bigint);
+
+  await pool.query(
+    `UPDATE drafts SET finalized = TRUE, resulting_proposal_id = $1 WHERE draft_id = $2`,
+    [proposalId, draftId],
+  );
+  invalidatePattern("drafts:");
+  broadcast({
+    type: "draft_finalized",
+    data: { draft_id: draftId, proposal_id: proposalId, ledger: event.ledger },
+  });
+}
+
+async function handleDraftCancelled(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const draftId = String(data[0] as bigint);
+
+  await pool.query(`UPDATE drafts SET cancelled = TRUE WHERE draft_id = $1`, [
+    draftId,
+  ]);
+  invalidatePattern("drafts:");
+  broadcast({
+    type: "draft_cancelled",
+    data: { draft_id: draftId, ledger: event.ledger },
+  });
+}
+
+async function handleDraftExpired(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const draftId = String(data[0] as bigint);
+
+  await pool.query(`UPDATE drafts SET expired = TRUE WHERE draft_id = $1`, [
+    draftId,
+  ]);
+  invalidatePattern("drafts:");
+  broadcast({
+    type: "draft_expired",
+    data: { draft_id: draftId, ledger: event.ledger },
+  });
+}
+
 interface GovernorSettings {
   voting_delay: number;
   voting_period: number;

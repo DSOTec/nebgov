@@ -1341,11 +1341,19 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     try {
       const conditions: string[] = [];
       if (status === "active") {
-        conditions.push("finalized = false AND cancelled = false");
+        // expired = false is a defense-in-depth backstop: DraftExpired is emitted
+        // lazily on-chain (only when a stale draft is next read), so it can lag
+        // behind reality. Also require expiry_ledger to still be in the future
+        // relative to the indexer's last-seen ledger.
+        conditions.push(
+          "finalized = false AND cancelled = false AND expired = false AND expiry_ledger > (SELECT last_ledger FROM indexer_state WHERE id = 1)",
+        );
       } else if (status === "finalized") {
         conditions.push("finalized = true");
       } else if (status === "cancelled") {
         conditions.push("cancelled = true");
+      } else if (status === "expired") {
+        conditions.push("expired = true");
       }
       const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
 
