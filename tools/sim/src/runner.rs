@@ -20,6 +20,7 @@ use std::time::Instant;
 use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{token, Address, Bytes, Env, String as SorobanString, Symbol, Vec as SorobanVec};
 
+use sorogov_co_sponsorship::{CoSponsorshipContract, CoSponsorshipContractClient};
 use sorogov_governor::{
     GovernorContract, GovernorContractClient, GovernorSettings, ProposalState, VoteSupport,
     VoteType,
@@ -27,7 +28,6 @@ use sorogov_governor::{
 use sorogov_timelock::{TimelockContract, TimelockContractClient};
 use sorogov_token_votes::{TokenVotesContract, TokenVotesContractClient};
 use sorogov_treasury::{TreasuryContract, TreasuryContractClient};
-use sorogov_co_sponsorship::{CoSponsorshipContract, CoSponsorshipContractClient};
 
 use crate::report::{SimulationReport, StepResult};
 use crate::scenario::{
@@ -95,10 +95,13 @@ impl SimulationRunner {
             .map(|a| actors[&a.name].clone())
             .unwrap_or_else(|| Address::generate(&env));
 
-        let guardian_actor = scenario.actors.iter().find(|a| a.role == ActorRole::Guardian);
+        let guardian_actor = scenario
+            .actors
+            .iter()
+            .find(|a| a.role == ActorRole::Guardian);
         let guardian = guardian_actor
             .map(|a| actors[&a.name].clone())
-            .unwrap_or_else(|| Address::generate(&env));
+            .unwrap_or_else(|| admin.clone());
 
         let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
 
@@ -146,6 +149,9 @@ impl SimulationRunner {
             &7200u32, // draft expiry: 1 hour (12 ledgers of 5s each)
             &10u32,   // max co-sponsors: 10
         );
+        let mut governor_settings = governor.get_settings();
+        governor_settings.co_sponsorship_registry = Some(co_sponsorship_id);
+        governor.update_config(&governor_settings);
 
         let target = env.register(SimTargetContract, ());
 
