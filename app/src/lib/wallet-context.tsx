@@ -69,6 +69,8 @@ function truncateAddress(addr: string): string {
   return `${addr.slice(0, 4)}...${addr.slice(-4)}`;
 }
 
+const LS_WALLET_ID = "nebgov_wallet_id";
+
 // Provider
 
 export function WalletProvider({ children }: { children: React.ReactNode }) {
@@ -79,14 +81,49 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const applyConnectedWallet = useCallback(async (rawAddress: string) => {
+    setAddress(truncateAddress(rawAddress));
+    setPublicKey(rawAddress);
+    if (typeof window !== "undefined" && "Notification" in window) {
+      void Notification.requestPermission();
+    }
+
+    try {
+      const login = await backendFetch<{ token: string }>("/auth/login", {
+        method: "POST",
+        body: JSON.stringify({ wallet_address: rawAddress }),
+      });
+      setAuthToken(login.token);
+      await syncNotificationsFromBackend();
+    } catch {
+      // Backend is optional; localStorage notifications still work.
+    }
+  }, []);
+
   // Initialise the kit once — only on the client
   useEffect(() => {
-    kitRef.current = new StellarWalletsKit({
+    const kit = new StellarWalletsKit({
       network: WalletNetwork.TESTNET,
       selectedWalletId: FREIGHTER_ID,
       modules: [new FreighterModule(), new xBullModule(), new AlbedoModule()],
     });
-  }, []);
+    kitRef.current = kit;
+
+    // Restore a previously connected wallet session (e.g. after a page
+    // reload) instead of leaving the user disconnected until they click
+    // "connect wallet" again.
+    const lastWalletId =
+      typeof window !== "undefined" ? localStorage.getItem(LS_WALLET_ID) : null;
+    if (lastWalletId) {
+      kit.setWallet(lastWalletId);
+      kit
+        .getAddress({ skipRequestAccess: true })
+        .then(({ address: rawAddress }) => applyConnectedWallet(rawAddress))
+        .catch(() => {
+          localStorage.removeItem(LS_WALLET_ID);
+        });
+    }
+  }, [applyConnectedWallet]);
 
   const connect = useCallback(async (): Promise<string | null> => {
     // E2E test mock — skip the Freighter modal and inject directly
@@ -116,22 +153,10 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
             kit.setWallet(option.id);
             const { address: rawAddress } = await kit.getAddress();
             connectedPublicKey = rawAddress;
-            setAddress(truncateAddress(rawAddress));
-            setPublicKey(rawAddress);
-            if (typeof window !== "undefined" && "Notification" in window) {
-              void Notification.requestPermission();
+            if (typeof window !== "undefined") {
+              localStorage.setItem(LS_WALLET_ID, option.id);
             }
-
-            try {
-              const login = await backendFetch<{ token: string }>("/auth/login", {
-                method: "POST",
-                body: JSON.stringify({ wallet_address: rawAddress }),
-              });
-              setAuthToken(login.token);
-              await syncNotificationsFromBackend();
-            } catch {
-              // Backend is optional; localStorage notifications still work.
-            }
+            await applyConnectedWallet(rawAddress);
           } catch (err) {
             const msg =
               err instanceof Error ? err.message : "Failed to get address";
@@ -149,7 +174,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     }
 
     return connectedPublicKey;
-  }, []);
+  }, [applyConnectedWallet]);
 
   const disconnect = useCallback(async () => {
     const kit = kitRef.current;
@@ -164,6 +189,9 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     setPublicKey(null);
     setError(null);
     setAuthToken(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem(LS_WALLET_ID);
+    }
   }, []);
 
   const signTransaction = useCallback(
