@@ -9,6 +9,7 @@ import { isValidStellarAddress } from "../lib/utils/stellarAddress";
 import toast from "react-hot-toast";
 import { VotesClient, type Network } from "@nebgov/sdk";
 import { useWallet } from "../lib/wallet-context";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface Props {
   open: boolean;
@@ -61,6 +62,7 @@ export function DelegateModal({
   const [delegateeError, setDelegateeError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const { isConnected, publicKey, signTransaction } = useWallet();
+  const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
 
   useEffect(() => {
     setDelegatee(prefillAddress ?? "");
@@ -147,11 +149,27 @@ export function DelegateModal({
   }
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delegate-modal-title"
+      tabIndex={-1}
+    >
       <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-xl">
-        <h2 className="text-lg font-bold text-gray-900 mb-1">
-          Delegate Voting Power
-        </h2>
+        <div className="flex items-start justify-between mb-1">
+          <h2 id="delegate-modal-title" className="text-lg font-bold text-gray-900">
+            Delegate Voting Power
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 p-1 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
         <p className="text-sm text-gray-500 mb-4">
           Delegate to yourself to activate your voting power, or choose another
           address.
