@@ -998,6 +998,387 @@ function toGovernorSettings(value: unknown): GovernorSettings | null {
   };
 }
 
+// --- Liquidity event stubs (pre-existing references) ---
+
+async function handleLiquidityAdded(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const account = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const amount = String(data[0] as bigint);
+  broadcast({ type: "liquidity_added", data: { account, amount, ledger: event.ledger } });
+}
+
+async function handleLiquidityRemoved(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const account = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const amount = String(data[0] as bigint);
+  broadcast({ type: "liquidity_removed", data: { account, amount, ledger: event.ledger } });
+}
+
+async function handleSwap(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const trader = topics[1] as string;
+  broadcast({ type: "swap", data: { trader, ledger: event.ledger } });
+}
+
+async function handlePoolFeeUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  broadcast({ type: "pool_fee_updated", data: { ledger: event.ledger } });
+}
+
+export async function maybeTakeGovernanceSnapshot(_ledger: number): Promise<void> {
+  // Placeholder — governance snapshot logic not yet implemented.
+}
+
+// --- Timelock event handlers (#846) ---
+
+function bufToHex(v: unknown): string {
+  if (v instanceof Uint8Array) return Buffer.from(v).toString("hex");
+  if (Buffer.isBuffer(v)) return v.toString("hex");
+  return String(v ?? "");
+}
+
+async function logTimelockEvent(
+  _eventType: string,
+  _ledger: number,
+  _data: Record<string, unknown>,
+): Promise<void> {
+  // No-op: the generic logToEventLog handler at line 130 already writes
+  // every event into the event_log table. Timelock-specific table inserts
+  // are handled by each dedicated handler.
+}
+
+async function handleTimelockOperationScheduled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const opId = bufToHex(data.op_id);
+  const target = String(data.target ?? "");
+  const fnName = String(data.fn_name ?? "");
+  const readyAt = String(data.ready_at ?? "0");
+  const expiresAt = String(data.expires_at ?? "0");
+
+  await pool.query(
+    `INSERT INTO timelock_operations (op_id, target, fn_name, ready_at, expires_at, status, ledger)
+     VALUES ($1, $2, $3, $4, $5, 'scheduled', $6)
+     ON CONFLICT (op_id) DO NOTHING`,
+    [opId, target, fnName, readyAt, expiresAt, event.ledger],
+  );
+  broadcast({
+    type: "timelock_operation_scheduled",
+    data: { op_id: opId, target, fn_name: fnName, ready_at: readyAt, expires_at: expiresAt, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockOperationExecuted(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const opId = bufToHex(data.op_id);
+  const caller = String(data.caller ?? "");
+
+  await pool.query(
+    `UPDATE timelock_operations SET status = 'executed' WHERE op_id = $1`,
+    [opId],
+  );
+  await logTimelockEvent("timelock_operation_executed", event.ledger, { op_id: opId, caller });
+  broadcast({
+    type: "timelock_operation_executed",
+    data: { op_id: opId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockOperationCancelled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const opId = bufToHex(data.op_id);
+  const caller = String(data.caller ?? "");
+
+  await pool.query(
+    `UPDATE timelock_operations SET status = 'cancelled' WHERE op_id = $1`,
+    [opId],
+  );
+  await logTimelockEvent("timelock_operation_cancelled", event.ledger, { op_id: opId, caller });
+  broadcast({
+    type: "timelock_operation_cancelled",
+    data: { op_id: opId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchOperationScheduled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const batchOpId = bufToHex(data.batch_op_id);
+  const targets = (data.targets ?? []) as string[];
+  const fnNames = (data.fn_names ?? []) as string[];
+  const readyAt = String(data.ready_at ?? "0");
+  const expiresAt = String(data.expires_at ?? "0");
+
+  await pool.query(
+    `INSERT INTO timelock_batch_operations (batch_op_id, target_count, fn_names, ready_at, expires_at, status, ledger)
+     VALUES ($1, $2, $3, $4, $5, 'scheduled', $6)
+     ON CONFLICT (batch_op_id) DO NOTHING`,
+    [batchOpId, targets.length, JSON.stringify(fnNames), readyAt, expiresAt, event.ledger],
+  );
+  await logTimelockEvent("timelock_batch_operation_scheduled", event.ledger, {
+    batch_op_id: batchOpId, target_count: targets.length, ready_at: readyAt, expires_at: expiresAt,
+  });
+  broadcast({
+    type: "timelock_batch_operation_scheduled",
+    data: { batch_op_id: batchOpId, target_count: targets.length, ready_at: readyAt, expires_at: expiresAt, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchOperationExecuted(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const batchOpId = bufToHex(data.batch_op_id);
+  const caller = String(data.caller ?? "");
+
+  await pool.query(
+    `UPDATE timelock_batch_operations SET status = 'executed' WHERE batch_op_id = $1`,
+    [batchOpId],
+  );
+  await logTimelockEvent("timelock_batch_operation_executed", event.ledger, { batch_op_id: batchOpId, caller });
+  broadcast({
+    type: "timelock_batch_operation_executed",
+    data: { batch_op_id: batchOpId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchOperationCancelled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const batchOpId = bufToHex(data.batch_op_id);
+  const caller = String(data.caller ?? "");
+
+  await pool.query(
+    `UPDATE timelock_batch_operations SET status = 'cancelled' WHERE batch_op_id = $1`,
+    [batchOpId],
+  );
+  await logTimelockEvent("timelock_batch_operation_cancelled", event.ledger, { batch_op_id: batchOpId, caller });
+  broadcast({
+    type: "timelock_batch_operation_cancelled",
+    data: { batch_op_id: batchOpId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockMinDelayUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const oldDelay = String(data.old_delay ?? "0");
+  const newDelay = String(data.new_delay ?? "0");
+
+  await logTimelockEvent("timelock_min_delay_updated", event.ledger, { old_delay: oldDelay, new_delay: newDelay });
+  broadcast({
+    type: "timelock_min_delay_updated",
+    data: { old_delay: oldDelay, new_delay: newDelay, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockDependencyDagValidated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const batchOpId = bufToHex(data[0]);
+  const opCount = Number(data[1] ?? 0);
+
+  await pool.query(
+    `INSERT INTO timelock_dependency_graphs (batch_op_id, op_count, valid, ledger)
+     VALUES ($1, $2, true, $3)
+     ON CONFLICT (batch_op_id) DO UPDATE SET op_count = $2, valid = true`,
+    [batchOpId, opCount, event.ledger],
+  );
+  await logTimelockEvent("timelock_dependency_dag_validated", event.ledger, { batch_op_id: batchOpId, op_count: opCount });
+  broadcast({
+    type: "timelock_dependency_dag_validated",
+    data: { batch_op_id: batchOpId, op_count: opCount, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockCycleDetected(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const cyclePath = scValToNative(event.value) as Uint8Array[];
+  const pathHex = cyclePath.map((b) => bufToHex(b));
+
+  await pool.query(
+    `INSERT INTO timelock_dependency_graphs (batch_op_id, op_count, valid, cycle_path, ledger)
+     VALUES ($1, $2, false, $3, $4)
+     ON CONFLICT (batch_op_id) DO UPDATE SET valid = false, cycle_path = $3`,
+    ["", pathHex.length, JSON.stringify(pathHex), event.ledger],
+  );
+  await logTimelockEvent("timelock_cycle_detected", event.ledger, { cycle_path: pathHex });
+  broadcast({
+    type: "timelock_cycle_detected",
+    data: { cycle_path: pathHex, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockPartialBatchStarted(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const batchOpId = bufToHex(data[0]);
+  const totalOps = Number(data[1] ?? 0);
+
+  await pool.query(
+    `INSERT INTO timelock_partial_batch_state (batch_op_id, total_ops, completed_count, failed_count, pending_count, recovery_mode, ledger)
+     VALUES ($1, $2, 0, 0, $2, false, $3)
+     ON CONFLICT (batch_op_id) DO UPDATE SET total_ops = $2, pending_count = $2`,
+    [batchOpId, totalOps, event.ledger],
+  );
+  await logTimelockEvent("timelock_partial_batch_started", event.ledger, { batch_op_id: batchOpId, total_ops: totalOps });
+  broadcast({
+    type: "timelock_partial_batch_started",
+    data: { batch_op_id: batchOpId, total_ops: totalOps, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockPartialOpSucceeded(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const batchOpId = bufToHex(data[0]);
+  const opId = bufToHex(data[1]);
+  const completed = Number(data[2] ?? 0);
+  const total = Number(data[3] ?? 0);
+
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET completed_count = $1, pending_count = $2 - $1
+     WHERE batch_op_id = $3`,
+    [completed, total, batchOpId],
+  );
+  await logTimelockEvent("timelock_partial_op_succeeded", event.ledger, {
+    batch_op_id: batchOpId, op_id: opId, completed, total,
+  });
+  broadcast({
+    type: "timelock_partial_op_succeeded",
+    data: { batch_op_id: batchOpId, op_id: opId, completed, total, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockPartialOpFailed(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const batchOpId = bufToHex(data[0]);
+  const opId = bufToHex(data[1]);
+
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET failed_count = failed_count + 1, pending_count = pending_count - 1
+     WHERE batch_op_id = $1`,
+    [batchOpId],
+  );
+  await logTimelockEvent("timelock_partial_op_failed", event.ledger, { batch_op_id: batchOpId, op_id: opId });
+  broadcast({
+    type: "timelock_partial_op_failed",
+    data: { batch_op_id: batchOpId, op_id: opId, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchRecoveryEntered(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const batchOpId = bufToHex(data[0]);
+  const recoveryDeadline = Number(data[1] ?? 0);
+
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET recovery_mode = true, recovery_deadline = $1
+     WHERE batch_op_id = $2`,
+    [recoveryDeadline, batchOpId],
+  );
+  await logTimelockEvent("timelock_batch_recovery_entered", event.ledger, {
+    batch_op_id: batchOpId, recovery_deadline: recoveryDeadline,
+  });
+  broadcast({
+    type: "timelock_batch_recovery_entered",
+    data: { batch_op_id: batchOpId, recovery_deadline: recoveryDeadline, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockFailedOpRetried(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const batchOpId = bufToHex(data[0]);
+  const opId = bufToHex(data[1]);
+  const retryCount = Number(data[2] ?? 0);
+  const succeeded = Boolean(data[3]);
+
+  await logTimelockEvent("timelock_failed_op_retried", event.ledger, {
+    batch_op_id: batchOpId, op_id: opId, retry_count: retryCount, succeeded,
+  });
+  broadcast({
+    type: "timelock_failed_op_retried",
+    data: { batch_op_id: batchOpId, op_id: opId, retry_count: retryCount, succeeded, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockFailedOpSkipped(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as unknown[];
+  const batchOpId = bufToHex(data[0]);
+  const opId = bufToHex(data[1]);
+
+  await logTimelockEvent("timelock_failed_op_skipped", event.ledger, { batch_op_id: batchOpId, op_id: opId });
+  broadcast({
+    type: "timelock_failed_op_skipped",
+    data: { batch_op_id: batchOpId, op_id: opId, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchFullyComplete(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const batchOpId = bufToHex(scValToNative(event.value));
+
+  await pool.query(
+    `UPDATE timelock_batch_operations SET status = 'completed' WHERE batch_op_id = $1`,
+    [batchOpId],
+  );
+  await logTimelockEvent("timelock_batch_fully_complete", event.ledger, { batch_op_id: batchOpId });
+  broadcast({
+    type: "timelock_batch_fully_complete",
+    data: { batch_op_id: batchOpId, ledger: event.ledger },
+  });
+}
+
 async function handleConfigUpdated(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],

@@ -21,6 +21,7 @@ pub trait VotesTrait {
 #[contractclient(name = "GovernorClient")]
 pub trait GovernorTrait {
     fn proposal_threshold(env: Env) -> i128;
+    fn get_effective_threshold(env: Env, proposer: Address) -> i128;
     #[allow(clippy::too_many_arguments)]
     fn propose_via_registry(
         env: Env,
@@ -379,7 +380,12 @@ impl CoSponsorshipContract {
         let votes_token: Address = env.storage().instance().get(&DataKey::VotesToken).unwrap();
         let current_power = Self::compute_current_co_sponsor_power(&env, &votes_token, &draft.co_sponsors);
 
-        let threshold = governor_client.proposal_threshold();
+        // Use the reputation-adjusted effective threshold (#849) instead of
+        // the flat proposal_threshold. Without this, a draft creator whose
+        // reputation-adjusted effective_threshold exceeds the flat threshold
+        // can bypass the anti-spam system by pooling exactly the flat
+        // threshold's worth of co-sponsor power.
+        let threshold = governor_client.get_effective_threshold(&draft.creator);
         if current_power < threshold {
             env.panic_with_error(CoSponsorshipError::DraftThresholdNotMet);
         }
