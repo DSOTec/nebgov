@@ -589,6 +589,12 @@ async function handleEffectiveThresholdChanged(
   const data = scValToNative(event.value) as [string, bigint, bigint];
   const [, oldThreshold, newThreshold] = data;
 
+  await pool.query(
+    `INSERT INTO effective_threshold_history (proposer_address, ledger, old_threshold, new_threshold)
+     VALUES ($1, $2, $3, $4)`,
+    [proposer, event.ledger, oldThreshold.toString(), newThreshold.toString()],
+  );
+
   broadcast({
     type: "effective_threshold_changed",
     data: {
@@ -1046,31 +1052,3 @@ async function handleGovernorUpgraded(
   );
 }
 
-async function handleReputationUpdated(
-  event: SorobanRpc.Api.EventResponse,
-  topics: unknown[],
-): Promise<void> {
-  const proposer = topics[1] as string;
-  const data = scValToNative(event.value) as Record<string, unknown>;
-  const oldScore = Number(data.old_score);
-  const newScore = Number(data.new_score);
-  const reason = String(data.reason ?? "");
-
-  await pool.query(
-    `INSERT INTO proposer_reputation (proposer, old_score, new_score, reason, ledger)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [proposer, oldScore, newScore, reason, event.ledger],
-  );
-}
-
-async function handleEffectiveThresholdChanged(
-  event: SorobanRpc.Api.EventResponse,
-  topics: unknown[],
-): Promise<void> {
-  const data = scValToNative(event.value) as Record<string, unknown>;
-  const oldThreshold = BigInt(Number(data.old_threshold ?? 0n));
-  const newThreshold = BigInt(Number(data.new_threshold ?? 0n));
-
-  // Log the threshold change (in a real implementation, this might be stored)
-  console.log(`Threshold changed from ${oldThreshold} to ${newThreshold} at ledger ${event.ledger}`);
-}

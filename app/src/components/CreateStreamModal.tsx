@@ -4,6 +4,7 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 import type { TreasuryClient } from "../lib/treasury-client";
 import { isValidStellarAddress } from "../lib/utils/stellarAddress";
+import { useFocusTrap } from "../hooks/useFocusTrap";
 
 interface CreateStreamModalProps {
   client: TreasuryClient;
@@ -32,6 +33,7 @@ export function CreateStreamModal({
   const [cooldownLedgers, setCooldownLedgers] = useState("0");
   const [proposalId, setProposalId] = useState("0");
   const [submitting, setSubmitting] = useState(false);
+  const dialogRef = useFocusTrap<HTMLDivElement>(true, onClose);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -70,9 +72,27 @@ export function CreateStreamModal({
   };
 
   return (
-    <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+    <div
+      ref={dialogRef}
+      className="fixed inset-0 bg-black/40 flex items-center justify-center z-50"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="create-stream-modal-title"
+      tabIndex={-1}
+    >
       <div className="bg-white rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
-        <h2 className="text-lg font-semibold mb-4">Create Budget Stream</h2>
+        <div className="flex items-start justify-between mb-4">
+          <h2 id="create-stream-modal-title" className="text-lg font-semibold">
+            Create Budget Stream
+          </h2>
+          <button
+            onClick={onClose}
+            className="text-gray-400 hover:text-gray-600 p-1 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            aria-label="Close"
+          >
+            ✕
+          </button>
+        </div>
         <form onSubmit={handleSubmit} className="space-y-3">
           <div>
             <label className="text-xs text-gray-500">Stream Name (symbol)</label>

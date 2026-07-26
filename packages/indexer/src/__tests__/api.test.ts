@@ -449,6 +449,74 @@ describe("GET /proposals with cursor pagination", () => {
       expect(response.body).toEqual({ error: "Internal server error" });
     });
   });
+
+  describe("GET /reputation/:address/threshold-history (issue #919)", () => {
+    it("should paginate results and report hasMore", async () => {
+      const mockRows = [
+        { ledger: 205, old_threshold: "1000", new_threshold: "1200", created_at: "2026-01-01T00:00:00Z" },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/reputation/GADDR/threshold-history?limit=1&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.history).toEqual(mockRows);
+      expect(response.body.pagination).toEqual({ limit: 1, offset: 0, hasMore: true });
+    });
+
+    it("should not report hasMore when fewer rows than the limit are returned", async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [] });
+
+      const response = await request(app).get("/reputation/GADDR/threshold-history?limit=50&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.pagination).toEqual({ limit: 50, offset: 0, hasMore: false });
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("Database error"));
+
+      const response = await request(app).get("/reputation/GADDR/threshold-history");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
+
+  describe("GET /reputation/leaderboard (offset, issue #920)", () => {
+    it("should pass limit and offset to the query and rank relative to offset", async () => {
+      const mockRows = [
+        { proposer_address: "GADDR201", reputation_score: 42, last_updated_ledger: 100 },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/reputation/leaderboard?limit=1&offset=200");
+
+      expect(response.status).toBe(200);
+      expect(mockPool.query).toHaveBeenCalledWith(expect.stringContaining("OFFSET $2"), [1, 200]);
+      expect(response.body.leaderboard).toEqual([
+        { rank: 201, address: "GADDR201", reputation_score: 42, last_updated_ledger: 100 },
+      ]);
+    });
+
+    it("should default offset to 0 when not provided", async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [] });
+
+      const response = await request(app).get("/reputation/leaderboard");
+
+      expect(response.status).toBe(200);
+      expect(mockPool.query).toHaveBeenCalledWith(expect.any(String), [50, 0]);
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("Database error"));
+
+      const response = await request(app).get("/reputation/leaderboard");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
