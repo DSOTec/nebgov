@@ -129,13 +129,14 @@ pub enum DataKey {
 pub enum StreamDataKey {
     Stream(u64),
     StreamCount,
-    StreamList,
-    ActiveStreams,
-    StreamsByOwner(Address),
-    StreamsByToken(Address),
-    StreamSpends(u64),
+    ActiveStreamCount,
+    OwnerStreamCount(Address),
+    OwnerStream(Address, u64),
+    StreamSpendRecord(u64, u32),
     StreamSpendCount(u64),
     TotalStreamedByToken(Address),
+    TotalSpentByToken(Address),
+    TokenList,
 }
 
 #[contractclient(name = "TreasuryClient")]
