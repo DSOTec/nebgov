@@ -102,6 +102,31 @@ export function ruleMatchesEvent(rule: NotificationRule, event: IndexerEvent): b
       if (cfg.delegatee && cfg.delegatee !== eventDelegatee(event)) return false;
       return true;
     }
+    case "treasury_stream_spend": {
+      const value = event.payload.value;
+      if (!Array.isArray(value)) return false;
+      const streamId = String(value[0]);
+      const amountValue = value[event.event_type === "stream_batch" ? 1 : 2];
+      let amount: bigint;
+      try {
+        amount = BigInt(String(amountValue));
+      } catch {
+        return false;
+      }
+      if (
+        cfg.stream_id !== undefined &&
+        String(cfg.stream_id) !== streamId
+      ) {
+        return false;
+      }
+      if (
+        cfg.min_amount !== undefined &&
+        amount < BigInt(cfg.min_amount)
+      ) {
+        return false;
+      }
+      return true;
+    }
     case "proposal_ending_soon": {
       const value = event.payload.value as Record<string, unknown>;
       const remaining = Number(value.remaining_ledgers);

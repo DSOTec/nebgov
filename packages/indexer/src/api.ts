@@ -116,7 +116,28 @@ const TTL = {
   delegationRegistry: 30_000, // 30 seconds
   analytics: 30_000, // 30 seconds
   reputation: 30_000, // 30 seconds
+  treasury: 30_000, // 30 seconds
 };
+
+function parsePagination(
+  limitValue: unknown,
+  offsetValue: unknown,
+  defaultLimit: number,
+  maxLimit: number,
+): { limit: number; offset: number } | null {
+  const limit = Number(limitValue ?? defaultLimit);
+  const offset = Number(offsetValue ?? 0);
+  if (
+    !Number.isInteger(limit) ||
+    !Number.isInteger(offset) ||
+    limit < 1 ||
+    limit > maxLimit ||
+    offset < 0
+  ) {
+    return null;
+  }
+  return { limit, offset };
+}
 
 const HEALTH_LAG_THRESHOLD = Number(process.env.HEALTH_LAG_THRESHOLD ?? 100);
 const STELLAR_LEDGER_CLOSE_TIME_SECONDS = 5; // Stellar ledgers close approximately every 5 seconds
@@ -1263,6 +1284,251 @@ export function createApp(server: SorobanRpc.Server): express.Application {
           data: result.rows,
           pagination: { limit, offset, hasMore: result.rows.length === limit },
         });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  app.get(
+    "/streams",
+    async (req: Request, res: Response): Promise<void> => {
+      const pagination = parsePagination(
+        req.query.limit,
+        req.query.offset,
+        20,
+        100,
+      );
+      if (!pagination) {
+        res.status(400).json({ error: "Invalid pagination parameters" });
+        return;
+      }
+      const { limit, offset } = pagination;
+      const owner =
+        typeof req.query.owner === "string" && req.query.owner.length > 0
+          ? req.query.owner
+          : undefined;
+      const key = `treasury:streams:${owner ?? "all"}:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.treasury, async () => {
+          const params: unknown[] = [];
+          let where = "";
+          if (owner) {
+            params.push(owner);
+            where = `WHERE owner = $${params.length}`;
+          }
+          params.push(limit, offset);
+          const result = await pool.query(
+            `SELECT * FROM treasury_streams
+             ${where}
+             ORDER BY stream_id ASC
+             LIMIT $${params.length - 1} OFFSET $${params.length}`,
+            params,
+          );
+          return {
+            data: result.rows,
+            pagination: {
+              limit,
+              offset,
+              hasMore: result.rows.length === limit,
+            },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  app.get(
+    "/streams/:id/spends",
+    async (req: Request, res: Response): Promise<void> => {
+      const { id } = req.params;
+      if (!/^\d+$/.test(id)) {
+        res.status(400).json({ error: "Invalid stream ID" });
+        return;
+      }
+      const pagination = parsePagination(
+        req.query.limit,
+        req.query.offset,
+        50,
+        200,
+      );
+      if (!pagination) {
+        res.status(400).json({ error: "Invalid pagination parameters" });
+        return;
+      }
+      const { limit, offset } = pagination;
+      const key = `treasury:stream:${id}:spends:${limit}:${offset}`;
+      try {
+        const stream = await pool.query(
+          "SELECT 1 FROM treasury_streams WHERE stream_id = $1",
+          [id],
+        );
+        if (stream.rows.length === 0) {
+          res.status(404).json({ error: "Stream not found" });
+          return;
+        }
+        const data = await cached(key, TTL.treasury, async () => {
+          const result = await pool.query(
+            `SELECT * FROM treasury_stream_spends
+             WHERE stream_id = $1
+             ORDER BY spend_index ASC
+             LIMIT $2 OFFSET $3`,
+            [id, limit, offset],
+          );
+          return {
+            data: result.rows,
+            pagination: {
+              limit,
+              offset,
+              hasMore: result.rows.length === limit,
+            },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  app.get(
+    "/streams/:id",
+    async (req: Request, res: Response): Promise<void> => {
+      const { id } = req.params;
+      if (!/^\d+$/.test(id)) {
+        res.status(400).json({ error: "Invalid stream ID" });
+        return;
+      }
+      try {
+        const data = await cached(
+          `treasury:stream:${id}`,
+          TTL.treasury,
+          async () => {
+            const result = await pool.query(
+              "SELECT * FROM treasury_streams WHERE stream_id = $1",
+              [id],
+            );
+            return result.rows[0] ?? null;
+          },
+        );
+        if (!data) {
+          res.status(404).json({ error: "Stream not found" });
+          return;
+        }
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  app.get(
+    "/treasury/stream-events",
+    async (req: Request, res: Response): Promise<void> => {
+      const streamId =
+        typeof req.query.stream_id === "string"
+          ? req.query.stream_id
+          : undefined;
+      if (!streamId || !/^\d+$/.test(streamId)) {
+        res.status(400).json({ error: "stream_id is required" });
+        return;
+      }
+      const pagination = parsePagination(
+        req.query.limit,
+        req.query.offset,
+        20,
+        100,
+      );
+      if (!pagination) {
+        res.status(400).json({ error: "Invalid pagination parameters" });
+        return;
+      }
+      const { limit, offset } = pagination;
+      const key = `treasury:stream:${streamId}:events:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.treasury, async () => {
+          const result = await pool.query(
+            `SELECT
+               event_type, stream_id, name, owner, recipient, amount,
+               total_amount, recipient_count, caller, unspent_returned,
+               old_end_ledger, new_end_ledger, additional_amount,
+               new_total_amount, unspent, ledger, transaction_hash
+             FROM treasury_stream_events
+             WHERE stream_id = $1
+             ORDER BY ledger DESC, event_id DESC
+             LIMIT $2 OFFSET $3`,
+            [streamId, limit, offset],
+          );
+          return {
+            data: result.rows,
+            pagination: {
+              limit,
+              offset,
+              hasMore: result.rows.length === limit,
+            },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  app.get(
+    "/treasury/budget-summary",
+    async (_req: Request, res: Response): Promise<void> => {
+      try {
+        const data = await cached(
+          "treasury:budget-summary",
+          TTL.treasury,
+          async () => {
+            const [counts, amounts] = await Promise.all([
+              pool.query(
+                `SELECT
+                   COUNT(*)::int AS total_streams,
+                   COUNT(*) FILTER (
+                     WHERE is_active = TRUE AND is_revoked = FALSE
+                   )::int AS active_streams
+                 FROM treasury_streams`,
+              ),
+              pool.query(
+                `SELECT
+                   token,
+                   SUM(total_allocated)::text AS total_allocated,
+                   SUM(total_spent)::text AS total_spent,
+                   SUM(total_allocated - total_spent)::text AS total_remaining
+                 FROM treasury_streams
+                 GROUP BY token
+                 ORDER BY token`,
+              ),
+            ]);
+            const count = counts.rows[0] ?? {
+              total_streams: 0,
+              active_streams: 0,
+            };
+            return {
+              total_streams: count.total_streams,
+              active_streams: count.active_streams,
+              total_allocated_by_token: amounts.rows.map((row) => ({
+                token: row.token,
+                amount: row.total_allocated,
+              })),
+              total_spent_by_token: amounts.rows.map((row) => ({
+                token: row.token,
+                amount: row.total_spent,
+              })),
+              total_remaining_by_token: amounts.rows.map((row) => ({
+                token: row.token,
+                amount: row.total_remaining,
+              })),
+            };
+          },
+        );
+        res.json(data);
       } catch {
         res.status(500).json({ error: "Internal server error" });
       }

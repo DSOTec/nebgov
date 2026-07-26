@@ -615,7 +615,7 @@ export interface BatchTransferEvent {
   ledger: number;
 }
 
-/** Event from a budget stream (created, spend, batch, revoked, extended, topped-up, or exhausted) */
+/** Event from a budget stream lifecycle. */
 export type StreamEvent =
   | {
       type: "stream_created";
@@ -662,6 +662,12 @@ export type StreamEvent =
   | {
       type: "stream_exhausted";
       streamId: bigint;
+      ledger: number;
+    }
+  | {
+      type: "stream_expired";
+      streamId: bigint;
+      unspent: bigint;
       ledger: number;
     };
 

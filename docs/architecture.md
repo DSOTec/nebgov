@@ -134,6 +134,11 @@ The indexer service (`packages/indexer/`) is responsible for:
 - `GET /wrapper/deposits`: Wrapper deposit history
 - `GET /wrapper/withdrawals`: Wrapper withdrawal history
 - `GET /treasury/transfers`: Treasury transfer history
+- `GET /streams`: Budget streams, optionally filtered by owner
+- `GET /streams/:id`: Current budget-stream state
+- `GET /streams/:id/spends`: Complete stream spend history
+- `GET /treasury/stream-events`: Stream lifecycle history
+- `GET /treasury/budget-summary`: Token-grouped stream budget totals
 - `GET /config-history`: Configuration change history
 - `GET /upgrade-history`: Governor upgrade history
 - `GET /leaderboard/voters`: Voter participation leaderboard

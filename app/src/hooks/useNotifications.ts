@@ -33,8 +33,8 @@ export interface TriggerConfig {
   ledgers_remaining?: number;
   proposal_id?: number;
   voter?: string;
-  stream_id?: number;
-  min_amount?: number;
+  stream_id?: string;
+  min_amount?: string;
   delegatee?: string;
 }
 

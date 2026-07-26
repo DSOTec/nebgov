@@ -108,6 +108,35 @@ describe("WebSocket broadcast server", () => {
     ws.close();
   });
 
+  it("filters treasury events by streamId", async () => {
+    const ws = await openClient(serverUrl);
+    ws.send(JSON.stringify({ streamId: "7" }));
+    await waitMs(50);
+
+    broadcast({
+      type: "stream_spend",
+      data: { stream_id: "8", amount: "10" },
+    });
+    let received = false;
+    ws.once("message", () => {
+      received = true;
+    });
+    await waitMs(100);
+    expect(received).toBe(false);
+
+    const messagePromise = nextMessage(ws);
+    broadcast({
+      type: "stream_spend",
+      data: { stream_id: "7", amount: "20" },
+    });
+    const raw = await messagePromise;
+    expect(JSON.parse(raw)).toMatchObject({
+      type: "stream_spend",
+      data: { stream_id: "7", amount: "20" },
+    });
+    ws.close();
+  });
+
   it("filters by proposal_id using the subscribe protocol", async () => {
     const ws = await openClient(serverUrl);
 
