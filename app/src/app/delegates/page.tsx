@@ -208,113 +208,115 @@ export default function DelegatesPage() {
       )}
 
       <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-        <table className="w-full">
-          <thead className="bg-gray-50 border-b border-gray-200">
-            <tr>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                #
-              </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Delegate
-              </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Votes
-              </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Delegators
-              </th>
-              <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                % of Supply
-              </th>
-              <th className="py-3 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                Action
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {loading && (
-              <>
-                <DelegateSkeleton />
-                <DelegateSkeleton />
-                <DelegateSkeleton />
-              </>
-            )}
-
-            {!loading && delegates.length === 0 && !error && (
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
-                <td colSpan={6} className="py-12 text-center text-gray-500">
-                  No delegates found. Be the first to delegate!
-                </td>
+                <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  #
+                </th>
+                <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Delegate
+                </th>
+                <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Votes
+                </th>
+                <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Delegators
+                </th>
+                <th className="py-3 px-4 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  % of Supply
+                </th>
+                <th className="py-3 px-4 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                  Action
+                </th>
               </tr>
-            )}
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {loading && (
+                <>
+                  <DelegateSkeleton />
+                  <DelegateSkeleton />
+                  <DelegateSkeleton />
+                </>
+              )}
 
-            {!loading &&
-              delegates.map((delegate, index) => {
-                const isCurrentUser = publicKey === delegate.address;
-                const percentOfSupply =
-                  totalSupply > 0n
-                    ? Number((delegate.votingPower * 10000n) / totalSupply) /
-                      100
-                    : 0;
-                return (
-                  <tr
-                    key={delegate.address}
-                    className={
-                      isCurrentUser ? "bg-indigo-50" : "hover:bg-gray-50"
-                    }
-                  >
-                    <td className="py-4 px-4 text-sm text-gray-500">
-                      {index + 1}
-                    </td>
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-2">
-                        <Link
-                          href={`/profile/${delegate.address}`}
-                          className="font-mono text-sm text-indigo-600 hover:text-indigo-800 hover:underline"
-                        >
-                          {formatAddress(delegate.address)}
-                        </Link>
-                        {isCurrentUser && (
-                          <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">
-                            You
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 text-sm font-medium text-gray-900">
-                      {formatVotes(delegate.votingPower, divisor)}
-                    </td>
-                    <td className="py-4 px-4 text-sm text-gray-600">
-                      {delegate.delegatorCount.toLocaleString()}
-                    </td>
-                    <td className="py-4 px-4">
-                      <div className="flex items-center gap-2">
-                        <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-[100px]">
-                          <div
-                            className="bg-indigo-600 h-2 rounded-full"
-                            style={{
-                              width: `${Math.min(percentOfSupply * 2, 100)}%`,
-                            }}
-                          />
+              {!loading && delegates.length === 0 && !error && (
+                <tr>
+                  <td colSpan={6} className="py-12 text-center text-gray-500">
+                    No delegates found. Be the first to delegate!
+                  </td>
+                </tr>
+              )}
+
+              {!loading &&
+                delegates.map((delegate, index) => {
+                  const isCurrentUser = publicKey === delegate.address;
+                  const percentOfSupply =
+                    totalSupply > 0n
+                      ? Number((delegate.votingPower * 10000n) / totalSupply) /
+                        100
+                      : 0;
+                  return (
+                    <tr
+                      key={delegate.address}
+                      className={
+                        isCurrentUser ? "bg-indigo-50" : "hover:bg-gray-50"
+                      }
+                    >
+                      <td className="py-4 px-4 text-sm text-gray-500">
+                        {index + 1}
+                      </td>
+                      <td className="py-4 px-4">
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/profile/${delegate.address}`}
+                            className="font-mono text-sm text-indigo-600 hover:text-indigo-800 hover:underline"
+                          >
+                            {formatAddress(delegate.address)}
+                          </Link>
+                          {isCurrentUser && (
+                            <span className="text-xs bg-indigo-100 text-indigo-700 px-2 py-0.5 rounded">
+                              You
+                            </span>
+                          )}
                         </div>
-                        <span className="text-sm text-gray-500">
-                          {percentOfSupply.toFixed(1)}%
-                        </span>
-                      </div>
-                    </td>
-                    <td className="py-4 px-4 text-right">
-                      <button
-                        onClick={() => handleDelegateClick(delegate.address)}
-                        className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
-                      >
-                        Delegate
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-          </tbody>
-        </table>
+                      </td>
+                      <td className="py-4 px-4 text-sm font-medium text-gray-900">
+                        {formatVotes(delegate.votingPower, divisor)}
+                      </td>
+                      <td className="py-4 px-4 text-sm text-gray-600">
+                        {delegate.delegatorCount.toLocaleString()}
+                      </td>
+                      <td className="py-4 px-4">
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-gray-200 rounded-full h-2 max-w-[100px]">
+                            <div
+                              className="bg-indigo-600 h-2 rounded-full"
+                              style={{
+                                width: `${Math.min(percentOfSupply * 2, 100)}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="text-sm text-gray-500">
+                            {percentOfSupply.toFixed(1)}%
+                          </span>
+                        </div>
+                      </td>
+                      <td className="py-4 px-4 text-right">
+                        <button
+                          onClick={() => handleDelegateClick(delegate.address)}
+                          className="text-sm text-indigo-600 hover:text-indigo-700 font-medium"
+                        >
+                          Delegate
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {hasMore && (

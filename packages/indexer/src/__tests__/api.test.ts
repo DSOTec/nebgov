@@ -354,6 +354,101 @@ describe("GET /proposals with cursor pagination", () => {
       expect(res.body).toEqual(mockPartial);
     });
   });
+
+  describe("GET /delegates/:address/history (paginated, issue #921)", () => {
+    it("should paginate results and report hasMore", async () => {
+      const mockRows = [
+        { delegator_address: "GDEL1", delegated_at_ledger: 100, revoked_at_ledger: null, power_at_delegation: "50", active: true },
+        { delegator_address: "GDEL2", delegated_at_ledger: 90, revoked_at_ledger: 95, power_at_delegation: "20", active: false },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/delegates/GADDR/history?limit=2&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.history).toEqual(mockRows);
+      expect(response.body.pagination).toEqual({ limit: 2, offset: 0, hasMore: true });
+      expect(mockPool.query).toHaveBeenCalledWith(
+        expect.stringContaining("OFFSET $2 LIMIT $3"),
+        ["GADDR", 0, 2],
+      );
+    });
+
+    it("should clamp limit to the [1, 200] range", async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [] });
+
+      const response = await request(app).get("/delegates/GADDR/history?limit=9999");
+
+      expect(response.status).toBe(200);
+      expect(response.body.pagination.limit).toBe(200);
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("Database error"));
+
+      const response = await request(app).get("/delegates/GADDR/history");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
+
+  describe("GET /delegators/:address/history (paginated, issue #921)", () => {
+    it("should paginate results and report hasMore", async () => {
+      const mockRows = [
+        { delegatee_address: "GDEE1", delegated_at_ledger: 100, revoked_at_ledger: null, power_at_delegation: "50", active: true },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/delegators/GADDR/history?limit=1&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.history).toEqual(mockRows);
+      expect(response.body.pagination).toEqual({ limit: 1, offset: 0, hasMore: true });
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("Database error"));
+
+      const response = await request(app).get("/delegators/GADDR/history");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
+
+  describe("GET /reputation/:address/history (paginated, issue #921)", () => {
+    it("should paginate results and report hasMore", async () => {
+      const mockRows = [
+        { ledger: 100, score: 10, change: 2, reason: "proposal_passed" },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/reputation/GADDR/history?limit=1&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.history).toEqual(mockRows);
+      expect(response.body.pagination).toEqual({ limit: 1, offset: 0, hasMore: true });
+    });
+
+    it("should not report hasMore when fewer rows than the limit are returned", async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [] });
+
+      const response = await request(app).get("/reputation/GADDR/history?limit=50&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.pagination).toEqual({ limit: 50, offset: 0, hasMore: false });
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("Database error"));
+
+      const response = await request(app).get("/reputation/GADDR/history");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
