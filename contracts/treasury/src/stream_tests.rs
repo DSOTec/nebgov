@@ -43,7 +43,7 @@ fn default_stream_params(
         owner.clone(),
         token.clone(),
         1_000i128,  // total_allocated
-        1u32,       // start_ledger
+        0u32,       // start_ledger
         100_000u32, // end_ledger
         500i128,    // max_single_spend
         0u32,       // cooldown_ledgers
@@ -150,7 +150,7 @@ fn test_stream_spend_in_cooldown_reverts() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &10u32, // cooldown_ledgers = 10
@@ -182,7 +182,7 @@ fn test_stream_spend_exhausts_budget_then_reverts() {
         &stream_owner,
         &token_addr,
         &500i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -219,7 +219,7 @@ fn test_stream_spend_after_end_ledger_reverts() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &10u32, // end_ledger = 10
         &500i128,
         &0u32,
@@ -270,7 +270,7 @@ fn test_stream_batch_spend_multiple_recipients() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -318,7 +318,7 @@ fn test_revoke_stream_returns_unspent_to_treasury() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -357,7 +357,7 @@ fn test_extend_stream_updates_end_ledger() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100u32, // end_ledger = 100
         &500i128,
         &0u32,
@@ -384,7 +384,7 @@ fn test_top_up_stream_increases_allocated() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -420,7 +420,7 @@ fn test_get_budget_summary_aggregates_all_streams() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -479,7 +479,7 @@ fn test_get_stream_report_computes_utilization_bps() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -517,7 +517,7 @@ fn test_stream_revoked_blocks_further_spends() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -534,7 +534,7 @@ fn test_stream_revoked_blocks_further_spends() {
 }
 
 #[test]
-#[should_panic(expected = "stream not active")]
+#[should_panic(expected = "stream not started")]
 fn test_stream_with_future_start_ledger_cannot_spend_immediately() {
     let env = Env::default();
     env.mock_all_auths();
@@ -577,7 +577,7 @@ fn test_stream_top_up_after_exhaustion_allows_additional_spends() {
         &stream_owner,
         &token_addr,
         &100i128, // small initial allocation
-        &1u32,
+        &0u32,
         &100_000u32,
         &100i128, // max_single_spend
         &0u32,
@@ -610,7 +610,7 @@ fn test_stream_top_up_after_exhaustion_allows_additional_spends() {
 }
 
 #[test]
-#[should_panic(expected = "stream not active")]
+#[should_panic(expected = "stream expired")]
 fn test_stream_extend_on_expired_allows_spend_until_new_end() {
     let env = Env::default();
     env.mock_all_auths();
@@ -624,7 +624,7 @@ fn test_stream_extend_on_expired_allows_spend_until_new_end() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100u32, // expires at ledger 100
         &500i128,
         &0u32,
@@ -655,7 +655,7 @@ fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
         &stream_owner,
         &token_addr,
         &10_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &5u32, // cooldown_ledgers
@@ -671,15 +671,21 @@ fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
     amounts.push_back(100i128);
 
     // First batch spend (spend_count = 0, should not be affected by cooldown)
-    client.stream_batch_spend(&stream_owner, &stream_id, &recipients, &amounts);
+    client.stream_batch_spend(
+        &stream_owner,
+        &stream_id,
+        &recipients,
+        &amounts,
+        &String::from_str(&env, "batch"),
+    );
 
     // Verify batch was recorded
     let stream: BudgetStream = client.get_stream(&stream_id);
     assert_eq!(stream.spend_count, 2); // two recipients
 
-    // Immediately try another batch (should check cooldown since spend_count > 0)
-    // This tests that batch respects cooldown after initial spend
-    env.ledger().set_sequence_number(3); // Only advanced 2 ledgers, less than cooldown
+    // Advance past cooldown before the next batch spend.
+    // Cooldown = 5 ledgers, last spend was at ledger 0; need at least ledger 6.
+    env.ledger().set_sequence_number(6);
 
     let mut recipients2 = Vec::new(&env);
     recipients2.push_back(Address::generate(&env));
@@ -688,7 +694,13 @@ fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
 
     // Note: This test just verifies the batch can be called and tracks spend_count
     // The actual cooldown enforcement is tested in test_stream_spend_enforces_cooldown
-    client.stream_batch_spend(&stream_owner, &stream_id, &recipients2, &amounts2);
+    client.stream_batch_spend(
+        &stream_owner,
+        &stream_id,
+        &recipients2,
+        &amounts2,
+        &String::from_str(&env, "batch2"),
+    );
 
     let stream: BudgetStream = client.get_stream(&stream_id);
     assert_eq!(stream.spend_count, 3); // one more recipient from second batch
@@ -704,7 +716,8 @@ fn test_get_streams_pagination_boundaries() {
 
     // Create 3 streams
     for i in 0..3 {
-        let name = Symbol::new(&env, &format!("stream{}", i));
+        let names = ["stream0", "stream1", "stream2"];
+        let name = Symbol::new(&env, names[i as usize]);
         client.create_stream(
             &governor,
             &name,
@@ -750,7 +763,7 @@ fn test_get_stream_spends_pagination_boundaries() {
         &stream_owner,
         &token_addr,
         &10_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &1_000i128,
         &0u32,
@@ -791,7 +804,7 @@ fn test_revoke_stream_records_event_payload() {
         &stream_owner,
         &token_addr,
         &1_000i128,
-        &1u32,
+        &0u32,
         &100_000u32,
         &500i128,
         &0u32,
@@ -815,4 +828,188 @@ fn test_revoke_stream_records_event_payload() {
     assert_eq!(revoked_stream.is_revoked, true);
     assert_eq!(revoked_stream.total_spent, 200);
     assert_eq!(revoked_stream.total_allocated - revoked_stream.total_spent, unspent);
+}
+
+// ── Regression tests for #867, #872, #873 ──────────────────────────────
+
+#[test]
+#[should_panic(expected = "stream not started")]
+fn test_stream_batch_spend_before_start_ledger_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let future_start = 1000u32;
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "future"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &future_start,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Batch spend before start_ledger should fail
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(Address::generate(&env));
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(100i128);
+    let memo = String::from_str(&env, "too early");
+    client.stream_batch_spend(&stream_owner, &stream_id, &recipients, &amounts, &memo);
+}
+
+#[test]
+#[should_panic(expected = "new end must be in the future")]
+fn test_extend_stream_to_past_ledger_reverts() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "eng"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &1u32,
+        &100u32, // end_ledger = 100
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Advance past both end_ledger and the proposed extension target
+    env.ledger().set_sequence_number(200);
+
+    // 150 > 100 (old end) but 150 <= 200 (current), so this should revert
+    client.extend_stream(&governor, &stream_id, &150u32);
+}
+
+#[test]
+fn test_get_stream_report_revoked_stream_shows_inactive_zero_days() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "rev"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Revoke the stream
+    client.revoke_stream(&governor, &stream_id);
+
+    let report: StreamBudgetReport = client.get_stream_report(&stream_id);
+    assert_eq!(report.is_active, false, "revoked stream should report inactive");
+    assert_eq!(report.days_remaining, 0, "revoked stream should show zero days remaining");
+    assert_eq!(report.stream_id, stream_id);
+}
+
+#[test]
+fn test_get_stream_report_naturally_expired_stream_shows_inactive() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "natrexp"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &1u32,
+        &100u32, // end_ledger = 100
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Advance past end_ledger
+    env.ledger().set_sequence_number(200);
+
+    let report: StreamBudgetReport = client.get_stream_report(&stream_id);
+    assert_eq!(report.is_active, false, "expired stream should report inactive");
+    assert_eq!(report.days_remaining, 0, "expired stream should show zero days remaining");
+}
+
+#[test]
+fn test_get_budget_summary_excludes_revoked_and_expired_from_active_count() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // Active stream
+    let _s1 = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "active1"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Stream that will be revoked
+    let s2 = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "revoked"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &1u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &2u64,
+    );
+
+    // Stream that will naturally expire
+    let _s3 = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "expiring"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &1u32,
+        &50u32, // short end
+        &500i128,
+        &0u32,
+        &3u64,
+    );
+
+    // Revoke s2
+    client.revoke_stream(&governor, &s2);
+
+    // Advance past s3's end_ledger
+    env.ledger().set_sequence_number(100);
+
+    let summary: TreasuryBudgetSummary = client.get_budget_summary();
+    assert_eq!(summary.total_streams, 3);
+    // Only the one non-revoked, non-expired stream should still count as active
+    assert_eq!(summary.active_streams, 1);
 }
