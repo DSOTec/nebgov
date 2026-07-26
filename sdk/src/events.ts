@@ -681,3 +681,847 @@ export function subscribeToUnpauseEvents(
 ): () => void {
   return createTopicSubscription(governorAddress, TOPICS.unpaused, callback, opts);
 }
+
+function toHex(value: unknown): string {
+  if (value instanceof Uint8Array) return Buffer.from(value).toString("hex");
+  return String(value ?? "");
+}
+
+// ── Co-sponsorship draft lifecycle events ───────────────────────────────────
+
+const COSPONSOR_TOPICS = {
+  draftCreated: "DraftCreated",
+  coSponsored: "CoSponsored",
+  coSponsorshipWithdrawn: "CoSponsorshipWithdrawn",
+  draftFinalized: "DraftFinalized",
+  draftCancelled: "DraftCancelled",
+  draftExpired: "DraftExpired",
+} as const;
+
+export interface DraftCreatedEventData {
+  draftId: bigint;
+  creator: string;
+  descriptionHash: string;
+  metadataUri: string;
+  createdLedger: number;
+  expiryLedger: number;
+}
+
+export function parseDraftCreatedEvent(event: SorobanEvent): DraftCreatedEventData | null {
+  if (event.topic[0] !== COSPONSOR_TOPICS.draftCreated || !isRecord(event.value)) return null;
+
+  const draftId = toBigInt(event.value.draft_id);
+  const createdLedger = toNumber(event.value.created_ledger);
+  const expiryLedger = toNumber(event.value.expiry_ledger);
+
+  if (draftId === null || createdLedger === null || expiryLedger === null) return null;
+
+  return {
+    draftId,
+    creator: String(event.value.creator ?? event.topic[1] ?? ""),
+    descriptionHash: toHex(event.value.description_hash),
+    metadataUri: String(event.value.metadata_uri ?? ""),
+    createdLedger,
+    expiryLedger,
+  };
+}
+
+export interface CoSponsoredEventData {
+  draftId: bigint;
+  sponsor: string;
+  power: bigint;
+  totalPower: bigint;
+}
+
+export function parseCoSponsoredEvent(event: SorobanEvent): CoSponsoredEventData | null {
+  if (event.topic[0] !== COSPONSOR_TOPICS.coSponsored || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const draftId = toBigInt(event.value[0]);
+  const power = toBigInt(event.value[1]);
+  const totalPower = toBigInt(event.value[2]);
+
+  if (draftId === null || power === null || totalPower === null) return null;
+
+  return { draftId, sponsor: String(event.topic[1] ?? ""), power, totalPower };
+}
+
+export interface CoSponsorshipWithdrawnEventData {
+  draftId: bigint;
+  sponsor: string;
+  power: bigint;
+  totalPower: bigint;
+}
+
+export function parseCoSponsorshipWithdrawnEvent(
+  event: SorobanEvent
+): CoSponsorshipWithdrawnEventData | null {
+  if (
+    event.topic[0] !== COSPONSOR_TOPICS.coSponsorshipWithdrawn ||
+    !Array.isArray(event.value) ||
+    event.value.length < 3
+  ) {
+    return null;
+  }
+
+  const draftId = toBigInt(event.value[0]);
+  const power = toBigInt(event.value[1]);
+  const totalPower = toBigInt(event.value[2]);
+
+  if (draftId === null || power === null || totalPower === null) return null;
+
+  return { draftId, sponsor: String(event.topic[1] ?? ""), power, totalPower };
+}
+
+export interface DraftFinalizedEventData {
+  draftId: bigint;
+  proposalId: bigint;
+}
+
+export function parseDraftFinalizedEvent(event: SorobanEvent): DraftFinalizedEventData | null {
+  if (event.topic[0] !== COSPONSOR_TOPICS.draftFinalized || !Array.isArray(event.value) || event.value.length < 2) {
+    return null;
+  }
+
+  const draftId = toBigInt(event.value[0]);
+  const proposalId = toBigInt(event.value[1]);
+
+  if (draftId === null || proposalId === null) return null;
+
+  return { draftId, proposalId };
+}
+
+export interface DraftCancelledEventData {
+  draftId: bigint;
+  caller: string;
+}
+
+export function parseDraftCancelledEvent(event: SorobanEvent): DraftCancelledEventData | null {
+  if (event.topic[0] !== COSPONSOR_TOPICS.draftCancelled || !Array.isArray(event.value) || event.value.length < 2) {
+    return null;
+  }
+
+  const draftId = toBigInt(event.value[0]);
+  if (draftId === null) return null;
+
+  return { draftId, caller: String(event.value[1] ?? "") };
+}
+
+export interface DraftExpiredEventData {
+  draftId: bigint;
+  expiredAtLedger: number;
+}
+
+export function parseDraftExpiredEvent(event: SorobanEvent): DraftExpiredEventData | null {
+  if (event.topic[0] !== COSPONSOR_TOPICS.draftExpired || !Array.isArray(event.value) || event.value.length < 2) {
+    return null;
+  }
+
+  const draftId = toBigInt(event.value[0]);
+  const expiredAtLedger = toNumber(event.value[1]);
+
+  if (draftId === null || expiredAtLedger === null) return null;
+
+  return { draftId, expiredAtLedger };
+}
+
+export function subscribeToDraftCreated(
+  coSponsorshipAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.draftCreated, callback, opts);
+}
+
+export function subscribeToCoSponsored(
+  coSponsorshipAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.coSponsored, callback, opts);
+}
+
+export function subscribeToCoSponsorshipWithdrawn(
+  coSponsorshipAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.coSponsorshipWithdrawn, callback, opts);
+}
+
+export function subscribeToDraftFinalized(
+  coSponsorshipAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.draftFinalized, callback, opts);
+}
+
+export function subscribeToDraftCancelled(
+  coSponsorshipAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.draftCancelled, callback, opts);
+}
+
+export function subscribeToDraftExpired(
+  coSponsorshipAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.draftExpired, callback, opts);
+}
+
+// ── Treasury budget-stream events ───────────────────────────────────────────
+
+const STREAM_TOPICS = {
+  streamCreated: "stream_created",
+  streamSpend: "stream_spend",
+  streamBatchSpend: "stream_batch",
+  streamRevoked: "stream_revoked",
+  streamExtended: "stream_extended",
+  streamToppedUp: "stream_topped_up",
+  streamExhausted: "stream_exhausted",
+  streamExpired: "stream_expired",
+} as const;
+
+export interface StreamCreatedEventData {
+  streamId: bigint;
+  name: string;
+  owner: string;
+}
+
+export function parseStreamCreatedEvent(event: SorobanEvent): StreamCreatedEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamCreated || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const streamId = toBigInt(event.value[0]);
+  if (streamId === null) return null;
+
+  return { streamId, name: String(event.value[1] ?? ""), owner: String(event.value[2] ?? "") };
+}
+
+export interface StreamSpendEventData {
+  streamId: bigint;
+  recipient: string;
+  amount: bigint;
+}
+
+export function parseStreamSpendEvent(event: SorobanEvent): StreamSpendEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamSpend || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const streamId = toBigInt(event.value[0]);
+  const amount = toBigInt(event.value[2]);
+  if (streamId === null || amount === null) return null;
+
+  return { streamId, recipient: String(event.value[1] ?? ""), amount };
+}
+
+export interface StreamBatchSpendEventData {
+  streamId: bigint;
+  totalAmount: bigint;
+  recipientCount: number;
+}
+
+export function parseStreamBatchSpendEvent(event: SorobanEvent): StreamBatchSpendEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamBatchSpend || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const streamId = toBigInt(event.value[0]);
+  const totalAmount = toBigInt(event.value[1]);
+  const recipientCount = toNumber(event.value[2]);
+  if (streamId === null || totalAmount === null || recipientCount === null) return null;
+
+  return { streamId, totalAmount, recipientCount };
+}
+
+export interface StreamRevokedEventData {
+  streamId: bigint;
+  caller: string;
+  unspentReturned: bigint;
+}
+
+export function parseStreamRevokedEvent(event: SorobanEvent): StreamRevokedEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamRevoked || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const streamId = toBigInt(event.value[0]);
+  const unspentReturned = toBigInt(event.value[2]);
+  if (streamId === null || unspentReturned === null) return null;
+
+  return { streamId, caller: String(event.value[1] ?? ""), unspentReturned };
+}
+
+export interface StreamExtendedEventData {
+  streamId: bigint;
+  oldEnd: number;
+  newEnd: number;
+}
+
+export function parseStreamExtendedEvent(event: SorobanEvent): StreamExtendedEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamExtended || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const streamId = toBigInt(event.value[0]);
+  const oldEnd = toNumber(event.value[1]);
+  const newEnd = toNumber(event.value[2]);
+  if (streamId === null || oldEnd === null || newEnd === null) return null;
+
+  return { streamId, oldEnd, newEnd };
+}
+
+export interface StreamToppedUpEventData {
+  streamId: bigint;
+  additional: bigint;
+  newTotal: bigint;
+}
+
+export function parseStreamToppedUpEvent(event: SorobanEvent): StreamToppedUpEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamToppedUp || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const streamId = toBigInt(event.value[0]);
+  const additional = toBigInt(event.value[1]);
+  const newTotal = toBigInt(event.value[2]);
+  if (streamId === null || additional === null || newTotal === null) return null;
+
+  return { streamId, additional, newTotal };
+}
+
+export interface StreamExhaustedEventData {
+  streamId: bigint;
+}
+
+export function parseStreamExhaustedEvent(event: SorobanEvent): StreamExhaustedEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamExhausted) return null;
+
+  const streamId = toBigInt(event.value);
+  if (streamId === null) return null;
+
+  return { streamId };
+}
+
+export interface StreamExpiredEventData {
+  streamId: bigint;
+  unspent: bigint;
+}
+
+export function parseStreamExpiredEvent(event: SorobanEvent): StreamExpiredEventData | null {
+  if (event.topic[0] !== STREAM_TOPICS.streamExpired || !Array.isArray(event.value) || event.value.length < 2) {
+    return null;
+  }
+
+  const streamId = toBigInt(event.value[0]);
+  const unspent = toBigInt(event.value[1]);
+  if (streamId === null || unspent === null) return null;
+
+  return { streamId, unspent };
+}
+
+export function subscribeToStreamCreated(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamCreated, callback, opts);
+}
+
+export function subscribeToStreamSpend(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamSpend, callback, opts);
+}
+
+export function subscribeToStreamBatchSpend(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamBatchSpend, callback, opts);
+}
+
+export function subscribeToStreamRevoked(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamRevoked, callback, opts);
+}
+
+export function subscribeToStreamExtended(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamExtended, callback, opts);
+}
+
+export function subscribeToStreamToppedUp(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamToppedUp, callback, opts);
+}
+
+export function subscribeToStreamExhausted(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamExhausted, callback, opts);
+}
+
+export function subscribeToStreamExpired(
+  treasuryAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(treasuryAddress, STREAM_TOPICS.streamExpired, callback, opts);
+}
+
+// ── Timelock (including DAG partial-execution) events ───────────────────────
+
+const TIMELOCK_TOPICS = {
+  operationScheduled: "OperationScheduled",
+  operationExecuted: "OperationExecuted",
+  operationCancelled: "OperationCancelled",
+  batchOperationScheduled: "BatchOperationScheduled",
+  batchOperationExecuted: "BatchOperationExecuted",
+  batchOperationCancelled: "BatchOperationCancelled",
+  minDelayUpdated: "MinDelayUpdated",
+  dependencyDagValidated: "DependencyDagValidated",
+  cycleDetected: "CycleDetected",
+  partialBatchStarted: "PartialBatchStarted",
+  partialOpSucceeded: "PartialOpSucceeded",
+  partialOpFailed: "PartialOpFailed",
+  batchRecoveryEntered: "BatchRecoveryEntered",
+  failedOpRetried: "FailedOpRetried",
+  failedOpSkipped: "FailedOpSkipped",
+  batchFullyComplete: "BatchFullyComplete",
+} as const;
+
+export interface OperationScheduledEventData {
+  opId: string;
+  target: string;
+  fnName: string;
+  readyAt: bigint;
+  expiresAt: bigint;
+}
+
+export function parseOperationScheduledEvent(event: SorobanEvent): OperationScheduledEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.operationScheduled || !isRecord(event.value)) return null;
+
+  const readyAt = toBigInt(event.value.ready_at);
+  const expiresAt = toBigInt(event.value.expires_at);
+  if (readyAt === null || expiresAt === null) return null;
+
+  return {
+    opId: toHex(event.value.op_id),
+    target: String(event.value.target ?? ""),
+    fnName: String(event.value.fn_name ?? ""),
+    readyAt,
+    expiresAt,
+  };
+}
+
+export interface OperationExecutedEventData {
+  opId: string;
+  caller: string;
+}
+
+export function parseOperationExecutedEvent(event: SorobanEvent): OperationExecutedEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.operationExecuted || !isRecord(event.value)) return null;
+
+  return { opId: toHex(event.value.op_id), caller: String(event.value.caller ?? "") };
+}
+
+export interface OperationCancelledEventData {
+  opId: string;
+  caller: string;
+}
+
+export function parseOperationCancelledEvent(event: SorobanEvent): OperationCancelledEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.operationCancelled || !isRecord(event.value)) return null;
+
+  return { opId: toHex(event.value.op_id), caller: String(event.value.caller ?? "") };
+}
+
+export interface BatchOperationScheduledEventData {
+  batchOpId: string;
+  targets: string[];
+  fnNames: string[];
+  readyAt: bigint;
+  expiresAt: bigint;
+}
+
+export function parseBatchOperationScheduledEvent(
+  event: SorobanEvent
+): BatchOperationScheduledEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.batchOperationScheduled || !isRecord(event.value)) return null;
+
+  const readyAt = toBigInt(event.value.ready_at);
+  const expiresAt = toBigInt(event.value.expires_at);
+  if (readyAt === null || expiresAt === null) return null;
+
+  return {
+    batchOpId: toHex(event.value.batch_op_id),
+    targets: Array.isArray(event.value.targets) ? event.value.targets.map((t) => String(t)) : [],
+    fnNames: Array.isArray(event.value.fn_names) ? event.value.fn_names.map((f) => String(f)) : [],
+    readyAt,
+    expiresAt,
+  };
+}
+
+export interface BatchOperationExecutedEventData {
+  batchOpId: string;
+  caller: string;
+}
+
+export function parseBatchOperationExecutedEvent(
+  event: SorobanEvent
+): BatchOperationExecutedEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.batchOperationExecuted || !isRecord(event.value)) return null;
+
+  return { batchOpId: toHex(event.value.batch_op_id), caller: String(event.value.caller ?? "") };
+}
+
+export interface BatchOperationCancelledEventData {
+  batchOpId: string;
+  caller: string;
+}
+
+export function parseBatchOperationCancelledEvent(
+  event: SorobanEvent
+): BatchOperationCancelledEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.batchOperationCancelled || !isRecord(event.value)) return null;
+
+  return { batchOpId: toHex(event.value.batch_op_id), caller: String(event.value.caller ?? "") };
+}
+
+export interface MinDelayUpdatedEventData {
+  oldDelay: bigint;
+  newDelay: bigint;
+}
+
+export function parseMinDelayUpdatedEvent(event: SorobanEvent): MinDelayUpdatedEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.minDelayUpdated || !isRecord(event.value)) return null;
+
+  const oldDelay = toBigInt(event.value.old_delay);
+  const newDelay = toBigInt(event.value.new_delay);
+  if (oldDelay === null || newDelay === null) return null;
+
+  return { oldDelay, newDelay };
+}
+
+export interface DependencyDagValidatedEventData {
+  batchOpId: string;
+  opCount: number;
+}
+
+export function parseDependencyDagValidatedEvent(
+  event: SorobanEvent
+): DependencyDagValidatedEventData | null {
+  if (
+    event.topic[0] !== TIMELOCK_TOPICS.dependencyDagValidated ||
+    !Array.isArray(event.value) ||
+    event.value.length < 2
+  ) {
+    return null;
+  }
+
+  const opCount = toNumber(event.value[1]);
+  if (opCount === null) return null;
+
+  return { batchOpId: toHex(event.value[0]), opCount };
+}
+
+export interface CycleDetectedEventData {
+  cyclePath: string[];
+}
+
+export function parseCycleDetectedEvent(event: SorobanEvent): CycleDetectedEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.cycleDetected || !Array.isArray(event.value)) return null;
+
+  return { cyclePath: event.value.map((segment) => toHex(segment)) };
+}
+
+export interface PartialBatchStartedEventData {
+  batchOpId: string;
+  totalOps: number;
+}
+
+export function parsePartialBatchStartedEvent(event: SorobanEvent): PartialBatchStartedEventData | null {
+  if (
+    event.topic[0] !== TIMELOCK_TOPICS.partialBatchStarted ||
+    !Array.isArray(event.value) ||
+    event.value.length < 2
+  ) {
+    return null;
+  }
+
+  const totalOps = toNumber(event.value[1]);
+  if (totalOps === null) return null;
+
+  return { batchOpId: toHex(event.value[0]), totalOps };
+}
+
+export interface PartialOpSucceededEventData {
+  batchOpId: string;
+  opId: string;
+  completed: number;
+  total: number;
+}
+
+export function parsePartialOpSucceededEvent(event: SorobanEvent): PartialOpSucceededEventData | null {
+  if (
+    event.topic[0] !== TIMELOCK_TOPICS.partialOpSucceeded ||
+    !Array.isArray(event.value) ||
+    event.value.length < 4
+  ) {
+    return null;
+  }
+
+  const completed = toNumber(event.value[2]);
+  const total = toNumber(event.value[3]);
+  if (completed === null || total === null) return null;
+
+  return {
+    batchOpId: toHex(event.value[0]),
+    opId: toHex(event.value[1]),
+    completed,
+    total,
+  };
+}
+
+export interface PartialOpFailedEventData {
+  batchOpId: string;
+  opId: string;
+}
+
+export function parsePartialOpFailedEvent(event: SorobanEvent): PartialOpFailedEventData | null {
+  if (
+    event.topic[0] !== TIMELOCK_TOPICS.partialOpFailed ||
+    !Array.isArray(event.value) ||
+    event.value.length < 2
+  ) {
+    return null;
+  }
+
+  return { batchOpId: toHex(event.value[0]), opId: toHex(event.value[1]) };
+}
+
+export interface BatchRecoveryEnteredEventData {
+  batchOpId: string;
+  recoveryDeadline: number;
+}
+
+export function parseBatchRecoveryEnteredEvent(
+  event: SorobanEvent
+): BatchRecoveryEnteredEventData | null {
+  if (
+    event.topic[0] !== TIMELOCK_TOPICS.batchRecoveryEntered ||
+    !Array.isArray(event.value) ||
+    event.value.length < 2
+  ) {
+    return null;
+  }
+
+  const recoveryDeadline = toNumber(event.value[1]);
+  if (recoveryDeadline === null) return null;
+
+  return { batchOpId: toHex(event.value[0]), recoveryDeadline };
+}
+
+export interface FailedOpRetriedEventData {
+  batchOpId: string;
+  opId: string;
+  retryCount: number;
+  succeeded: boolean;
+}
+
+export function parseFailedOpRetriedEvent(event: SorobanEvent): FailedOpRetriedEventData | null {
+  if (
+    event.topic[0] !== TIMELOCK_TOPICS.failedOpRetried ||
+    !Array.isArray(event.value) ||
+    event.value.length < 4
+  ) {
+    return null;
+  }
+
+  const retryCount = toNumber(event.value[2]);
+  if (retryCount === null) return null;
+
+  return {
+    batchOpId: toHex(event.value[0]),
+    opId: toHex(event.value[1]),
+    retryCount,
+    succeeded: Boolean(event.value[3]),
+  };
+}
+
+export interface FailedOpSkippedEventData {
+  batchOpId: string;
+  opId: string;
+}
+
+export function parseFailedOpSkippedEvent(event: SorobanEvent): FailedOpSkippedEventData | null {
+  if (
+    event.topic[0] !== TIMELOCK_TOPICS.failedOpSkipped ||
+    !Array.isArray(event.value) ||
+    event.value.length < 2
+  ) {
+    return null;
+  }
+
+  return { batchOpId: toHex(event.value[0]), opId: toHex(event.value[1]) };
+}
+
+export interface BatchFullyCompleteEventData {
+  batchOpId: string;
+}
+
+export function parseBatchFullyCompleteEvent(event: SorobanEvent): BatchFullyCompleteEventData | null {
+  if (event.topic[0] !== TIMELOCK_TOPICS.batchFullyComplete) return null;
+
+  return { batchOpId: toHex(event.value) };
+}
+
+export function subscribeToOperationScheduled(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.operationScheduled, callback, opts);
+}
+
+export function subscribeToOperationExecuted(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.operationExecuted, callback, opts);
+}
+
+export function subscribeToOperationCancelled(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.operationCancelled, callback, opts);
+}
+
+export function subscribeToBatchOperationScheduled(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.batchOperationScheduled, callback, opts);
+}
+
+export function subscribeToBatchOperationExecuted(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.batchOperationExecuted, callback, opts);
+}
+
+export function subscribeToBatchOperationCancelled(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.batchOperationCancelled, callback, opts);
+}
+
+export function subscribeToMinDelayUpdated(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.minDelayUpdated, callback, opts);
+}
+
+export function subscribeToDependencyDagValidated(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.dependencyDagValidated, callback, opts);
+}
+
+export function subscribeToCycleDetected(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.cycleDetected, callback, opts);
+}
+
+export function subscribeToPartialBatchStarted(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.partialBatchStarted, callback, opts);
+}
+
+export function subscribeToPartialOpSucceeded(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.partialOpSucceeded, callback, opts);
+}
+
+export function subscribeToPartialOpFailed(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.partialOpFailed, callback, opts);
+}
+
+export function subscribeToBatchRecoveryEntered(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.batchRecoveryEntered, callback, opts);
+}
+
+export function subscribeToFailedOpRetried(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.failedOpRetried, callback, opts);
+}
+
+export function subscribeToFailedOpSkipped(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.failedOpSkipped, callback, opts);
+}
+
+export function subscribeToBatchFullyComplete(
+  timelockAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.batchFullyComplete, callback, opts);
+}
