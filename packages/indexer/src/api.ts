@@ -697,22 +697,28 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
-  // GET /delegates/:address/history — full history of delegations received,
-  // including revoked entries.
+  // GET /delegates/:address/history?offset=0&limit=50 — full history of
+  // delegations received, including revoked entries.
   app.get(
     "/delegates/:address/history",
     strictLimiter,
     async (req: Request, res: Response): Promise<void> => {
       const { address } = req.params;
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
       try {
         const result = await pool.query(
           `SELECT delegator_address, delegated_at_ledger, revoked_at_ledger, power_at_delegation, active
            FROM delegation_entries
            WHERE delegatee_address = $1
-           ORDER BY delegated_at_ledger ASC`,
-          [address],
+           ORDER BY delegated_at_ledger ASC
+           OFFSET $2 LIMIT $3`,
+          [address, offset, limit],
         );
-        res.json({ history: result.rows });
+        res.json({
+          history: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
       } catch {
         res.status(500).json({ error: "Internal server error" });
       }
@@ -751,22 +757,28 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
-  // GET /delegators/:address/history — history of delegations made by this
-  // address as a delegator.
+  // GET /delegators/:address/history?offset=0&limit=50 — history of
+  // delegations made by this address as a delegator.
   app.get(
     "/delegators/:address/history",
     strictLimiter,
     async (req: Request, res: Response): Promise<void> => {
       const { address } = req.params;
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
       try {
         const result = await pool.query(
           `SELECT delegatee_address, delegated_at_ledger, revoked_at_ledger, power_at_delegation, active
            FROM delegation_entries
            WHERE delegator_address = $1
-           ORDER BY delegated_at_ledger ASC`,
-          [address],
+           ORDER BY delegated_at_ledger ASC
+           OFFSET $2 LIMIT $3`,
+          [address, offset, limit],
         );
-        res.json({ history: result.rows });
+        res.json({
+          history: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
       } catch {
         res.status(500).json({ error: "Internal server error" });
       }
@@ -1084,21 +1096,27 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
-  // GET /reputation/:address/history
+  // GET /reputation/:address/history?offset=0&limit=50
   app.get(
     "/reputation/:address/history",
     strictLimiter,
     async (req: Request, res: Response): Promise<void> => {
       const { address } = req.params;
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
       try {
         const result = await pool.query(
           `SELECT ledger, score, change, reason
            FROM reputation_score_history
            WHERE proposer_address = $1
-           ORDER BY ledger ASC`,
-          [address],
+           ORDER BY ledger ASC
+           OFFSET $2 LIMIT $3`,
+          [address, offset, limit],
         );
-        res.json({ history: result.rows });
+        res.json({
+          history: result.rows,
+          pagination: { limit, offset, hasMore: result.rows.length === limit },
+        });
       } catch {
         res.status(500).json({ error: "Internal server error" });
       }

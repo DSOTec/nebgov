@@ -9,6 +9,8 @@ import { useWallet } from "../../../lib/wallet-context";
 import { readGovernorConfig } from "../../../lib/nebgov-env";
 import { CoSponsorModal } from "../../../components/CoSponsorModal";
 import { Skeleton } from "../../../components/ui/Skeleton";
+import { useLedgerClock } from "../../../lib/hooks/useLedgerClock";
+import { getTimerInfo } from "../../../lib/utils/ledgerTime";
 
 function formatAddress(address: string): string {
   return `${address.slice(0, 4)}...${address.slice(-4)}`;
@@ -26,6 +28,7 @@ export default function DraftDetailPage() {
 
   const { draft, loading, error, refetch } = useDraft(draftId);
   const { isConnected, connect, publicKey, signTransaction } = useWallet();
+  const { currentLedger } = useLedgerClock();
   const [showCoSponsorModal, setShowCoSponsorModal] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -38,6 +41,11 @@ export default function DraftDetailPage() {
   const isCreator = !!publicKey && !!draft && publicKey === draft.creator;
   const alreadyCoSponsored =
     !!publicKey && !!draft && draft.coSponsors.includes(publicKey);
+  const isExpired =
+    !!draft && currentLedger > 0 && draft.expiryLedger <= currentLedger;
+  const expiryTimer = draft
+    ? getTimerInfo("Expires in", draft.expiryLedger, currentLedger)
+    : null;
 
   async function withWallet(action: (publicKey: string) => Promise<void>) {
     let pk = publicKey;
@@ -125,10 +133,28 @@ export default function DraftDetailPage() {
                 Cancelled
               </span>
             )}
+            {!draft.finalized && !draft.cancelled && isExpired && (
+              <span className="text-xs font-medium px-2 py-1 rounded-full bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">
+                Expired
+              </span>
+            )}
           </div>
-          <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+          <p
+            className={`text-sm text-gray-500 dark:text-gray-400 ${
+              draft.finalized || draft.cancelled ? "mb-4" : "mb-1"
+            }`}
+          >
             Created by {formatAddress(draft.creator)}
           </p>
+          {!draft.finalized && !draft.cancelled && (
+            <p className="text-xs text-gray-400 dark:text-gray-500 mb-4">
+              {isExpired
+                ? `Expired at ledger ${draft.expiryLedger}`
+                : expiryTimer
+                  ? `${expiryTimer.label} ${expiryTimer.countdown} (ledger ${draft.expiryLedger})`
+                  : `Expires at ledger ${draft.expiryLedger}`}
+            </p>
+          )}
           <p className="text-gray-700 dark:text-gray-200 mb-6 whitespace-pre-wrap">
             {draft.description}
           </p>
@@ -160,7 +186,8 @@ export default function DraftDetailPage() {
               {!alreadyCoSponsored && (
                 <button
                   onClick={() => setShowCoSponsorModal(true)}
-                  disabled={busy}
+                  disabled={busy || isExpired}
+                  title={isExpired ? "This draft has expired and can no longer be co-sponsored." : undefined}
                   className="px-4 py-2 rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
                 >
                   Co-Sponsor
@@ -169,7 +196,8 @@ export default function DraftDetailPage() {
               {alreadyCoSponsored && (
                 <button
                   onClick={handleWithdraw}
-                  disabled={busy}
+                  disabled={busy || isExpired}
+                  title={isExpired ? "This draft has expired and pledges can no longer be withdrawn." : undefined}
                   className="px-4 py-2 rounded-lg border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
                 >
                   Withdraw Pledge
@@ -178,7 +206,8 @@ export default function DraftDetailPage() {
               {isCreator && (
                 <button
                   onClick={handleFinalize}
-                  disabled={busy}
+                  disabled={busy || isExpired}
+                  title={isExpired ? "This draft has expired and can no longer be finalized." : undefined}
                   className="px-4 py-2 rounded-lg bg-green-600 text-white hover:bg-green-700 disabled:opacity-50"
                 >
                   Finalize
