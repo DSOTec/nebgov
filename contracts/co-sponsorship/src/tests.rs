@@ -151,6 +151,97 @@ fn test_create_draft_succeeds_below_threshold() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_create_draft_rejects_mismatched_vector_lengths() {
+    let (env, client, _votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let targets = soroban_sdk::vec![&env, Address::generate(&env)];
+    let fn_names = soroban_sdk::vec![&env, Symbol::new(&env, "test"), Symbol::new(&env, "other")];
+    let calldatas = soroban_sdk::vec![&env, Bytes::new(&env)];
+
+    client.create_draft(
+        &creator,
+        &String::from_str(&env, "test draft"),
+        &env.crypto().sha256(&Bytes::new(&env)).into(),
+        &String::from_str(&env, "https://example.com/draft"),
+        &targets,
+        &fn_names,
+        &calldatas,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_create_draft_rejects_empty_targets() {
+    let (env, client, _votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let targets = soroban_sdk::vec![&env];
+    let fn_names = soroban_sdk::vec![&env];
+    let calldatas = soroban_sdk::vec![&env];
+
+    client.create_draft(
+        &creator,
+        &String::from_str(&env, "test draft"),
+        &env.crypto().sha256(&Bytes::new(&env)).into(),
+        &String::from_str(&env, "https://example.com/draft"),
+        &targets,
+        &fn_names,
+        &calldatas,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")]
+fn test_create_draft_rejects_oversized_calldata() {
+    let (env, client, _votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let targets = soroban_sdk::vec![&env, Address::generate(&env)];
+    let fn_names = soroban_sdk::vec![&env, Symbol::new(&env, "test")];
+
+    // Create calldata larger than MAX_CALLDATA_SIZE (10_000 bytes)
+    const LARGE_DATA: &[u8; 10_001] = &[0x42u8; 10_001];
+    let calldata = Bytes::from_array(&env, LARGE_DATA);
+    let calldatas = soroban_sdk::vec![&env, calldata];
+
+    client.create_draft(
+        &creator,
+        &String::from_str(&env, "test draft"),
+        &env.crypto().sha256(&Bytes::new(&env)).into(),
+        &String::from_str(&env, "https://example.com/draft"),
+        &targets,
+        &fn_names,
+        &calldatas,
+    );
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn test_create_draft_rejects_too_many_calldata_entries() {
+    let (env, client, _votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let mut targets = soroban_sdk::vec![&env];
+    let mut fn_names = soroban_sdk::vec![&env];
+    let mut calldatas = soroban_sdk::vec![&env];
+
+    // Create 11 entries, exceeding MAX_CALLDATA_COUNT (10)
+    for _ in 0..11 {
+        targets.push_back(Address::generate(&env));
+        fn_names.push_back(Symbol::new(&env, "test"));
+        calldatas.push_back(Bytes::new(&env));
+    }
+
+    client.create_draft(
+        &creator,
+        &String::from_str(&env, "test draft"),
+        &env.crypto().sha256(&Bytes::new(&env)).into(),
+        &String::from_str(&env, "https://example.com/draft"),
+        &targets,
+        &fn_names,
+        &calldatas,
+    );
+}
+
+#[test]
 fn test_co_sponsor_accumulates_power() {
     let (env, client, votes, _admin) = setup(1_000);
     let creator = Address::generate(&env);
@@ -269,6 +360,17 @@ fn test_cancel_draft_by_guardian() {
 
     client.cancel_draft(&admin, &draft_id);
     assert!(client.get_draft(&draft_id).cancelled);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #9)")]
+fn test_cancel_draft_rejects_unrelated_caller() {
+    let (env, client, _votes, _admin) = setup(1_000);
+    let creator = Address::generate(&env);
+    let unrelated = Address::generate(&env);
+    let draft_id = create_draft(&env, &client, &creator);
+
+    client.cancel_draft(&unrelated, &draft_id);
 }
 
 #[test]

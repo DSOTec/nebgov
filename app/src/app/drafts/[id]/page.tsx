@@ -7,6 +7,7 @@ import { CoSponsorshipClient } from "@nebgov/sdk";
 import { useDraft } from "../../../hooks/useDraft";
 import { useWallet } from "../../../lib/wallet-context";
 import { readGovernorConfig } from "../../../lib/nebgov-env";
+import { useLedgerClock } from "../../../lib/hooks/useLedgerClock";
 import { CoSponsorModal } from "../../../components/CoSponsorModal";
 import { Skeleton } from "../../../components/ui/Skeleton";
 
@@ -26,6 +27,7 @@ export default function DraftDetailPage() {
 
   const { draft, loading, error, refetch } = useDraft(draftId);
   const { isConnected, connect, publicKey, signTransaction } = useWallet();
+  const { currentLedger } = useLedgerClock();
   const [showCoSponsorModal, setShowCoSponsorModal] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -38,6 +40,7 @@ export default function DraftDetailPage() {
   const isCreator = !!publicKey && !!draft && publicKey === draft.creator;
   const alreadyCoSponsored =
     !!publicKey && !!draft && draft.coSponsors.includes(publicKey);
+  const isExpired = !!draft && currentLedger > draft.expiryLedger;
 
   async function withWallet(action: (publicKey: string) => Promise<void>) {
     let pk = publicKey;
@@ -115,16 +118,23 @@ export default function DraftDetailPage() {
             <h1 className="text-2xl font-bold text-gray-900 dark:text-gray-100">
               Draft #{draft.id.toString()}
             </h1>
-            {draft.finalized && (
-              <span className="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-800">
-                Finalized
-              </span>
-            )}
-            {draft.cancelled && (
-              <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-600">
-                Cancelled
-              </span>
-            )}
+            <div className="flex gap-2">
+              {draft.finalized && (
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-green-100 text-green-800">
+                  Finalized
+                </span>
+              )}
+              {draft.cancelled && (
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-gray-100 text-gray-600">
+                  Cancelled
+                </span>
+              )}
+              {isExpired && (
+                <span className="text-xs font-medium px-2 py-1 rounded-full bg-orange-100 text-orange-800">
+                  Expired
+                </span>
+              )}
+            </div>
           </div>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
             Created by {formatAddress(draft.creator)}
@@ -155,7 +165,7 @@ export default function DraftDetailPage() {
             </ul>
           </div>
 
-          {!draft.finalized && !draft.cancelled && (
+          {!draft.finalized && !draft.cancelled && !isExpired && (
             <div className="flex flex-wrap gap-3">
               {!alreadyCoSponsored && (
                 <button

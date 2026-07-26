@@ -232,6 +232,16 @@ impl CoSponsorshipContract {
         );
         env.storage().instance().set(&DataKey::DraftCount, &draft_id);
 
+        // Append to DraftList. This operation reads and rewrites the entire
+        // historical list of draft IDs on every create_draft call. DraftList
+        // is never pruned, even for long-finalized, cancelled, or expired
+        // drafts, so this grows unboundedly and the cost (CPU/fee) of every
+        // create_draft call increases linearly with the total number of drafts
+        // ever created. Fine at current scale; if draft volume grows this
+        // should move to an indexer-first design (the indexer already tracks
+        // every draft via events) with a bounded on-chain DraftCount for
+        // iteration only when off-chain data isn't available, or periodic
+        // compaction to drop terminal draft IDs.
         let mut draft_list: Vec<u64> = env
             .storage()
             .persistent()
