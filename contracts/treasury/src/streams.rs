@@ -144,85 +144,79 @@ fn set_stream_count(env: &Env, count: u64) {
         .set(&StreamDataKey::StreamCount, &count);
 }
 
-fn get_stream_list(env: &Env) -> Vec<u64> {
+fn get_active_stream_count(env: &Env) -> u32 {
     env.storage()
         .instance()
-        .get(&StreamDataKey::StreamList)
-        .unwrap_or(Vec::new(env))
+        .get(&StreamDataKey::ActiveStreamCount)
+        .unwrap_or(0)
 }
 
-fn push_to_stream_list(env: &Env, id: u64) {
-    let mut list = get_stream_list(env);
-    list.push_back(id);
+fn set_active_stream_count(env: &Env, count: u32) {
     env.storage()
         .instance()
-        .set(&StreamDataKey::StreamList, &list);
+        .set(&StreamDataKey::ActiveStreamCount, &count);
 }
 
-fn get_active_streams(env: &Env) -> Vec<u64> {
-    env.storage()
-        .instance()
-        .get(&StreamDataKey::ActiveStreams)
-        .unwrap_or(Vec::new(env))
+fn add_active_stream(env: &Env, _id: u64) {
+    let count = get_active_stream_count(env);
+    set_active_stream_count(env, count + 1);
 }
 
-fn add_active_stream(env: &Env, id: u64) {
-    let mut list = get_active_streams(env);
-    list.push_back(id);
-    env.storage()
-        .instance()
-        .set(&StreamDataKey::ActiveStreams, &list);
-}
-
-fn remove_active_stream(env: &Env, id: u64) {
-    let list = get_active_streams(env);
-    let mut new_list = Vec::new(env);
-    for i in 0..list.len() {
-        let entry = list.get(i).unwrap();
-        if entry != id {
-            new_list.push_back(entry);
-        }
+fn remove_active_stream(env: &Env, _id: u64) {
+    let count = get_active_stream_count(env);
+    if count > 0 {
+        set_active_stream_count(env, count - 1);
     }
-    env.storage()
-        .instance()
-        .set(&StreamDataKey::ActiveStreams, &new_list);
 }
 
-fn get_owner_stream_ids(env: &Env, owner: &Address) -> Vec<u64> {
+fn get_owner_stream_count(env: &Env, owner: &Address) -> u64 {
     env.storage()
         .persistent()
-        .get(&StreamDataKey::StreamsByOwner(owner.clone()))
-        .unwrap_or(Vec::new(env))
+        .get(&StreamDataKey::OwnerStreamCount(owner.clone()))
+        .unwrap_or(0)
 }
 
 fn add_stream_to_owner(env: &Env, owner: &Address, id: u64) {
-    let mut list = get_owner_stream_ids(env, owner);
-    list.push_back(id);
+    let count = get_owner_stream_count(env, owner);
     env.storage()
         .persistent()
-        .set(&StreamDataKey::StreamsByOwner(owner.clone()), &list);
+        .set(&StreamDataKey::OwnerStream(owner.clone(), count), &id);
+    env.storage()
+        .persistent()
+        .set(&StreamDataKey::OwnerStreamCount(owner.clone()), &(count + 1));
 }
 
-fn get_streams_by_token(env: &Env, token: &Address) -> Vec<u64> {
+fn get_token_list(env: &Env) -> Vec<Address> {
     env.storage()
         .persistent()
-        .get(&StreamDataKey::StreamsByToken(token.clone()))
+        .get(&StreamDataKey::TokenList)
         .unwrap_or(Vec::new(env))
 }
 
-fn add_stream_to_token(env: &Env, token: &Address, id: u64) {
-    let mut list = get_streams_by_token(env, token);
-    list.push_back(id);
-    env.storage()
-        .persistent()
-        .set(&StreamDataKey::StreamsByToken(token.clone()), &list);
+fn add_token_to_list(env: &Env, token: &Address) {
+    let mut list = get_token_list(env);
+    if !list.contains(token) {
+        list.push_back(token.clone());
+        env.storage()
+            .persistent()
+            .set(&StreamDataKey::TokenList, &list);
+    }
 }
 
-fn get_spends_raw(env: &Env, stream_id: u64) -> Vec<StreamSpend> {
+fn get_total_spent_by_token(env: &Env, token: &Address) -> i128 {
     env.storage()
         .persistent()
-        .get(&StreamDataKey::StreamSpends(stream_id))
-        .unwrap_or(Vec::new(env))
+        .get(&StreamDataKey::TotalSpentByToken(token.clone()))
+        .unwrap_or(0)
+}
+
+fn add_total_spent_by_token(env: &Env, token: &Address, amount: i128) {
+    let current = get_total_spent_by_token(env, token);
+    let new_total = current.checked_add(amount).expect("spent overflow");
+    env.storage().persistent().set(
+        &StreamDataKey::TotalSpentByToken(token.clone()),
+        &new_total,
+    );
 }
 
 fn get_stream_spend_count(env: &Env, stream_id: u64) -> u32 {
@@ -321,6 +315,10 @@ pub fn create_stream(
     assert!(total_allocated > 0, "allocation must be positive");
     assert!(max_single_spend > 0, "max single spend must be positive");
     assert!(end_ledger > start_ledger, "end before start");
+    assert!(
+        end_ledger > env.ledger().sequence(),
+        "end ledger already passed"
+    );
 
     let id = get_stream_count(&env) + 1;
     let stream = BudgetStream {
@@ -344,10 +342,9 @@ pub fn create_stream(
 
     save_stream(&env, &stream);
     set_stream_count(&env, id);
-    push_to_stream_list(&env, id);
     add_active_stream(&env, id);
     add_stream_to_owner(&env, &owner, id);
-    add_stream_to_token(&env, &token, id);
+    add_token_to_list(&env, &token);
     add_total_streamed_by_token(&env, &token, total_allocated);
 
     emit_stream_created(&env, &stream);
@@ -372,6 +369,7 @@ pub fn stream_spend(
     assert!(owner == stream.owner, "not stream owner");
 
     let current_ledger = env.ledger().sequence();
+    assert!(current_ledger >= stream.start_ledger, "stream not started");
     assert!(current_ledger <= stream.end_ledger, "stream expired");
 
     assert!(amount > 0, "amount must be positive");
@@ -413,12 +411,12 @@ pub fn stream_spend(
     };
 
     // Persist spend record
-    let mut spends = get_spends_raw(&env, stream_id);
-    spends.push_back(spend.clone());
     env.storage()
         .persistent()
-        .set(&StreamDataKey::StreamSpends(stream_id), &spends);
+        .set(&StreamDataKey::StreamSpendRecord(stream_id, spend_index), &spend);
     set_stream_spend_count(&env, stream_id, spend_index + 1);
+    
+    add_total_spent_by_token(&env, &stream.token, amount);
 
     // Check if exhausted
     let new_remaining = stream.total_allocated - stream.total_spent;
@@ -452,6 +450,7 @@ pub fn stream_batch_spend(
     assert!(owner == stream.owner, "not stream owner");
 
     let current_ledger = env.ledger().sequence();
+    assert!(current_ledger >= stream.start_ledger, "stream not started");
     assert!(current_ledger <= stream.end_ledger, "stream expired");
 
     // Validate all amounts
@@ -489,7 +488,6 @@ pub fn stream_batch_spend(
     stream.spend_count += recipients.len() as u32;
 
     // Record each spend
-    let mut spends = get_spends_raw(&env, stream_id);
     let mut spend_index = get_stream_spend_count(&env, stream_id);
     for i in 0..recipients.len() {
         let r = recipients.get(i).unwrap();
@@ -503,13 +501,14 @@ pub fn stream_batch_spend(
             executed_at_ledger: current_ledger,
             executed_by: owner.clone(),
         };
-        spends.push_back(spend);
+        env.storage()
+            .persistent()
+            .set(&StreamDataKey::StreamSpendRecord(stream_id, spend_index), &spend);
         spend_index += 1;
     }
-    env.storage()
-        .persistent()
-        .set(&StreamDataKey::StreamSpends(stream_id), &spends);
     set_stream_spend_count(&env, stream_id, spend_index);
+    
+    add_total_spent_by_token(&env, &stream.token, total);
 
     let new_remaining = stream.total_allocated - stream.total_spent;
     if new_remaining == 0 {
@@ -572,6 +571,11 @@ pub fn top_up_stream(env: Env, caller: Address, stream_id: u64, additional_amoun
     let new_total = stream.total_allocated;
     add_total_streamed_by_token(&env, &stream.token, additional_amount);
 
+    if new_total > stream.total_spent && !stream.is_active && !stream.is_revoked {
+        stream.is_active = true;
+        add_active_stream(&env, stream_id);
+    }
+
     save_stream(&env, &stream);
     emit_stream_topped_up(&env, stream_id, additional_amount, new_total);
 }
@@ -583,13 +587,12 @@ pub fn get_stream(env: Env, stream_id: u64) -> BudgetStream {
 
 /// Query: get paginated list of streams.
 pub fn get_streams(env: Env, offset: u64, limit: u64) -> Vec<BudgetStream> {
-    let list = get_stream_list(&env);
+    let count = get_stream_count(&env);
     let mut result = Vec::new(&env);
-    let len = list.len() as u64;
-    let start = offset.min(len);
-    let end = (start + limit).min(len);
+    let start = offset.min(count);
+    let end = (start + limit).min(count);
     for i in start..end {
-        let id = list.get(i as u32).unwrap();
+        let id = i + 1;
         let stream = load_stream(&env, id);
         result.push_back(stream);
     }
@@ -603,13 +606,12 @@ pub fn get_streams_by_owner(
     offset: u64,
     limit: u64,
 ) -> Vec<BudgetStream> {
-    let ids = get_owner_stream_ids(&env, &owner);
+    let count = get_owner_stream_count(&env, &owner);
     let mut result = Vec::new(&env);
-    let len = ids.len() as u64;
-    let start = offset.min(len);
-    let end = (start + limit).min(len);
+    let start = offset.min(count);
+    let end = (start + limit).min(count);
     for i in start..end {
-        let id = ids.get(i as u32).unwrap();
+        let id: u64 = env.storage().persistent().get(&StreamDataKey::OwnerStream(owner.clone(), i)).unwrap();
         let stream = load_stream(&env, id);
         result.push_back(stream);
     }
@@ -618,8 +620,15 @@ pub fn get_streams_by_owner(
 
 /// Query: get spend history for a stream (paginated).
 pub fn get_stream_spends(env: Env, stream_id: u64, offset: u32, limit: u32) -> Vec<StreamSpend> {
-    let spends = get_spends_raw(&env, stream_id);
-    paginate(&env, spends, offset as u64, limit as u64)
+    let count = get_stream_spend_count(&env, stream_id);
+    let mut result = Vec::new(&env);
+    let start = offset.min(count);
+    let end = (start + limit).min(count);
+    for i in start..end {
+        let spend: StreamSpend = env.storage().persistent().get(&StreamDataKey::StreamSpendRecord(stream_id, i)).unwrap();
+        result.push_back(spend);
+    }
+    result
 }
 
 /// Query: get budget report for a specific stream.
@@ -627,7 +636,17 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
     let stream = load_stream(&env, stream_id);
     let remaining = stream.total_allocated - stream.total_spent;
     let utilization_bps = if stream.total_allocated > 0 {
-        ((stream.total_spent as u128 * 10_000) / stream.total_allocated as u128) as u32
+        match (stream.total_spent as u128).checked_mul(10_000) {
+            Some(product) => (product / stream.total_allocated as u128) as u32,
+            None => {
+                let alloc_div = (stream.total_allocated as u128) / 10_000;
+                if alloc_div > 0 {
+                    (stream.total_spent as u128 / alloc_div) as u32
+                } else {
+                    0 // unreachable
+                }
+            }
+        }
     } else {
         0
     };
@@ -659,43 +678,22 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
 
 /// Query: get treasury-wide budget summary.
 pub fn get_budget_summary(env: Env) -> TreasuryBudgetSummary {
-    let list = get_stream_list(&env);
-    let total_streams = list.len();
-    let active_ids = get_active_streams(&env);
-    let active_streams = active_ids.len();
+    let total_streams = get_stream_count(&env) as u32;
+    let active_streams = get_active_stream_count(&env);
 
-    let mut token_set: Vec<Address> = Vec::new(&env);
+    let token_list = get_token_list(&env);
     let mut allocated_by_token: Vec<(Address, i128)> = Vec::new(&env);
     let mut spent_by_token: Vec<(Address, i128)> = Vec::new(&env);
-
-    for i in 0..list.len() {
-        let id = list.get(i).unwrap();
-        let stream = load_stream(&env, id);
-
-        // Find or add token to lists
-        let mut found = false;
-        for j in 0..token_set.len() {
-            if token_set.get(j).unwrap() == stream.token {
-                let (t, a) = allocated_by_token.get(j).unwrap();
-                let (_, s) = spent_by_token.get(j).unwrap();
-                allocated_by_token.set(j, (t.clone(), a + stream.total_allocated));
-                spent_by_token.set(j, (t, s + stream.total_spent));
-                found = true;
-                break;
-            }
-        }
-        if !found {
-            token_set.push_back(stream.token.clone());
-            allocated_by_token.push_back((stream.token.clone(), stream.total_allocated));
-            spent_by_token.push_back((stream.token.clone(), stream.total_spent));
-        }
-    }
-
     let mut remaining_by_token: Vec<(Address, i128)> = Vec::new(&env);
-    for i in 0..allocated_by_token.len() {
-        let (t, a) = allocated_by_token.get(i).unwrap();
-        let (_, s) = spent_by_token.get(i).unwrap();
-        remaining_by_token.push_back((t, a - s));
+
+    for i in 0..token_list.len() {
+        let t = token_list.get(i).unwrap();
+        let alloc = get_total_streamed_by_token(&env, &t);
+        let spent = get_total_spent_by_token(&env, &t);
+        
+        allocated_by_token.push_back((t.clone(), alloc));
+        spent_by_token.push_back((t.clone(), spent));
+        remaining_by_token.push_back((t, alloc - spent));
     }
 
     TreasuryBudgetSummary {

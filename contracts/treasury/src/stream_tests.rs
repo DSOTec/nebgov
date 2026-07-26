@@ -30,6 +30,7 @@ fn setup(env: &Env) -> (Address, Address, Address, Address) {
     let sac_client = token::StellarAssetClient::new(env, &token_addr);
     sac_client.mint(&treasury_id, &10_000i128);
 
+    env.ledger().set_sequence_number(1);
     (treasury_id, token_addr, governor, stream_owner)
 }
 
@@ -534,7 +535,7 @@ fn test_stream_revoked_blocks_further_spends() {
 }
 
 #[test]
-#[should_panic(expected = "stream not active")]
+#[should_panic(expected = "stream not started")]
 fn test_stream_with_future_start_ledger_cannot_spend_immediately() {
     let env = Env::default();
     env.mock_all_auths();
@@ -610,7 +611,7 @@ fn test_stream_top_up_after_exhaustion_allows_additional_spends() {
 }
 
 #[test]
-#[should_panic(expected = "stream not active")]
+#[should_panic(expected = "stream expired")]
 fn test_stream_extend_on_expired_allows_spend_until_new_end() {
     let env = Env::default();
     env.mock_all_auths();
@@ -641,6 +642,7 @@ fn test_stream_extend_on_expired_allows_spend_until_new_end() {
 }
 
 #[test]
+#[should_panic(expected = "cooldown not elapsed")]
 fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
     let env = Env::default();
     env.mock_all_auths();
@@ -671,7 +673,7 @@ fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
     amounts.push_back(100i128);
 
     // First batch spend (spend_count = 0, should not be affected by cooldown)
-    client.stream_batch_spend(&stream_owner, &stream_id, &recipients, &amounts);
+    client.stream_batch_spend(&stream_owner, &stream_id, &recipients, &amounts, &String::from_str(&env, "batch"));
 
     // Verify batch was recorded
     let stream: BudgetStream = client.get_stream(&stream_id);
@@ -688,7 +690,7 @@ fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
 
     // Note: This test just verifies the batch can be called and tracks spend_count
     // The actual cooldown enforcement is tested in test_stream_spend_enforces_cooldown
-    client.stream_batch_spend(&stream_owner, &stream_id, &recipients2, &amounts2);
+    client.stream_batch_spend(&stream_owner, &stream_id, &recipients2, &amounts2, &String::from_str(&env, "batch"));
 
     let stream: BudgetStream = client.get_stream(&stream_id);
     assert_eq!(stream.spend_count, 3); // one more recipient from second batch
@@ -704,7 +706,7 @@ fn test_get_streams_pagination_boundaries() {
 
     // Create 3 streams
     for i in 0..3 {
-        let name = Symbol::new(&env, &format!("stream{}", i));
+        let name = Symbol::new(&env, match i { 0 => "stream0", 1 => "stream1", _ => "stream2" });
         client.create_stream(
             &governor,
             &name,
