@@ -53,6 +53,21 @@ describe("WebSocket broadcast server", () => {
     ws.close();
   });
 
+  it("serializes bigint event fields as decimal strings", async () => {
+    const ws = await openClient(serverUrl);
+    const messagePromise = nextMessage(ws);
+
+    broadcast({
+      type: "proposal_created",
+      data: { id: 1n, proposal_threshold: 1000n },
+    });
+
+    expect(JSON.parse(await messagePromise)).toMatchObject({
+      data: { id: "1", proposal_threshold: "1000" },
+    });
+    ws.close();
+  });
+
   it("broadcasts to multiple connected clients", async () => {
     const ws1 = await openClient(serverUrl);
     const ws2 = await openClient(serverUrl);

@@ -125,15 +125,21 @@ impl CoSponsorshipContract {
 
     /// Sum each co-sponsor's *current* voting power (not their power at
     /// pledge time). Negative/zero balances contribute nothing.
-    fn compute_current_co_sponsor_power(env: &Env, votes_token: &Address, co_sponsors: &Vec<Address>) -> i128 {
+    fn compute_current_co_sponsor_power(
+        env: &Env,
+        votes_token: &Address,
+        co_sponsors: &Vec<Address>,
+    ) -> (Vec<i128>, i128) {
         let votes_client = VotesClient::new(env, votes_token);
+        let mut powers = Vec::new(env);
         let mut total: i128 = 0;
         for i in 0..co_sponsors.len() {
             let sponsor = co_sponsors.get(i).unwrap();
             let power = votes_client.get_votes(&sponsor).max(0);
+            powers.push_back(power);
             total = total.saturating_add(power);
         }
-        total
+        (powers, total)
     }
 
     /// Lazily emit `DraftExpired` the first time an expired, non-terminal
@@ -377,12 +383,14 @@ impl CoSponsorshipContract {
         // governor's own `queue()` independently re-verifies quorum/threshold
         // against live state rather than trusting cached tallies.
         let votes_token: Address = env.storage().instance().get(&DataKey::VotesToken).unwrap();
-        let current_power = Self::compute_current_co_sponsor_power(&env, &votes_token, &draft.co_sponsors);
+        let (current_powers, current_power) =
+            Self::compute_current_co_sponsor_power(&env, &votes_token, &draft.co_sponsors);
 
         let threshold = governor_client.proposal_threshold();
         if current_power < threshold {
             env.panic_with_error(CoSponsorshipError::DraftThresholdNotMet);
         }
+        draft.co_sponsor_power = current_powers;
         draft.total_power = current_power;
 
         let proposal_id = governor_client.propose_via_registry(
@@ -397,6 +405,13 @@ impl CoSponsorshipContract {
         );
 
         draft.finalized = true;
+        for i in 0..draft.co_sponsors.len() {
+            let sponsor = draft.co_sponsors.get(i).unwrap();
+            let power = draft.co_sponsor_power.get(i).unwrap();
+            env.storage()
+                .persistent()
+                .set(&DataKey::DraftCoSponsor(draft_id, sponsor), &power);
+        }
         env.storage()
             .persistent()
             .set(&DataKey::Draft(draft_id), &draft);

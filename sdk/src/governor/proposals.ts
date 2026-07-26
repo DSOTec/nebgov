@@ -18,7 +18,11 @@ import {
   ProposalState,
   Network,
 } from "../types";
-import { GovernorError, GovernorErrorCode } from "../errors";
+import {
+  GovernorError,
+  GovernorErrorCode,
+  parseGovernorError,
+} from "../errors";
 import { hexToBytes32 } from "../utils";
 import { GovernorClient, scVecAddress, scVecSymbol, scVecBytes, toBigInt } from "./governor-client";
 import { TimelockClient } from "../timelock";
@@ -74,13 +78,13 @@ export async function propose(
       targets.length !== calldatas.length
     ) {
       throw new GovernorError(
-        GovernorErrorCode.InvalidArguments,
+        GovernorErrorCode.InvalidVectorLengths,
         "targets, fnNames, and calldatas must have the same length",
       );
     }
     if (targets.length === 0) {
       throw new GovernorError(
-        GovernorErrorCode.InvalidArguments,
+        GovernorErrorCode.NoTargets,
         "At least one on-chain action is required",
       );
     }
@@ -114,7 +118,7 @@ export async function propose(
 
     const result = await client.server.sendTransaction(prepared);
     if (result.status === "ERROR") {
-      throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+      throw parseGovernorError(result);
     }
 
     const confirmed = await client.pollForConfirmation(result.hash);
@@ -144,12 +148,16 @@ export async function proposeWithSign(
     targets.length !== fnNames.length ||
     targets.length !== calldatas.length
   ) {
-    throw new Error(
+    throw new GovernorError(
+      GovernorErrorCode.InvalidVectorLengths,
       "targets, fnNames, and calldatas must have the same length",
     );
   }
   if (targets.length === 0) {
-    throw new Error("At least one on-chain action is required");
+    throw new GovernorError(
+      GovernorErrorCode.NoTargets,
+      "At least one on-chain action is required",
+    );
   }
 
   const hashBytes = hexToBytes32(descriptionHash);
@@ -182,7 +190,7 @@ export async function proposeWithSign(
   );
   const result = await client.server.sendTransaction(signed);
   if (result.status === "ERROR") {
-    throw new Error(`Transaction failed: ${JSON.stringify(result)}`);
+    throw parseGovernorError(result);
   }
   const confirmed = await client.pollForConfirmation(result.hash);
   const returnVal = confirmed.returnValue;

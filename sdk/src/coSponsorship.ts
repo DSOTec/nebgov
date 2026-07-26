@@ -17,6 +17,8 @@ import {
 } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
 
+export type CoSponsorshipConfig = GovernorConfig;
+
 interface SubmitResult {
   hash: string;
   confirmed: SorobanRpc.Api.GetSuccessfulTransactionResponse;
@@ -58,12 +60,12 @@ const NETWORK_PASSPHRASES: Record<Network, string> = {
  * const proposalId = await client.finalizeDraft(signer, draftId);
  */
 export class CoSponsorshipClient {
-  private readonly config: GovernorConfig;
+  private readonly config: CoSponsorshipConfig;
   private readonly server: SorobanRpc.Server;
   private readonly contract: Contract;
   private readonly networkPassphrase: string;
 
-  constructor(config: GovernorConfig) {
+  constructor(config: CoSponsorshipConfig) {
     if (!config.coSponsorshipAddress) {
       throw new CoSponsorshipError(
         CoSponsorshipErrorCode.TransactionFailed,
@@ -89,6 +91,34 @@ export class CoSponsorshipClient {
     return this.config.simulationAccount ?? this.config.coSponsorshipAddress!;
   }
 
+  private parseProposalDraft(native: Record<string, unknown>): ProposalDraft {
+    const rawDescriptionHash = native.description_hash;
+    const descriptionHash =
+      typeof rawDescriptionHash === "string"
+        ? rawDescriptionHash
+        : Buffer.from(rawDescriptionHash as Uint8Array).toString("hex");
+
+    return {
+      id: BigInt(native.id as bigint | number | string),
+      creator: String(native.creator),
+      description: String(native.description),
+      descriptionHash,
+      metadataUri: String(native.metadata_uri),
+      targets: (native.targets as string[]) ?? [],
+      fnNames: (native.fn_names as string[]) ?? [],
+      calldatas: (native.calldatas as (Buffer | Uint8Array)[]) ?? [],
+      createdLedger: Number(native.created_ledger),
+      expiryLedger: Number(native.expiry_ledger),
+      coSponsors: (native.co_sponsors as string[]) ?? [],
+      coSponsorPower: ((native.co_sponsor_power as (bigint | number | string)[]) ?? []).map(
+        (power) => BigInt(power),
+      ),
+      totalPower: BigInt(native.total_power as bigint | number | string),
+      finalized: Boolean(native.finalized),
+      cancelled: Boolean(native.cancelled),
+    };
+  }
+
   private async submit(
     signer: Keypair,
     fnName: string,
@@ -109,7 +139,7 @@ export class CoSponsorshipClient {
 
       const result = await this.server.sendTransaction(prepared);
       if (result.status === "ERROR") {
-        throw parseCoSponsorshipError(result);
+        throw parseCoSponsorshipError(result, undefined, fnName);
       }
       const confirmed = await this.pollForConfirmation(result.hash);
       return { hash: result.hash, confirmed };
@@ -144,7 +174,7 @@ export class CoSponsorshipClient {
 
       const result = await this.server.sendTransaction(signed);
       if (result.status === "ERROR") {
-        throw parseCoSponsorshipError(result);
+        throw parseCoSponsorshipError(result, undefined, fnName);
       }
       const confirmed = await this.pollForConfirmation(result.hash);
       return { hash: result.hash, confirmed };
@@ -369,7 +399,9 @@ export class CoSponsorshipClient {
         .result?.retval;
       if (!raw) throw new Error("No return value");
 
-      return scValToNative(raw) as ProposalDraft;
+      return this.parseProposalDraft(
+        scValToNative(raw) as Record<string, unknown>,
+      );
     });
   }
 
@@ -398,7 +430,9 @@ export class CoSponsorshipClient {
         .result?.retval;
       if (!raw) return [];
 
-      return scValToNative(raw) as ProposalDraft[];
+      return (
+        scValToNative(raw) as Record<string, unknown>[]
+      ).map((draft) => this.parseProposalDraft(draft));
     });
   }
 

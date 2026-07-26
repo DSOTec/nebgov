@@ -1089,6 +1089,38 @@ export function createApp(server: SorobanRpc.Server): express.Application {
   // ReputationClient in the SDK) — these endpoints exist for fast,
   // aggregate reads such as the leaderboard and score history timeline.
 
+  // GET /reputation/leaderboard?limit=50&offset=0
+  app.get(
+    "/reputation/leaderboard",
+    async (req: Request, res: Response): Promise<void> => {
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const key = `reputation:leaderboard:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.reputation, async () => {
+          const result = await pool.query(
+            `SELECT proposer_address, reputation_score, last_updated_ledger
+             FROM proposer_reputation
+             ORDER BY reputation_score DESC
+             LIMIT $1 OFFSET $2`,
+            [limit, offset],
+          );
+          return {
+            leaderboard: result.rows.map((r, i) => ({
+              rank: offset + i + 1,
+              address: r.proposer_address,
+              reputation_score: r.reputation_score,
+              last_updated_ledger: r.last_updated_ledger,
+            })),
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   // GET /reputation/:address
   app.get(
     "/reputation/:address",
@@ -1165,38 +1197,6 @@ export function createApp(server: SorobanRpc.Server): express.Application {
           history: result.rows,
           pagination: { limit, offset, hasMore: result.rows.length === limit },
         });
-      } catch {
-        res.status(500).json({ error: "Internal server error" });
-      }
-    },
-  );
-
-  // GET /reputation/leaderboard?limit=50&offset=0
-  app.get(
-    "/reputation/leaderboard",
-    async (req: Request, res: Response): Promise<void> => {
-      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
-      const offset = Math.max(Number(req.query.offset ?? 0), 0);
-      const key = `reputation:leaderboard:${limit}:${offset}`;
-      try {
-        const data = await cached(key, TTL.reputation, async () => {
-          const result = await pool.query(
-            `SELECT proposer_address, reputation_score, last_updated_ledger
-             FROM proposer_reputation
-             ORDER BY reputation_score DESC
-             LIMIT $1 OFFSET $2`,
-            [limit, offset],
-          );
-          return {
-            leaderboard: result.rows.map((r, i) => ({
-              rank: offset + i + 1,
-              address: r.proposer_address,
-              reputation_score: r.reputation_score,
-              last_updated_ledger: r.last_updated_ledger,
-            })),
-          };
-        });
-        res.json(data);
       } catch {
         res.status(500).json({ error: "Internal server error" });
       }

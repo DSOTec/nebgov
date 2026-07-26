@@ -756,7 +756,7 @@ export interface VoterHistory {
 
 // ─── Proposer Reputation Types (Issue #771) ──────────────────────────────────
 
-/** On-chain proposer reputation record, as returned by {@link ReputationClient.getProposerReputation}. */
+/** On-chain proposer reputation record returned by ReputationClient.getProposerReputation. */
 export interface ProposerReputation {
   proposer: string;
   totalProposals: number;

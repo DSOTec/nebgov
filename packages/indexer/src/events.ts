@@ -317,6 +317,9 @@ export async function processEvents(
             case "ProposalExecuted":
               await handleProposalExecuted(topics);
               break;
+            case "ProposalCancelled":
+              await handleProposalCancelled(event);
+              break;
             case "DelegateChanged":
               await handleDelegateChanged(event, topics);
               break;
@@ -517,6 +520,30 @@ async function handleProposalExecuted(topics: unknown[]): Promise<void> {
   invalidate(`proposal_votes:${proposalId}`);
   invalidatePattern("proposals:");
   broadcast({ type: "proposal_executed", data: { proposal_id: proposalId } });
+}
+
+async function handleProposalCancelled(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  const data = scValToNative(event.value) as
+    | [bigint, bigint, bigint]
+    | { proposal_id?: bigint }
+    | Map<string, bigint>;
+  const proposalId = Array.isArray(data)
+    ? data[0]
+    : data instanceof Map
+      ? data.get("proposal_id")
+      : data?.proposal_id;
+
+  if (proposalId === undefined) {
+    throw new Error("ProposalCancelled event is missing proposal_id");
+  }
+
+  const id = String(proposalId);
+  await pool.query("UPDATE proposals SET cancelled = true WHERE id = $1", [id]);
+  invalidate(`proposal_votes:${id}`);
+  invalidatePattern("proposals:");
+  broadcast({ type: "proposal_cancelled", data: { proposal_id: id } });
 }
 
 async function handleDelegateChanged(

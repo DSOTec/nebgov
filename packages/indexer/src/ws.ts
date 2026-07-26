@@ -108,7 +108,9 @@ function matchesFilter(event: WsEvent, filter: SubscriptionFilter): boolean {
 }
 
 export function broadcast(event: WsEvent): void {
-  const payload = JSON.stringify(event);
+  const payload = JSON.stringify(event, (_key, value) =>
+    typeof value === "bigint" ? value.toString() : value,
+  );
   for (const client of clients) {
     if (
       client.socket.readyState === WebSocket.OPEN &&

@@ -12,12 +12,25 @@
  */
 import { Address, nativeToScVal, scValToNative, SorobanDataBuilder, xdr } from "@stellar/stellar-sdk";
 import { LedgerClock } from "../ledger";
-import { cloneStore, MockLedgerStore } from "./store";
+import { cloneStore, MockLedgerStore, ProposalRecord } from "./store";
 import { MockContractError } from "./errors";
 import { governorExecutor } from "./governor-executor";
 import { timelockExecutor } from "./timelock-executor";
 import { tokenVotesExecutor } from "./token-votes-executor";
-import { encAddress, encBool, encEnum, encI128, encMap, encU32, encU64, encVec, encVoid } from "./codec";
+import {
+  encAddress,
+  encBool,
+  encBytes,
+  encEnum,
+  encI128,
+  encMap,
+  encString,
+  encSymbol,
+  encU32,
+  encU64,
+  encVec,
+  encVoid,
+} from "./codec";
 
 interface DecodedInvocation {
   contractAddress: string;
@@ -90,6 +103,28 @@ function encodeGovernorSettings(settings: MockLedgerStore["governor"]["settings"
   });
 }
 
+function encodeProposal(proposal: ProposalRecord): xdr.ScVal {
+  return encMap({
+    id: encU64(proposal.id),
+    proposer: encAddress(proposal.proposer),
+    description: encString(proposal.description),
+    description_hash: encBytes(Buffer.from(proposal.descriptionHash, "hex")),
+    metadata_uri: encString(proposal.metadataUri),
+    targets: encVec(proposal.targets.map(encAddress)),
+    fn_names: encVec(proposal.fnNames.map(encSymbol)),
+    calldatas: encVec(proposal.calldatas.map(encBytes)),
+    start_ledger: encU32(proposal.startLedger),
+    end_ledger: encU32(proposal.endLedger),
+    votes_for: encI128(proposal.votesFor),
+    votes_against: encI128(proposal.votesAgainst),
+    votes_abstain: encI128(proposal.votesAbstain),
+    executed: encBool(proposal.executed),
+    cancelled: encBool(proposal.cancelled),
+    queued: encBool(proposal.queued),
+    op_ids: encVec(proposal.opIds.map((id) => encBytes(Buffer.from(id, "hex")))),
+  });
+}
+
 function encodeReturn(contract: "governor" | "timelock" | "votes", fnName: string, value: unknown): xdr.ScVal {
   if (contract === "governor") {
     switch (fnName) {
@@ -122,7 +157,7 @@ function encodeReturn(contract: "governor" | "timelock" | "votes", fnName: strin
       case "has_voted":
         return encBool(value as boolean);
       case "get_proposal":
-        return encVoid();
+        return encodeProposal(value as ProposalRecord);
       case "proposals_count_by_state":
         return encVoid();
       default:
