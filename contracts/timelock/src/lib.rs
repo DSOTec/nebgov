@@ -100,6 +100,7 @@ pub struct FailedOperation {
     pub op_id: Bytes,
     pub target: Address,
     pub fn_name: Symbol,
+    pub data: Bytes,
     pub failure_reason: Symbol,
     pub failed_at_ledger: u32,
     pub retry_count: u32,
@@ -297,10 +298,14 @@ impl TimelockContract {
             .storage()
             .persistent()
             .get(&DataKey::BatchOperation(batch_op_id.clone()))
-            .expect("batch not found");
+            .unwrap_or_else(|| env.panic_with_error(TimelockError::PredecessorNotFound));
 
-        assert!(!batch.executed && !batch.cancelled, "invalid state");
-        assert!(env.ledger().timestamp() >= batch.ready_at, "not ready");
+        if batch.executed || batch.cancelled {
+            env.panic_with_error(TimelockError::OperationExpired);
+        }
+        if env.ledger().timestamp() < batch.ready_at {
+            env.panic_with_error(TimelockError::PredecessorNotComplete);
+        }
 
         let mut completed_ops: Vec<Bytes> = Vec::new(&env);
         // No failures accumulate here: any sub-call panic reverts the whole tx.
@@ -369,16 +374,17 @@ impl TimelockContract {
             .storage()
             .persistent()
             .get(&state_key)
-            .expect("batch state not found");
+            .unwrap_or_else(|| env.panic_with_error(TimelockError::PredecessorNotFound));
 
-        assert!(state.recovery_mode, "not in recovery mode");
-        assert!(
-            env.ledger().sequence() < state.recovery_deadline,
-            "recovery deadline expired"
-        );
+        if !state.recovery_mode {
+            env.panic_with_error(TimelockError::BatchInRecoveryMode);
+        }
+        if env.ledger().sequence() >= state.recovery_deadline {
+            env.panic_with_error(TimelockError::BatchRecoveryExpired);
+        }
 
         let failed_op_index = Self::failed_op_index(&state.failed_ops, &op_id)
-            .expect("operation not in failed list");
+            .unwrap_or_else(|| env.panic_with_error(TimelockError::InvalidPredecessorList));
 
         let failed_op = state.failed_ops.get(failed_op_index).unwrap().clone();
         let mut retry_count: u32 = env
@@ -392,8 +398,9 @@ impl TimelockContract {
             .persistent()
             .set(&DataKey::FailedOpRetryCount(op_id.clone()), &retry_count);
 
-        // Invoke the contract. If it fails, the transaction reverts (standard behavior).
-        env.invoke_contract::<()>(&failed_op.target, &failed_op.fn_name, Vec::new(&env));
+        // Invoke the contract with original calldata. If it fails, the transaction reverts (standard behavior).
+        let args = Self::decode_invocation_args(&env, &failed_op.data);
+        env.invoke_contract::<()>(&failed_op.target, &failed_op.fn_name, args);
 
         // If we reach here, invocation succeeded
         state.failed_ops.remove(failed_op_index);
@@ -429,10 +436,10 @@ impl TimelockContract {
             .storage()
             .persistent()
             .get(&state_key)
-            .expect("batch state not found");
+            .unwrap_or_else(|| env.panic_with_error(TimelockError::PredecessorNotFound));
 
         let failed_op_index = Self::failed_op_index(&state.failed_ops, &op_id)
-            .expect("operation not in failed list");
+            .unwrap_or_else(|| env.panic_with_error(TimelockError::InvalidPredecessorList));
 
         state.failed_ops.remove(failed_op_index);
         emit_failed_op_skipped(&env, &batch_op_id, &op_id);
@@ -554,10 +561,14 @@ impl TimelockContract {
             .storage()
             .persistent()
             .get(&DataKey::Operation(op_id.clone()))
-            .expect("operation not found");
+            .unwrap_or_else(|| env.panic_with_error(TimelockError::PredecessorNotFound));
 
-        assert!(!op.executed && !op.cancelled, "invalid state");
-        assert!(env.ledger().timestamp() >= op.ready_at, "not ready");
+        if op.executed || op.cancelled {
+            env.panic_with_error(TimelockError::OperationExpired);
+        }
+        if env.ledger().timestamp() < op.ready_at {
+            env.panic_with_error(TimelockError::PredecessorNotComplete);
+        }
         if env.ledger().timestamp() > op.expires_at {
             env.panic_with_error(TimelockError::OperationExpired);
         }
@@ -568,6 +579,11 @@ impl TimelockContract {
             if !pred_done {
                 env.panic_with_error(TimelockError::PredecessorNotDone);
             }
+        }
+
+        // Also check schedule_with_deps predecessors
+        if !Self::all_predecessors_done(env.clone(), op_id.clone()) {
+            env.panic_with_error(TimelockError::PredecessorNotDone);
         }
 
         op.executed = true;
@@ -594,10 +610,14 @@ impl TimelockContract {
             .storage()
             .persistent()
             .get(&DataKey::BatchOperation(batch_op_id.clone()))
-            .expect("batch not found");
+            .unwrap_or_else(|| env.panic_with_error(TimelockError::PredecessorNotFound));
 
-        assert!(!batch.executed && !batch.cancelled, "invalid state");
-        assert!(env.ledger().timestamp() >= batch.ready_at, "not ready");
+        if batch.executed || batch.cancelled {
+            env.panic_with_error(TimelockError::OperationExpired);
+        }
+        if env.ledger().timestamp() < batch.ready_at {
+            env.panic_with_error(TimelockError::PredecessorNotComplete);
+        }
         if env.ledger().timestamp() > batch.expires_at {
             env.panic_with_error(TimelockError::OperationExpired);
         }
