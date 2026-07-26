@@ -5,7 +5,6 @@
  */
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Keypair } from "@stellar/stellar-sdk";
 import { isValidStellarAddress } from "../lib/utils/stellarAddress";
 import toast from "react-hot-toast";
 import { VotesClient, type Network } from "@nebgov/sdk";
@@ -41,16 +40,6 @@ function getVotesClientFromEnv(): VotesClient {
   });
 }
 
-function getDelegateSigner(): Keypair {
-  const secret = process.env.NEXT_PUBLIC_DELEGATE_SECRET_KEY;
-  if (!secret) {
-    throw new Error(
-      "Missing NEXT_PUBLIC_DELEGATE_SECRET_KEY (required to sign delegation txs in this demo app).",
-    );
-  }
-  return Keypair.fromSecret(secret);
-}
-
 function explorerTxUrl(txHash: string): string {
   const network = process.env.NEXT_PUBLIC_NETWORK || "testnet";
   const base =
@@ -71,7 +60,7 @@ export function DelegateModal({
   const [delegatee, setDelegatee] = useState(prefillAddress || "");
   const [delegateeError, setDelegateeError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const { isConnected, publicKey } = useWallet();
+  const { isConnected, publicKey, signTransaction } = useWallet();
 
   useEffect(() => {
     setDelegatee(prefillAddress ?? "");
@@ -108,8 +97,7 @@ export function DelegateModal({
       }
 
       const client = getVotesClientFromEnv();
-      const signer = getDelegateSigner();
-      const txHash = await client.delegate(signer, delegatee.trim());
+      const txHash = await client.delegateWithSign(publicKey, delegatee.trim(), signTransaction);
       toast.success(
         <div>
           Delegation submitted!{" "}
@@ -138,8 +126,7 @@ export function DelegateModal({
     setSubmitting(true);
     try {
       const client = getVotesClientFromEnv();
-      const signer = getDelegateSigner();
-      const txHash = await client.undelegate(signer);
+      const txHash = await client.undelegateWithSign(publicKey, signTransaction);
       toast.success(
         <div>
           Undelegation submitted!{" "}

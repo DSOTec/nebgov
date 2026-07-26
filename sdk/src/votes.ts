@@ -128,6 +128,46 @@ export class VotesClient {
   }
 
   /**
+   * Wallet-signing variant of {@link undelegate}: takes the signer's public
+   * key plus a callback that signs an unsigned XDR envelope (e.g. a
+   * wallet-kit `signTransaction`) instead of a raw {@link Keypair}. Mirrors
+   * `submitWithSign` in `coSponsorship.ts`.
+   *
+   * @returns The Stellar transaction hash, suitable for linking to a block explorer.
+   */
+  async undelegateWithSign(
+    signerPublicKey: string,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signerPublicKey);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "undelegate",
+            nativeToScVal(signerPublicKey, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      const signedXdr = await signUnsignedXdr(prepared.toXDR());
+      const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+
+      const result = await this.server.sendTransaction(signed);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
    * Delegate voting power to another address (or self-delegate to activate votes).
    *
    * @returns The Stellar transaction hash, suitable for linking to a block explorer.
@@ -153,6 +193,48 @@ export class VotesClient {
       const prepared = await this.server.prepareTransaction(tx);
       prepared.sign(signer);
       const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Wallet-signing variant of {@link delegate}: takes the signer's public
+   * key plus a callback that signs an unsigned XDR envelope (e.g. a
+   * wallet-kit `signTransaction`) instead of a raw {@link Keypair}. Mirrors
+   * `submitWithSign` in `coSponsorship.ts`.
+   *
+   * @returns The Stellar transaction hash, suitable for linking to a block explorer.
+   */
+  async delegateWithSign(
+    signerPublicKey: string,
+    delegatee: string,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signerPublicKey);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "delegate",
+            nativeToScVal(signerPublicKey, { type: "address" }),
+            nativeToScVal(delegatee, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      const signedXdr = await signUnsignedXdr(prepared.toXDR());
+      const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+
+      const result = await this.server.sendTransaction(signed);
       if (result.status === "ERROR") {
         throw parseVotesError(result);
       }

@@ -14,6 +14,7 @@ jest.mock("../lib/wallet-context", () => ({
     isConnected: true,
     publicKey: VALID_ADDRESS_2,
     connect: jest.fn(),
+    signTransaction: jest.fn(),
   }),
 }));
 
@@ -24,20 +25,10 @@ jest.mock("react-hot-toast", () => ({
 
 jest.mock("@nebgov/sdk", () => ({
   VotesClient: jest.fn().mockImplementation(() => ({
-    delegate: jest.fn().mockResolvedValue("txhash123"),
-    undelegate: jest.fn().mockResolvedValue("txhash456"),
+    delegateWithSign: jest.fn().mockResolvedValue("txhash123"),
+    undelegateWithSign: jest.fn().mockResolvedValue("txhash456"),
   })),
 }));
-
-jest.mock("@stellar/stellar-sdk", () => {
-  const actual = jest.requireActual("@stellar/stellar-sdk");
-  return {
-    ...actual,
-    Keypair: {
-      fromSecret: jest.fn().mockReturnValue({ publicKey: () => VALID_ADDRESS_2 }),
-    },
-  };
-});
 
 const defaultProps = {
   open: true,
@@ -51,7 +42,6 @@ describe("DelegateModal — Stellar address validation", () => {
     process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS = "CTEST_GOV";
     process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS = "CTEST_TL";
     process.env.NEXT_PUBLIC_VOTES_ADDRESS = "CTEST_VOTES";
-    process.env.NEXT_PUBLIC_DELEGATE_SECRET_KEY = "SCZANGBA5RLKJRDNKPNM5HXJFKZGKZAZBCM5YWKZQKZQKZQKZQKZQKZ";
   });
 
   describe("rendering", () => {

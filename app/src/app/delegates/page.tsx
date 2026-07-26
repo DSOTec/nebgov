@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { VotesClient, type TopDelegate, type Network } from "@nebgov/sdk";
 import { useWallet } from "../../lib/wallet-context";
@@ -66,64 +66,66 @@ export default function DelegatesPage() {
   const [client, setClient] = useState<VotesClient | null>(null);
   const { publicKey } = useWallet();
 
-  useEffect(() => {
-    async function fetchDelegates() {
-      try {
-        const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
-        const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
-        const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-        const network = (process.env.NEXT_PUBLIC_NETWORK ||
-          "testnet") as Network;
-        const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
+  const fetchDelegates = useCallback(async () => {
+    setLoading(true);
+    try {
+      const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
+      const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
+      const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
+      const network = (process.env.NEXT_PUBLIC_NETWORK ||
+        "testnet") as Network;
+      const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
-        if (!governorAddress || !timelockAddress || !votesAddress) {
-          throw new Error("Missing required environment variables.");
-        }
-
-        const votesClient = new VotesClient({
-          governorAddress,
-          timelockAddress,
-          votesAddress,
-          network,
-          ...(rpcUrl && { rpcUrl }),
-        });
-        setClient(votesClient);
-
-        const supply = await votesClient.getTotalSupply();
-        setTotalSupply(supply);
-
-        const result = await votesClient.getTopDelegates({ limit: PAGE_SIZE, offset: 0 });
-        const page = Array.isArray(result) ? result : result.delegates;
-        setDelegates(page);
-        if (!Array.isArray(result)) {
-          setCursor(result.nextCursor);
-          setDelegationMap(result.delegationMap);
-        }
-        let total = 0n;
-        for (const d of page) {
-          total += d.votingPower;
-        }
-        setTotalDelegated(total);
-        setOffset(PAGE_SIZE);
-        setHasMore(page.length === PAGE_SIZE);
-
-        if (publicKey) {
-          setCurrentDelegatee(await votesClient.getDelegatee(publicKey));
-        } else {
-          setCurrentDelegatee(null);
-        }
-      } catch (err) {
-        console.error("Error fetching delegates:", err);
-        setError(
-          err instanceof Error ? err.message : "Failed to load delegates",
-        );
-      } finally {
-        setLoading(false);
+      if (!governorAddress || !timelockAddress || !votesAddress) {
+        throw new Error("Missing required environment variables.");
       }
-    }
 
-    fetchDelegates();
+      const votesClient = new VotesClient({
+        governorAddress,
+        timelockAddress,
+        votesAddress,
+        network,
+        ...(rpcUrl && { rpcUrl }),
+      });
+      setClient(votesClient);
+
+      const supply = await votesClient.getTotalSupply();
+      setTotalSupply(supply);
+
+      const result = await votesClient.getTopDelegates({ limit: PAGE_SIZE, offset: 0 });
+      const page = Array.isArray(result) ? result : result.delegates;
+      setDelegates(page);
+      if (!Array.isArray(result)) {
+        setCursor(result.nextCursor);
+        setDelegationMap(result.delegationMap);
+      }
+      let total = 0n;
+      for (const d of page) {
+        total += d.votingPower;
+      }
+      setTotalDelegated(total);
+      setOffset(PAGE_SIZE);
+      setHasMore(page.length === PAGE_SIZE);
+
+      if (publicKey) {
+        setCurrentDelegatee(await votesClient.getDelegatee(publicKey));
+      } else {
+        setCurrentDelegatee(null);
+      }
+      setError(null);
+    } catch (err) {
+      console.error("Error fetching delegates:", err);
+      setError(
+        err instanceof Error ? err.message : "Failed to load delegates",
+      );
+    } finally {
+      setLoading(false);
+    }
   }, [publicKey]);
+
+  useEffect(() => {
+    fetchDelegates();
+  }, [fetchDelegates]);
 
   async function loadMore() {
     if (!client || loadingMore) return;
@@ -338,7 +340,7 @@ export default function DelegatesPage() {
       <DelegateModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
-        onDelegated={() => window.location.reload()}
+        onDelegated={fetchDelegates}
         prefillAddress={prefillAddress}
         currentDelegatee={currentDelegatee}
         onOpenGasless={() => {
@@ -350,7 +352,7 @@ export default function DelegatesPage() {
       <GaslessDelegateModal
         open={gaslessModalOpen}
         onClose={() => setGaslessModalOpen(false)}
-        onDelegated={() => window.location.reload()}
+        onDelegated={fetchDelegates}
         prefillAddress={prefillAddress}
         topDelegates={delegates}
       />
