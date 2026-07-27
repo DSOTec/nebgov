@@ -419,6 +419,79 @@ export class DelegationSigClient {
   }
 
   /**
+   * Admin: enable or disable the relayer whitelist.
+   * When enabled, only whitelisted relayers may submit signed permits.
+   * Calls `set_relayer_whitelist_enabled` on the contract.
+   */
+  async setRelayerWhitelistEnabled(
+    admin: Keypair,
+    enabled: boolean,
+  ): Promise<DelegationTxResult> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(admin.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "set_relayer_whitelist_enabled",
+            nativeToScVal(admin.publicKey(), { type: "address" }),
+            nativeToScVal(enabled, { type: "bool" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(admin);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return { hash: result.hash };
+    });
+  }
+
+  /**
+   * Admin: add or remove a relayer from the whitelist.
+   * Calls `set_relayer_whitelisted` on the contract.
+   */
+  async setRelayerWhitelisted(
+    admin: Keypair,
+    relayer: string,
+    whitelisted: boolean,
+  ): Promise<DelegationTxResult> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(admin.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "set_relayer_whitelisted",
+            nativeToScVal(admin.publicKey(), { type: "address" }),
+            nativeToScVal(relayer, { type: "address" }),
+            nativeToScVal(whitelisted, { type: "bool" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(admin);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return { hash: result.hash };
+    });
+  }
+
+  /**
    * Invalidate all outstanding signed permits for `delegator` by bumping
    * their nonce past anything they may have already signed. Only the
    * delegator themself may call this — it requires their own signature.
