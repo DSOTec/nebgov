@@ -22,6 +22,8 @@ const TOPICS = {
   configUpdated: "ConfigUpdated",
   paused: "Paused",
   unpaused: "Unpaused",
+  reputationUpdated: "ReputationUpdated",
+  effectiveThresholdChanged: "EffectiveThresholdChanged",
   legacyProposalCreated: "prop_crtd",
   legacyVoteCast: "vote",
   legacyProposalExecuted: "execute",
@@ -91,6 +93,19 @@ export interface GovernorUpgradedEventData {
 export interface ConfigUpdatedEventData {
   oldSettings: GovernorSettings;
   newSettings: GovernorSettings;
+}
+
+export interface ReputationUpdatedEventData {
+  proposer: string;
+  oldScore: number;
+  newScore: number;
+  reason: string;
+}
+
+export interface EffectiveThresholdChangedEventData {
+  proposer: string;
+  oldThreshold: bigint;
+  newThreshold: bigint;
 }
 
 export interface PauseEventData {
@@ -640,6 +655,57 @@ export function subscribeToConfigUpdated(
   opts: SubscriptionOptions
 ): () => void {
   return createTopicSubscription(governorAddress, TOPICS.configUpdated, callback, opts);
+}
+
+export function parseReputationUpdatedEvent(
+  event: SorobanEvent
+): ReputationUpdatedEventData | null {
+  if (event.topic[0] !== TOPICS.reputationUpdated || !isRecord(event.value)) return null;
+
+  const oldScore = toNumber(event.value.old_score);
+  const newScore = toNumber(event.value.new_score);
+
+  if (oldScore === null || newScore === null) return null;
+
+  return {
+    proposer: String(event.value.proposer ?? event.topic[1] ?? ""),
+    oldScore,
+    newScore,
+    reason: String(event.value.reason ?? ""),
+  };
+}
+
+export function subscribeToReputationUpdated(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.reputationUpdated, callback, opts);
+}
+
+export function parseEffectiveThresholdChangedEvent(
+  event: SorobanEvent
+): EffectiveThresholdChangedEventData | null {
+  if (event.topic[0] !== TOPICS.effectiveThresholdChanged || !isRecord(event.value)) return null;
+
+  const oldThreshold = toBigInt(event.value.old_threshold);
+  const newThreshold = toBigInt(event.value.new_threshold);
+
+  if (oldThreshold === null || newThreshold === null) return null;
+
+  return {
+    proposer: String(event.value.proposer ?? event.topic[1] ?? ""),
+    oldThreshold,
+    newThreshold,
+  };
+}
+
+export function subscribeToEffectiveThresholdChanged(
+  governorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(governorAddress, TOPICS.effectiveThresholdChanged, callback, opts);
 }
 
 export function parsePauseEvent(event: SorobanEvent): PauseEventData | null {

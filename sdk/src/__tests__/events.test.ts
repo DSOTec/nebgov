@@ -1,5 +1,6 @@
 import {
   parseConfigUpdatedEvent,
+  parseEffectiveThresholdChangedEvent,
   parseGovernorUpgradedEvent,
   parsePauseEvent,
   parseProposalCancelledEvent,
@@ -7,6 +8,7 @@ import {
   parseProposalExecutedEvent,
   parseProposalExpiredEvent,
   parseProposalQueuedEvent,
+  parseReputationUpdatedEvent,
   parseUnpauseEvent,
   parseVoteCastEvent,
   SorobanEvent,
@@ -209,6 +211,66 @@ describe("event parsers", () => {
         proposalPeriodDuration: 10000,
       },
     });
+  });
+
+  it("parses ReputationUpdated", () => {
+    const event: SorobanEvent = {
+      ledger: 9,
+      contractId: "C123",
+      topic: ["ReputationUpdated", "GPROPOSER"],
+      value: {
+        proposer: "GPROPOSER",
+        old_score: 10,
+        new_score: 25,
+        reason: "proposal_executed",
+      },
+    };
+
+    expect(parseReputationUpdatedEvent(event)).toEqual({
+      proposer: "GPROPOSER",
+      oldScore: 10,
+      newScore: 25,
+      reason: "proposal_executed",
+    });
+  });
+
+  it("parseReputationUpdatedEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 9,
+      contractId: "C123",
+      topic: ["SomethingElse", "GPROPOSER"],
+      value: { proposer: "GPROPOSER", old_score: 10, new_score: 25, reason: "x" },
+    };
+    expect(parseReputationUpdatedEvent(event)).toBeNull();
+  });
+
+  it("parses EffectiveThresholdChanged", () => {
+    const event: SorobanEvent = {
+      ledger: 9,
+      contractId: "C123",
+      topic: ["EffectiveThresholdChanged", "GPROPOSER"],
+      value: {
+        proposer: "GPROPOSER",
+        old_threshold: "1000",
+        new_threshold: "800",
+      },
+    };
+
+    expect(parseEffectiveThresholdChangedEvent(event)).toEqual({
+      proposer: "GPROPOSER",
+      oldThreshold: 1000n,
+      newThreshold: 800n,
+    });
+  });
+
+  it("parseEffectiveThresholdChangedEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 9,
+      contractId: "C123",
+      topic: ["SomethingElse", "GPROPOSER"],
+      value: { proposer: "GPROPOSER", old_threshold: "1000", new_threshold: "800" },
+    };
+    expect(parseEffectiveThresholdChangedEvent(event)).toBeNull();
   });
 
   it("parses Paused", () => {
