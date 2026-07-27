@@ -641,6 +641,78 @@ fn test_diamond_dag_validates_successfully() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn test_incomplete_predecessor_closure_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let op_a = Bytes::from_slice(&env, b"op_a");
+    let op_b = Bytes::from_slice(&env, b"op_b");
+    let op_c = Bytes::from_slice(&env, b"op_c");
+
+    // A depends on B, B depends on C
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_c.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
+
+    let mut a_preds = Vec::new(&env);
+    a_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_a, &a_preds);
+
+    // Only pass A and B, omitting C (which is a transitive predecessor)
+    let mut op_ids = Vec::new(&env);
+    op_ids.push_back(op_a.clone());
+    op_ids.push_back(op_b.clone());
+
+    // This should panic with IncompletePredecessorClosure error
+    let _result = client.validate_dependency_dag(&op_ids);
+}
+
+#[test]
+fn test_cycle_path_contains_only_unsorted_nodes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let op_x = Bytes::from_slice(&env, b"op_x");
+    let op_a = Bytes::from_slice(&env, b"op_a");
+    let op_b = Bytes::from_slice(&env, b"op_b");
+
+    // X has no predecessors (can be sorted)
+    // A and B form a cycle: A depends on B, B depends on A
+    let mut a_preds = Vec::new(&env);
+    a_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_a, &a_preds);
+
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_a.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
+
+    let mut op_ids = Vec::new(&env);
+    op_ids.push_back(op_x.clone());
+    op_ids.push_back(op_a.clone());
+    op_ids.push_back(op_b.clone());
+
+    let result = client.validate_dependency_dag(&op_ids);
+    assert!(!result.valid, "cycle should be detected");
+    
+    // cycle_path should only contain A and B (the unsorted nodes), not X
+    assert_eq!(result.cycle_path.len(), 2);
+    assert!(result.cycle_path.contains(&op_a));
+    assert!(result.cycle_path.contains(&op_b));
+    assert!(!result.cycle_path.contains(&op_x));
+}
+
+#[test]
 fn test_cross_batch_predecessor_resolved() {
     let env = Env::default();
     env.mock_all_auths();

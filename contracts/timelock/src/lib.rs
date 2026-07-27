@@ -32,6 +32,8 @@ pub enum TimelockError {
     OperationAlreadyInBatch = 14,
     /// Invalid predecessor list provided.
     InvalidPredecessorList = 15,
+    /// The provided op_ids set does not include all transitive predecessors.
+    IncompletePredecessorClosure = 16,
 }
 
 /// A scheduled timelock operation.
@@ -349,7 +351,18 @@ impl TimelockContract {
     /// `cycle_path` when the operations can be topologically ordered. When a
     /// cycle is present, `valid = false` and `cycle_path` lists the operations
     /// that could not be ordered.
+    ///
+    /// # Panics
+    ///
+    /// Panics with `TimelockError::IncompletePredecessorClosure` if the provided
+    /// `op_ids` does not include all transitive predecessors of the operations.
+    /// This is required for accurate cycle detection, as Kahn's algorithm only
+    /// considers edges where both endpoints are present in the input set.
     pub fn validate_dependency_dag(env: Env, op_ids: Vec<Bytes>) -> DagValidationResult {
+        if !Self::has_full_predecessor_closure(&env, &op_ids) {
+            env.panic_with_error(TimelockError::IncompletePredecessorClosure);
+        }
+        
         match Self::kahn_topological_sort(&env, &op_ids) {
             Ok(_) => {
                 emit_dependency_dag_validated(&env, &Bytes::new(&env), op_ids.len());
@@ -358,11 +371,11 @@ impl TimelockContract {
                     cycle_path: Vec::new(&env),
                 }
             }
-            Err(()) => {
-                emit_cycle_detected(&env, &op_ids);
+            Err(unsorted) => {
+                emit_cycle_detected(&env, &unsorted);
                 DagValidationResult {
                     valid: false,
-                    cycle_path: op_ids,
+                    cycle_path: unsorted,
                 }
             }
         }
@@ -1105,17 +1118,64 @@ impl TimelockContract {
         None
     }
 
+    /// Compute the transitive predecessor closure for a set of nodes.
+    ///
+    /// Returns `true` if `op_ids` includes all transitive predecessors of every
+    /// node in the set. Returns `false` if any predecessor is missing.
+    ///
+    /// This is necessary because Kahn's algorithm only considers edges where
+    /// both endpoints are present in the input set. If a predecessor is omitted,
+    /// cycles involving that predecessor will not be detected.
+    fn has_full_predecessor_closure(env: &Env, op_ids: &Vec<Bytes>) -> bool {
+        // Collect all transitive predecessors using a worklist approach
+        let mut external_preds: Vec<Bytes> = Vec::new(env);
+        let mut worklist: Vec<Bytes> = op_ids.clone();
+        
+        while !worklist.is_empty() {
+            let node = worklist.get(0).unwrap();
+            worklist.remove(0);
+            
+            let pred_key = DataKey::OperationPredecessors(node.clone());
+            if let Some(preds) = env.storage().persistent().get::<_, Vec<Bytes>>(&pred_key) {
+                let pred_len = preds.len();
+                let mut p = 0u32;
+                while p < pred_len {
+                    let pred = preds.get(p).unwrap();
+                    // Only track predecessors that are NOT in the original op_ids set
+                    if Self::index_of(op_ids, &pred).is_none() {
+                        // Check if this external predecessor is already tracked
+                        if Self::index_of(&external_preds, &pred).is_none() {
+                            external_preds.push_back(pred.clone());
+                            // Add to worklist to process its predecessors too
+                            worklist.push_back(pred.clone());
+                        }
+                    } else {
+                        // Predecessor is in op_ids, but we still need to check its predecessors
+                        // to ensure we don't miss external predecessors deeper in the chain
+                        if Self::index_of(&worklist, &pred).is_none() && Self::index_of(&external_preds, &pred).is_none() {
+                            worklist.push_back(pred.clone());
+                        }
+                    }
+                    p += 1;
+                }
+            }
+        }
+        
+        // If we found any external predecessors, the closure is incomplete
+        external_preds.is_empty()
+    }
+
     /// Kahn's algorithm for topological sorting over `nodes`.
     ///
     /// Edges are derived from each node's stored predecessor list: an edge
     /// `pred -> node` means `pred` must complete before `node`.  Returns the
-    /// sorted order on success, or an empty `Vec` wrapped in `Err` when a cycle
-    /// prevents a full ordering.  The caller reports the offending node set.
+    /// sorted order on success, or the set of unsorted nodes (nodes - sorted)
+    /// in `Err` when a cycle prevents a full ordering.
     ///
     /// Parallel index-aligned `Vec`s stand in for the `HashMap`s a std
     /// implementation would use, since Soroban's `Vec` exposes only indexed
     /// get/set access.
-    fn kahn_topological_sort(env: &Env, nodes: &Vec<Bytes>) -> Result<Vec<Bytes>, ()> {
+    fn kahn_topological_sort(env: &Env, nodes: &Vec<Bytes>) -> Result<Vec<Bytes>, Vec<Bytes>> {
         let node_count = nodes.len();
 
         // in_degree[i] corresponds to nodes.get(i).
@@ -1187,8 +1247,18 @@ impl TimelockContract {
         }
 
         // If not every node was processed, a cycle exists.
+        // Compute the set of unsorted nodes (nodes - sorted).
         if sorted.len() != node_count {
-            return Err(());
+            let mut unsorted: Vec<Bytes> = Vec::new(env);
+            let mut j = 0u32;
+            while j < node_count {
+                let node = nodes.get(j).unwrap();
+                if Self::index_of(&sorted, node).is_none() {
+                    unsorted.push_back(node.clone());
+                }
+                j += 1;
+            }
+            return Err(unsorted);
         }
 
         Ok(sorted)
