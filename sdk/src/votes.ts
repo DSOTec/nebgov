@@ -1037,12 +1037,16 @@ export class VotesClient {
   async getDelegationSnapshot(
     delegatee: string,
     atLedger: number,
+    offset: number = 0,
+    limit: number = 100,
   ): Promise<RegistryDelegatorInfo[]> {
     return this.simulateRead(
       "get_delegation_snapshot",
       [
         nativeToScVal(delegatee, { type: "address" }),
         nativeToScVal(atLedger, { type: "u32" }),
+        nativeToScVal(offset, { type: "u32" }),
+        nativeToScVal(limit, { type: "u32" }),
       ],
       (raw) => (scValToNative(raw) as Record<string, unknown>[]).map((e) => this.parseRegistryDelegatorInfo(e)),
       [],
