@@ -256,4 +256,12 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
       expect(onClose).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe("permit invalidation", () => {
+    it("invokes the invalidation action when the user requests it", async () => {
+      render(<GaslessDelegateModal {...defaultProps} />);
+      await userEvent.click(screen.getByRole("button", { name: /invalidate pending gasless permits/i }));
+      expect(mockInvalidateAllPermits).toHaveBeenCalledTimes(1);
+    });
+  });
 });

@@ -121,6 +121,35 @@ export function GaslessDelegateModal({
     }
   }
 
+  async function handleInvalidatePermits() {
+    try {
+      if (!isConnected || !publicKey) {
+        toast.error("Connect your wallet first.");
+        return;
+      }
+
+      const result = await invalidateAllPermits();
+      toast.success(
+        <div>
+          Pending gasless permits were invalidated.{" "}
+          <a
+            href={explorerTxUrl(result.txHash)}
+            target="_blank"
+            rel="noreferrer"
+            className="underline"
+          >
+            View on Explorer →
+          </a>
+        </div>,
+        { duration: 8000 },
+      );
+      onClose();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      toast.error(`Permit invalidation failed: ${msg}`);
+    }
+  }
+
   return (
     <div
       ref={dialogRef}
@@ -231,6 +260,15 @@ export function GaslessDelegateModal({
               {submitting ? "Signing…" : "Delegate for free"}
             </button>
           </div>
+
+          <button
+            type="button"
+            onClick={() => void handleInvalidatePermits()}
+            disabled={submitting || !isConnected || !publicKey}
+            className="w-full rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+          >
+            {submitting ? "Submitting…" : "Invalidate pending gasless permits"}
+          </button>
         </form>
       </div>
     </div>

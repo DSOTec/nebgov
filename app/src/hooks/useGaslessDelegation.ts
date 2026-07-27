@@ -32,7 +32,7 @@ export const EXPIRY_PRESET_LABELS: Record<ExpiryPreset, string> = {
 
 export interface GaslessDelegationResult {
   txHash: string;
-  nonce: number;
+  nonce?: number;
 }
 
 export interface GaslessPreflightResult {
@@ -62,7 +62,7 @@ function getDelegationSigClientFromEnv(): DelegationSigClient {
  * transaction itself, it only signs an authorization off-chain.
  */
 export function useGaslessDelegation() {
-  const { isConnected, publicKey, signAuthEntry } = useWallet();
+  const { isConnected, publicKey, signTransaction } = useWallet();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
