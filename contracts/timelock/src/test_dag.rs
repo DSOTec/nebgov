@@ -694,7 +694,7 @@ fn test_cross_batch_predecessor_resolved() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #1)")]
+#[should_panic(expected = "Error(Contract, #11)")]
 fn test_execute_blocked_by_incomplete_schedule_with_deps_predecessor() {
     let env = Env::default();
     env.mock_all_auths();
