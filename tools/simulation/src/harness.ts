@@ -23,6 +23,12 @@ export interface GovernorSimulationSettings {
   guardian?: string;
   /** Ledgers a Succeeded-but-unqueued proposal has before it expires. Defaults to 120_960 (~7 days). */
   proposalGracePeriod?: number;
+  /** Whether quorum is derived from an oracle-backed USD floor. */
+  useDynamicQuorum?: boolean;
+  /** Reflector oracle contract used for dynamic quorum. */
+  reflectorOracle?: string | null;
+  /** Minimum USD quorum amount when dynamic quorum is enabled. */
+  minQuorumUsd?: bigint;
   /** Minimum ledgers between proposals from the same proposer. Defaults to 100. */
   proposalCooldown?: number;
   /** Maximum proposals per proposer per period. Defaults to 5. */
@@ -127,6 +133,9 @@ export class SimulationHarness {
       guardian,
       voteType: s.voteType,
       proposalGracePeriod: s.proposalGracePeriod ?? DEFAULT_GRACE_PERIOD,
+      useDynamicQuorum: s.useDynamicQuorum ?? false,
+      reflectorOracle: s.reflectorOracle ?? null,
+      minQuorumUsd: s.minQuorumUsd ?? 0n,
       proposalCooldown: s.proposalCooldown ?? DEFAULT_COOLDOWN,
       maxProposalsPerPeriod: s.maxProposalsPerPeriod ?? DEFAULT_MAX_PER_PERIOD,
       proposalPeriodDuration: s.proposalPeriodDuration ?? DEFAULT_PERIOD_DURATION,

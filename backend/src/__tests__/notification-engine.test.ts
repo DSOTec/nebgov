@@ -1,6 +1,12 @@
 import { ruleMatchesEvent } from "../notifications/engine";
 import { renderNotification } from "../notifications/templates";
-import type { IndexerEvent, NotificationRule, TriggerType } from "../notifications/rules";
+import {
+  EVENT_TYPE_TO_TRIGGER,
+  triggerConfigSchema,
+  type IndexerEvent,
+  type NotificationRule,
+  type TriggerType,
+} from "../notifications/rules";
 
 function makeRule(overrides: Partial<NotificationRule> = {}): NotificationRule {
   return {
@@ -34,6 +40,27 @@ function makeEvent(overrides: Partial<IndexerEvent> = {}): IndexerEvent {
 }
 
 describe("ruleMatchesEvent", () => {
+  it("preserves u64 stream IDs and i128 thresholds as exact strings", () => {
+    const parsed = triggerConfigSchema.parse({
+      stream_id: "18446744073709551615",
+      min_amount: "170141183460469231731687303715884105727",
+    });
+
+    expect(parsed).toEqual({
+      stream_id: "18446744073709551615",
+      min_amount: "170141183460469231731687303715884105727",
+    });
+  });
+
+  it("maps single and batch stream spends to the treasury trigger", () => {
+    expect(EVENT_TYPE_TO_TRIGGER.stream_spend).toEqual([
+      "treasury_stream_spend",
+    ]);
+    expect(EVENT_TYPE_TO_TRIGGER.stream_batch).toEqual([
+      "treasury_stream_spend",
+    ]);
+  });
+
   it("matches proposal_created with no proposer filter", () => {
     const rule = makeRule({ trigger_type: "proposal_created" });
     const event = makeEvent({ event_type: "ProposalCreated" });
@@ -117,6 +144,38 @@ describe("ruleMatchesEvent", () => {
     expect(ruleMatchesEvent(rule, nonMatching)).toBe(false);
   });
 
+  it("filters treasury stream spends by stream and minimum amount", () => {
+    const rule = makeRule({
+      trigger_type: "treasury_stream_spend",
+      trigger_config: { stream_id: "7", min_amount: "100" },
+    });
+    const matching = makeEvent({
+      event_type: "stream_spend",
+      payload: {
+        topics: ["stream_spend"],
+        value: ["7", "GRECIPIENT", "150"],
+      },
+    });
+    const tooSmall = makeEvent({
+      event_type: "stream_spend",
+      payload: {
+        topics: ["stream_spend"],
+        value: ["7", "GRECIPIENT", "99"],
+      },
+    });
+    const wrongStream = makeEvent({
+      event_type: "stream_batch",
+      payload: {
+        topics: ["stream_batch"],
+        value: ["8", "1000", 2],
+      },
+    });
+
+    expect(ruleMatchesEvent(rule, matching)).toBe(true);
+    expect(ruleMatchesEvent(rule, tooSmall)).toBe(false);
+    expect(ruleMatchesEvent(rule, wrongStream)).toBe(false);
+  });
+
   it("matches proposal_ending_soon only within the configured ledger window", () => {
     const rule = makeRule({
       trigger_type: "proposal_ending_soon",
@@ -170,5 +229,21 @@ describe("renderNotification", () => {
     const event = makeEvent({ payload: { topics: ["x"], value: { proposal_id: "42" } } });
     const message = renderNotification("proposal_created", event);
     expect(message.actionUrl).toBe("/proposal/42");
+  });
+
+  it("renders exact treasury stream spend details", () => {
+    const event = makeEvent({
+      event_type: "stream_batch",
+      payload: {
+        topics: ["stream_batch"],
+        value: ["7", "170141183460469231731687303715884105727", 2],
+      },
+    });
+    const message = renderNotification("treasury_stream_spend", event);
+
+    expect(message.body).toContain(
+      "170141183460469231731687303715884105727",
+    );
+    expect(message.actionUrl).toBe("/treasury/streams/7");
   });
 });

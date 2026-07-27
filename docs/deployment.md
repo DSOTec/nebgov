@@ -227,7 +227,10 @@ services:
     environment:
       DATABASE_URL: postgresql://nebgov_prod:${POSTGRES_PASSWORD}@db:5432/nebgov_prod
       STELLAR_RPC_URL: https://soroban-rpc.mainnet.stellar.gateway.fm
+      STELLAR_NETWORK_PASSPHRASE: "Public Global Stellar Network ; September 2015"
       GOVERNOR_ADDRESS: ${GOVERNOR_ADDRESS}
+      TREASURY_ADDRESS: ${TREASURY_ADDRESS}
+      TREASURY_SIMULATION_ACCOUNT: ${TREASURY_SIMULATION_ACCOUNT}
       TIMELOCK_ADDRESS: ${TIMELOCK_ADDRESS}
       POLL_INTERVAL_MS: 5000
       PORT: 3002
@@ -291,6 +294,9 @@ Run a smoke-test checklist before announcing the deployment complete:
 | Indexer | `DATABASE_URL` | Yes | PostgreSQL connection string |
 | Indexer | `STELLAR_RPC_URL` | Yes | Dedicated RPC endpoint |
 | Indexer | `GOVERNOR_ADDRESS` | Yes | Governor contract address to index |
+| Indexer | `TREASURY_ADDRESS` | No | Treasury contract address to index |
+| Indexer | `TREASURY_SIMULATION_ACCOUNT` | With treasury | Funded account used for treasury read simulations |
+| Indexer | `STELLAR_NETWORK_PASSPHRASE` | No | Network passphrase for treasury read simulations |
 | Indexer | `TIMELOCK_ADDRESS` | No | Timelock contract address to index |
 | Indexer | `POLL_INTERVAL_MS` | No | Polling interval |
 | Indexer | `PORT` | No | Indexer listen port |

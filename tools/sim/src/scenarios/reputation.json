@@ -24,6 +24,7 @@
     { "type": "AdvanceLedger", "ledgers": 2 },
     { "type": "Vote", "actor": "voter1", "proposal_id": 1, "support": "Against" },
     { "type": "AdvanceLedger", "ledgers": 6 },
+    { "type": "ExpectState", "proposal_id": 1, "expected_state": "Defeated" },
     { "type": "AssertReputationScore", "actor": "proposer", "min_score": -40, "max_score": -20 },
     { "type": "AdvanceLedger", "ledgers": 50 },
     { "type": "Propose", "actor": "proposer", "targets": ["target"], "fn_names": ["noop"], "description": "Proposal 2: Will succeed" },
@@ -31,9 +32,10 @@
     { "type": "Vote", "actor": "voter1", "proposal_id": 2, "support": "For" },
     { "type": "Vote", "actor": "voter2", "proposal_id": 2, "support": "For" },
     { "type": "AdvanceLedger", "ledgers": 6 },
-    { "type": "AssertReputationScore", "actor": "proposer", "min_score": 0, "max_score": 200 },
+    { "type": "ExpectState", "proposal_id": 2, "expected_state": "Succeeded" },
     { "type": "Queue", "actor": "proposer", "proposal_id": 2 },
-    { "type": "AdvanceLedger", "ledgers": 150 },
+    { "type": "AssertReputationScore", "actor": "proposer", "min_score": 0, "max_score": 200 },
+    { "type": "AdvanceLedger", "ledgers": 1 },
     { "type": "Execute", "actor": "proposer", "proposal_id": 2 },
     { "type": "AssertReputationScore", "actor": "proposer", "min_score": 50, "max_score": 300 }
   ]

@@ -76,8 +76,8 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
 
     it("renders top delegate quick-pick buttons when topDelegates is provided", () => {
       const topDelegates = [
-        { address: VALID_ADDRESS, delegatedVotes: BigInt(1000) },
-        { address: VALID_ADDRESS_2, delegatedVotes: BigInt(500) },
+        { address: VALID_ADDRESS, votingPower: 1000n, baseVotes: 1000n, delegatorCount: 1 },
+        { address: VALID_ADDRESS_2, votingPower: 500n, baseVotes: 500n, delegatorCount: 1 },
       ];
       render(<GaslessDelegateModal {...defaultProps} topDelegates={topDelegates} />);
       expect(screen.getAllByRole("button").length).toBeGreaterThan(2);
@@ -205,7 +205,9 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
 
   describe("top delegate quick-pick", () => {
     it("fills the input when a top delegate button is clicked", async () => {
-      const topDelegates = [{ address: VALID_ADDRESS, delegatedVotes: BigInt(1000) }];
+      const topDelegates = [
+        { address: VALID_ADDRESS, votingPower: 1000n, baseVotes: 1000n, delegatorCount: 1 },
+      ];
       render(<GaslessDelegateModal {...defaultProps} topDelegates={topDelegates} />);
       const shortAddr = `${VALID_ADDRESS.slice(0, 4)}...${VALID_ADDRESS.slice(-4)}`;
       const pickBtn = screen.getByRole("button", { name: shortAddr });

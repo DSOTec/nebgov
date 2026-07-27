@@ -3,12 +3,11 @@ import { z } from "zod";
 /**
  * Trigger types the notification engine can evaluate.
  *
- * `guardian_veto`, `treasury_stream_spend`, and `contract_paused` are
+ * `guardian_veto` and `contract_paused` are
  * accepted here and stored on rules like any other trigger, but nothing
  * currently writes those event types into the indexer's `event_log` — the
- * governor contract has no guardian-veto event, the treasury contract only
- * indexes batched transfers (not per-stream `stream_spend` calls), and there
- * is no pause event wired up yet. Rules using these triggers are valid and
+ * governor contract has no guardian-veto event and there is no pause event
+ * wired up yet. Rules using these triggers are valid and
  * persisted but will not fire until a future indexer change emits the
  * corresponding events, matching how `top_delegate_share_bps` was left at 0
  * in the analytics module rather than faked.
@@ -47,6 +46,13 @@ export type ProposalState = (typeof PROPOSAL_STATES)[number];
 export const CHANNEL_TYPES = ["in_app", "email", "webhook", "telegram"] as const;
 export type ChannelType = (typeof CHANNEL_TYPES)[number];
 
+const uintStringSchema = z
+  .union([
+    z.string().trim().regex(/^\d+$/),
+    z.number().int().nonnegative().safe(),
+  ])
+  .transform(String);
+
 export const triggerConfigSchema = z
   .object({
     proposer: z.string().trim().min(1).optional(),
@@ -56,8 +62,8 @@ export const triggerConfigSchema = z
     ledgers_remaining: z.coerce.number().int().min(1).optional(),
     proposal_id: z.coerce.number().int().min(0).optional(),
     voter: z.string().trim().min(1).optional(),
-    stream_id: z.coerce.number().int().min(0).optional(),
-    min_amount: z.coerce.number().int().min(0).optional(),
+    stream_id: uintStringSchema.optional(),
+    min_amount: uintStringSchema.optional(),
     delegatee: z.string().trim().min(1).optional(),
   })
   .strict();
@@ -161,6 +167,8 @@ export const EVENT_TYPE_TO_TRIGGER: Record<string, TriggerType[]> = {
   GovernorUpgraded: ["contract_upgraded"],
   DelegationRegistered: ["delegation_received"],
   DelegationRevoked: ["delegation_lost"],
+  stream_spend: ["treasury_stream_spend"],
+  stream_batch: ["treasury_stream_spend"],
 };
 
 export const STATE_CHANGE_EVENTS: Record<string, ProposalState> = {

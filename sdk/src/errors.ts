@@ -568,9 +568,25 @@ export class CoSponsorshipError extends Error {
 export function parseCoSponsorshipError(
   raw: SorobanRpcError | string | null | undefined,
   cause?: unknown,
+  operation?: string,
 ): CoSponsorshipError {
   const contractCode = extractContractErrorCode(raw);
   if (contractCode !== null) {
+    if (
+      operation === "finalize_draft" &&
+      (contractCode === GovernorErrorCode.ProposalRateLimited ||
+        contractCode === GovernorErrorCode.ContractPaused)
+    ) {
+      const governorMessage =
+        GOVERNOR_MESSAGES[contractCode as GovernorErrorCode] ??
+        `Governor contract error #${contractCode}`;
+      return new CoSponsorshipError(
+        CoSponsorshipErrorCode.TransactionFailed,
+        `Governor rejected the underlying proposal: ${governorMessage}`,
+        cause,
+      );
+    }
+
     const code = contractCode as CoSponsorshipErrorCode;
     const message =
       CO_SPONSORSHIP_MESSAGES[code] ?? `Co-sponsorship contract error #${contractCode}`;

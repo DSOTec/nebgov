@@ -36,6 +36,10 @@ impl MockTarget {
             .get(&symbol_short!("value"))
             .unwrap_or(0)
     }
+
+    pub fn return_value() -> i128 {
+        42
+    }
 }
 
 #[test]
@@ -141,6 +145,32 @@ fn test_batch_op_id_is_deterministic() {
         &salt2,
     );
     assert_ne!(id1, id3);
+}
+
+#[test]
+fn test_execute_accepts_target_return_value() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = env.register(MockTarget, ());
+    let op_id = client.schedule(
+        &governor,
+        &target,
+        &Bytes::new(&env),
+        &Symbol::new(&env, "return_value"),
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"return-value"),
+    );
+
+    client.execute(&governor, &op_id);
+    assert!(client.is_done(&op_id));
 }
 
 #[test]

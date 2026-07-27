@@ -697,6 +697,22 @@ impl GovernorContract {
 
         Self::validate_action(&env, &targets, &fn_names, &calldatas);
 
+        // Apply the same reputation-adjusted threshold check as propose()
+        // (#849). Without this, a proposer whose effective_threshold exceeds
+        // the flat proposal_threshold can bypass the anti-spam system by
+        // creating a draft and having co-sponsors pool exactly the flat
+        // threshold's worth of power.
+        let proposer_votes = Self::compute_proposer_votes(&env, &proposer);
+        let threshold: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::ProposalThreshold)
+            .unwrap_or(0);
+        let effective_threshold = reputation::get_effective_threshold(&env, &proposer, threshold);
+        if proposer_votes < effective_threshold {
+            env.panic_with_error(GovernorError::ProposalThresholdNotMet);
+        }
+
         Self::create_proposal_internal(
             &env,
             &proposer,

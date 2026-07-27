@@ -315,6 +315,11 @@ export const governorExecutor = {
     return store.governor.settings;
   },
 
+  get_proposal(store: MockLedgerStore, _clock: LedgerClock, _caller: string, args: unknown[]): ProposalRecord {
+    const [proposalId] = args as [bigint];
+    return mustGetProposal(store, proposalId);
+  },
+
   get_quorum(store: MockLedgerStore, clock: LedgerClock, _caller: string, args: unknown[]): bigint {
     const [proposalId] = args as [bigint];
     const proposal = mustGetProposal(store, proposalId);

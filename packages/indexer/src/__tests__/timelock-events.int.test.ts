@@ -1,4 +1,4 @@
-import { SorobanRpc, nativeToScVal, xdr } from "@stellar/stellar-sdk";
+import { SorobanRpc, StrKey, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { initDb, pool } from "../db";
 import { processEvents } from "../events";
 
@@ -44,8 +44,8 @@ describe("timelock event indexing (integration)", () => {
     return;
   }
 
-  const TIMELOCK = "CTIMELOCKTESTADDRESS0000000000000000000000000000000000000000";
-  const GOVERNOR = "CGOVERNORTESTADDRESS00000000000000000000000000000000000000";
+  const TIMELOCK = StrKey.encodeContract(Buffer.alloc(32, 6));
+  const GOVERNOR = StrKey.encodeContract(Buffer.alloc(32, 7));
 
   beforeAll(async () => {
     await initDb();

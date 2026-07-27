@@ -16,6 +16,7 @@ import {
 } from "../types";
 import { GovernorClient, toBigInt } from "./governor-client";
 import { getProposalState, getLatestLedger } from "./queries";
+import { parseGovernorError } from "../errors";
 
 /**
  * Simulate `cast_vote` and return the estimated resource cost without submitting.
@@ -124,7 +125,7 @@ export async function castVote(
     prepared.sign(signer);
     const result = await client.server.sendTransaction(prepared);
     if (result.status === "ERROR") {
-      throw new Error(`castVote failed: ${JSON.stringify(result)}`);
+      throw parseGovernorError(result);
     }
     await client.pollForConfirmation(result.hash);
     return result.hash;

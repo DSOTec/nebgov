@@ -130,7 +130,7 @@ export class VotesClient {
   /**
    * Wallet-signing variant of {@link undelegate}: takes the signer's public
    * key plus a callback that signs an unsigned XDR envelope (e.g. a
-   * wallet-kit `signTransaction`) instead of a raw {@link Keypair}. Mirrors
+   * wallet-kit `signTransaction`) instead of a raw Keypair. Mirrors
    * `submitWithSign` in `coSponsorship.ts`.
    *
    * @returns The Stellar transaction hash, suitable for linking to a block explorer.
@@ -203,7 +203,7 @@ export class VotesClient {
   /**
    * Wallet-signing variant of {@link delegate}: takes the signer's public
    * key plus a callback that signs an unsigned XDR envelope (e.g. a
-   * wallet-kit `signTransaction`) instead of a raw {@link Keypair}. Mirrors
+   * wallet-kit `signTransaction`) instead of a raw Keypair. Mirrors
    * `submitWithSign` in `coSponsorship.ts`.
    *
    * @returns The Stellar transaction hash, suitable for linking to a block explorer.

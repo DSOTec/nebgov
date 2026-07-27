@@ -53,6 +53,21 @@ describe("WebSocket broadcast server", () => {
     ws.close();
   });
 
+  it("serializes bigint event fields as decimal strings", async () => {
+    const ws = await openClient(serverUrl);
+    const messagePromise = nextMessage(ws);
+
+    broadcast({
+      type: "proposal_created",
+      data: { id: 1n, proposal_threshold: 1000n },
+    });
+
+    expect(JSON.parse(await messagePromise)).toMatchObject({
+      data: { id: "1", proposal_threshold: "1000" },
+    });
+    ws.close();
+  });
+
   it("broadcasts to multiple connected clients", async () => {
     const ws1 = await openClient(serverUrl);
     const ws2 = await openClient(serverUrl);
@@ -105,6 +120,35 @@ describe("WebSocket broadcast server", () => {
     broadcast({ type: "vote_cast", data: { proposal_id: "5", voter: "G2" } });
     const raw = await messagePromise;
     expect(JSON.parse(raw).data.proposal_id).toBe("5");
+    ws.close();
+  });
+
+  it("filters treasury events by streamId", async () => {
+    const ws = await openClient(serverUrl);
+    ws.send(JSON.stringify({ streamId: "7" }));
+    await waitMs(50);
+
+    broadcast({
+      type: "stream_spend",
+      data: { stream_id: "8", amount: "10" },
+    });
+    let received = false;
+    ws.once("message", () => {
+      received = true;
+    });
+    await waitMs(100);
+    expect(received).toBe(false);
+
+    const messagePromise = nextMessage(ws);
+    broadcast({
+      type: "stream_spend",
+      data: { stream_id: "7", amount: "20" },
+    });
+    const raw = await messagePromise;
+    expect(JSON.parse(raw)).toMatchObject({
+      type: "stream_spend",
+      data: { stream_id: "7", amount: "20" },
+    });
     ws.close();
   });
 

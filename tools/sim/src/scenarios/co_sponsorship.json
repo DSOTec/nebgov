@@ -17,7 +17,7 @@
   "actors": [
     { "name": "creator", "initial_balance": 100, "delegate_to": null, "role": "Proposer" },
     { "name": "cosponsor1", "initial_balance": 200, "delegate_to": null, "role": "TokenHolder" },
-    { "name": "cosponsor2", "initial_balance": 250, "delegate_to": null, "role": "TokenHolder" },
+    { "name": "cosponsor2", "initial_balance": 300, "delegate_to": null, "role": "TokenHolder" },
     { "name": "voter", "initial_balance": 1000, "delegate_to": null, "role": "TokenHolder" }
   ],
   "steps": [

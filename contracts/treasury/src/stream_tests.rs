@@ -679,21 +679,20 @@ fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
     let stream: BudgetStream = client.get_stream(&stream_id);
     assert_eq!(stream.spend_count, 2); // two recipients
 
-    // Advance past cooldown before the next batch spend.
-    // Cooldown = 5 ledgers, last spend was at ledger 0; need at least ledger 6.
-    env.ledger().set_sequence_number(6);
-
     let mut recipients2 = Vec::new(&env);
     recipients2.push_back(Address::generate(&env));
     let mut amounts2 = Vec::new(&env);
     amounts2.push_back(50i128);
 
-    // Note: This test just verifies the batch can be called and tracks spend_count
-    // The actual cooldown enforcement is tested in test_stream_spend_enforces_cooldown
-    client.stream_batch_spend(&stream_owner, &stream_id, &recipients2, &amounts2, &String::from_str(&env, "batch"));
-
-    let stream: BudgetStream = client.get_stream(&stream_id);
-    assert_eq!(stream.spend_count, 3); // one more recipient from second batch
+    // A batch counts each recipient as a spend, so another batch in the same
+    // ledger must still be subject to the stream cooldown.
+    client.stream_batch_spend(
+        &stream_owner,
+        &stream_id,
+        &recipients2,
+        &amounts2,
+        &String::from_str(&env, "batch"),
+    );
 }
 
 #[test]

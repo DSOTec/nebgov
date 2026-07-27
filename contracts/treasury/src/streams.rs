@@ -702,7 +702,14 @@ pub fn get_stream_report(env: Env, stream_id: u64) -> StreamBudgetReport {
 /// Query: get treasury-wide budget summary.
 pub fn get_budget_summary(env: Env) -> TreasuryBudgetSummary {
     let total_streams = get_stream_count(&env) as u32;
-    let active_streams = get_active_stream_count(&env);
+    let current_ledger = env.ledger().sequence();
+    let mut active_streams = 0u32;
+    for stream_id in 1..=u64::from(total_streams) {
+        let stream = load_stream(&env, stream_id);
+        if stream.is_active && !stream.is_revoked && current_ledger <= stream.end_ledger {
+            active_streams += 1;
+        }
+    }
 
     let token_list = get_token_list(&env);
     let mut allocated_by_token: Vec<(Address, i128)> = Vec::new(&env);

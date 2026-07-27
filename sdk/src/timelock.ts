@@ -9,13 +9,63 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
-import { GovernorConfig, Network, PartialBatchExecutionState, DependencyGraph } from "./types";
+import { GovernorConfig, Network, PartialBatchExecutionState, FailedOperation, DependencyGraph, DependencyEdge } from "./types";
 import {
   TimelockError,
   TimelockErrorCode,
   parseTimelockError,
 } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
+
+/**
+ * Map a raw Soroban struct (snake_case keys from #[contracttype]) to a
+ * camelCase {@link PartialBatchExecutionState}.
+ *
+ * `scValToNative` returns objects keyed by the exact symbol name stored in the
+ * contract's XDR — no automatic case conversion is performed.
+ */
+function mapPartialBatchState(raw: any): PartialBatchExecutionState {
+  return {
+    batchOpId: Buffer.from(raw.batch_op_id).toString("hex"),
+    totalOps: Number(raw.total_ops),
+    completedOps: (raw.completed_ops ?? []).map((b: Uint8Array) =>
+      Buffer.from(b).toString("hex"),
+    ),
+    failedOps: (raw.failed_ops ?? []).map(mapFailedOp),
+    pendingOps: (raw.pending_ops ?? []).map((b: Uint8Array) =>
+      Buffer.from(b).toString("hex"),
+    ),
+    recoveryMode: Boolean(raw.recovery_mode),
+    recoveryDeadline: Number(raw.recovery_deadline),
+  };
+}
+
+function mapFailedOp(raw: any): FailedOperation {
+  return {
+    opId: Buffer.from(raw.op_id).toString("hex"),
+    target: String(raw.target),
+    fnName: String(raw.fn_name),
+    failureReason: String(raw.failure_reason),
+    failedAtLedger: Number(raw.failed_at_ledger),
+    retryCount: Number(raw.retry_count),
+  };
+}
+
+function mapDependencyGraph(raw: any): DependencyGraph {
+  return {
+    nodes: (raw.nodes ?? []).map((b: Uint8Array) =>
+      Buffer.from(b).toString("hex"),
+    ),
+    edges: (raw.edges ?? []).map(
+      (e: any): DependencyEdge => ({
+        from: Buffer.from(e.from).toString("hex"),
+        to: Buffer.from(e.to).toString("hex"),
+      }),
+    ),
+  };
+}
 
 const RPC_URLS: Record<Network, string> = {
   mainnet: "https://soroban-rpc.mainnet.stellar.gateway.fm",
@@ -587,7 +637,7 @@ export class TimelockClient {
       if (SorobanRpc.Api.isSimulationError(result)) return null;
       const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
         .result?.retval;
-      return raw ? (scValToNative(raw) as DependencyGraph) : null;
+      return raw ? mapDependencyGraph(scValToNative(raw)) : null;
     });
   }
 
@@ -622,7 +672,21 @@ export class TimelockClient {
         return { valid: false };
       }
 
-      return { valid: true };
+      const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
+        .result?.retval;
+      if (!raw) {
+        return { valid: false };
+      }
+
+      const native = scValToNative(raw) as {
+        valid: boolean;
+        cycle_path?: Uint8Array[];
+      };
+
+      return {
+        valid: native.valid,
+        cyclePath: native.cycle_path?.map((bytes) => Buffer.from(bytes)),
+      };
     });
   }
 
@@ -673,7 +737,7 @@ export class TimelockClient {
         );
       }
 
-      return scValToNative(returnVal) as PartialBatchExecutionState;
+      return mapPartialBatchState(scValToNative(returnVal));
     }, (e) => this.isRetryableSubmissionError(e));
   }
 
@@ -746,7 +810,7 @@ export class TimelockClient {
       if (SorobanRpc.Api.isSimulationError(result)) return null;
       const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
         .result?.retval;
-      return raw ? (scValToNative(raw) as PartialBatchExecutionState) : null;
+      return raw ? mapPartialBatchState(scValToNative(raw)) : null;
     });
   }
 

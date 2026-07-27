@@ -35,6 +35,9 @@ export interface GovernorSettingsState {
   guardian: string;
   voteType: "Simple" | "Extended" | "Quadratic";
   proposalGracePeriod: number;
+  useDynamicQuorum: boolean;
+  reflectorOracle: string | null;
+  minQuorumUsd: bigint;
   proposalCooldown: number;
   maxProposalsPerPeriod: number;
   proposalPeriodDuration: number;

@@ -20,7 +20,7 @@ const TRIGGER_OPTIONS: { value: TriggerType; label: string; description: string 
   { value: "config_updated", label: "Governor config updated", description: "The governor's configuration parameters change." },
   { value: "contract_upgraded", label: "Governor upgraded", description: "The governor contract is upgraded." },
   { value: "guardian_veto", label: "Guardian veto", description: "A guardian vetoes a proposal. (Not yet emitted on-chain.)" },
-  { value: "treasury_stream_spend", label: "Treasury stream spend", description: "A spend is made from a treasury stream. (Not yet emitted on-chain.)" },
+  { value: "treasury_stream_spend", label: "Treasury stream spend", description: "A spend is made from a treasury budget stream." },
   { value: "contract_paused", label: "Contract paused", description: "A governance contract is paused. (Not yet emitted on-chain.)" },
   { value: "proposal_vote_threshold", label: "Vote threshold reached", description: "A proposal reaches a % of quorum. (Not yet computable — see docs.)" },
   { value: "quorum_reached", label: "Quorum reached", description: "A proposal reaches quorum. (Not yet computable — see docs.)" },
@@ -351,6 +351,12 @@ function TriggerConfigFields({
   if (triggerType === "delegation_received" || triggerType === "delegation_lost") {
     fields.push(
       <TextField key="delegatee" label="Your delegatee address (optional — leave blank to match everyone)" value={config.delegatee ?? ""} onChange={(v) => set("delegatee", v)} />,
+    );
+  }
+  if (triggerType === "treasury_stream_spend") {
+    fields.push(
+      <TextField key="stream_id" label="Stream ID (optional)" value={config.stream_id?.toString() ?? ""} onChange={(v) => set("stream_id", v)} />,
+      <TextField key="min_amount" label="Minimum amount in token base units (optional)" value={config.min_amount?.toString() ?? ""} onChange={(v) => set("min_amount", v)} />,
     );
   }
 
