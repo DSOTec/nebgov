@@ -581,9 +581,8 @@ impl TimelockContract {
             }
         }
 
-        // Also check schedule_with_deps predecessors
         if !Self::all_predecessors_done(env.clone(), op_id.clone()) {
-            env.panic_with_error(TimelockError::PredecessorNotDone);
+            env.panic_with_error(TimelockError::PredecessorNotComplete);
         }
 
         op.executed = true;
