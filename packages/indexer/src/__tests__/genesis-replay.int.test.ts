@@ -1,4 +1,4 @@
-import { SorobanRpc, nativeToScVal, xdr } from "@stellar/stellar-sdk";
+import { SorobanRpc, StrKey, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { initDb, pool } from "../db";
 import { processEvents } from "../events";
 
@@ -44,7 +44,7 @@ describe("indexer genesis replay (integration)", () => {
     return;
   }
 
-  const GOVERNOR = "CGOVERNORGENESISREPLAY000000000000000000000000000000000000";
+  const GOVERNOR = StrKey.encodeContract(Buffer.alloc(32, 2));
   const PROPOSER = "GPROPOSERGENESISREPLAY000000000000000000000000000000000000";
   const DELEGATOR = "GDELEGATORGENESISREPLAY00000000000000000000000000000000000";
   const OLD_DELEGATEE = "GOLDDELEGATEEGENESISREPLAY0000000000000000000000000000";

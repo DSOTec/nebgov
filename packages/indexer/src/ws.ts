@@ -43,7 +43,15 @@ export type WsEventType =
   | "timelock_batch_recovery_entered"
   | "timelock_failed_op_retried"
   | "timelock_failed_op_skipped"
-  | "timelock_batch_fully_complete";
+  | "timelock_batch_fully_complete"
+  | "stream_created"
+  | "stream_spend"
+  | "stream_batch"
+  | "stream_revoked"
+  | "stream_extended"
+  | "stream_topped_up"
+  | "stream_exhausted"
+  | "stream_expired";
 
 export interface WsEvent {
   type: WsEventType;
@@ -53,6 +61,7 @@ export interface WsEvent {
 interface SubscriptionFilter {
   types?: WsEventType[];
   proposalId?: string;
+  streamId?: string;
   state?: string;
 }
 
@@ -88,6 +97,10 @@ function matchesFilter(event: WsEvent, filter: SubscriptionFilter): boolean {
     const pid = (event.data as any).proposal_id ?? (event.data as any).id;
     if (String(pid) !== filter.proposalId) return false;
   }
+  if (filter.streamId !== undefined) {
+    const streamId = (event.data as any).stream_id;
+    if (String(streamId) !== filter.streamId) return false;
+  }
   if (filter.state !== undefined) {
     if (EVENT_STATE[event.type] !== filter.state) return false;
   }
@@ -95,7 +108,9 @@ function matchesFilter(event: WsEvent, filter: SubscriptionFilter): boolean {
 }
 
 export function broadcast(event: WsEvent): void {
-  const payload = JSON.stringify(event);
+  const payload = JSON.stringify(event, (_key, value) =>
+    typeof value === "bigint" ? value.toString() : value,
+  );
   for (const client of clients) {
     if (
       client.socket.readyState === WebSocket.OPEN &&
@@ -118,17 +133,23 @@ export function createWsServer(httpServer: HttpServer): WebSocketServer {
         const msg = JSON.parse(raw.toString()) as {
           types?: WsEventType[];
           proposalId?: string;
-          subscribe?: "proposal" | "state";
+          streamId?: string;
+          subscribe?: "proposal" | "stream" | "state";
           proposal_id?: string | number;
+          stream_id?: string | number;
           state?: string;
         };
         if (Array.isArray(msg.types)) entry.filter.types = msg.types;
         if (typeof msg.proposalId === "string")
           entry.filter.proposalId = msg.proposalId;
+        if (typeof msg.streamId === "string")
+          entry.filter.streamId = msg.streamId;
 
         // { subscribe: "proposal", proposal_id: 42 } / { subscribe: "state", state: "Active" }
         if (msg.subscribe === "proposal" && msg.proposal_id !== undefined) {
           entry.filter.proposalId = String(msg.proposal_id);
+        } else if (msg.subscribe === "stream" && msg.stream_id !== undefined) {
+          entry.filter.streamId = String(msg.stream_id);
         } else if (msg.subscribe === "state" && typeof msg.state === "string") {
           entry.filter.state = msg.state;
         }

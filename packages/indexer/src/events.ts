@@ -1,7 +1,17 @@
 import { SorobanRpc, scValToNative } from "@stellar/stellar-sdk";
+import { createHash } from "crypto";
 import { pool } from "./db";
 import { invalidate, invalidatePattern } from "./cache";
 import { broadcast } from "./ws";
+import {
+  getAllStreamSpends,
+  type TreasuryStateReader,
+} from "./treasuryReader";
+import {
+  persistTreasuryStreamEvent,
+  treasuryStreamEventExists,
+  type TreasuryStreamEventRecord,
+} from "./treasuryProjection";
 
 /**
  * Normalises both legacy short-symbol topics (e.g. "prop_crtd") and the newer
@@ -32,6 +42,14 @@ const TOPIC_MAP: Record<string, string> = {
   GovernorUpgraded: "GovernorUpgraded",
   ReputationUpdated: "ReputationUpdated",
   EffectiveThresholdChanged: "EffectiveThresholdChanged",
+  stream_created: "stream_created",
+  stream_spend: "stream_spend",
+  stream_batch: "stream_batch",
+  stream_revoked: "stream_revoked",
+  stream_extended: "stream_extended",
+  stream_topped_up: "stream_topped_up",
+  stream_exhausted: "stream_exhausted",
+  stream_expired: "stream_expired",
 };
 
 export interface IndexerConfig {
@@ -43,6 +61,7 @@ export interface IndexerConfig {
   coSponsorshipAddress?: string;
   tokenVotesAddress?: string;
   timelockAddress?: string;
+  treasuryStateReader?: TreasuryStateReader;
   pollIntervalMs: number;
 }
 
@@ -64,7 +83,7 @@ export async function processEvents(
   config: IndexerConfig,
   startLedger: number,
 ): Promise<number> {
-  let latestLedger = startLedger;
+  let latestLedger = startLedger - 1;
 
   try {
     const contractIds = [config.governorAddress].filter(Boolean);
@@ -88,7 +107,6 @@ export async function processEvents(
 
     for (const event of response.events) {
       const ledger = event.ledger;
-      if (ledger > latestLedger) latestLedger = ledger;
 
       const topics = event.topic.map((t) => scValToNative(t));
       const rawEventType = topics[0] as string;
@@ -130,6 +148,7 @@ export async function processEvents(
         await logToEventLog(eventType, ledger, contractId, event, topics);
       } catch (err) {
         console.error(`Failed to write event_log entry for ${eventType}:`, err);
+        throw err;
       }
 
       try {
@@ -139,25 +158,18 @@ export async function processEvents(
               await handleTreasuryBatchTransfer(event, topics);
               break;
             case "stream_created":
-              await handleStreamCreated(event);
-              break;
             case "stream_spend":
-              await handleStreamSpend(event);
-              break;
             case "stream_batch":
-              await handleStreamBatchSpend(event);
-              break;
             case "stream_revoked":
-              await handleStreamRevoked(event);
-              break;
             case "stream_extended":
-              await handleStreamExtended(event);
-              break;
             case "stream_topped_up":
-              await handleStreamToppedUp(event);
-              break;
             case "stream_exhausted":
-              await handleStreamExhausted(event);
+            case "stream_expired":
+              await handleTreasuryStreamEvent(
+                event,
+                eventType,
+                config.treasuryStateReader,
+              );
               break;
             default:
               break;
@@ -305,6 +317,9 @@ export async function processEvents(
             case "ProposalExecuted":
               await handleProposalExecuted(topics);
               break;
+            case "ProposalCancelled":
+              await handleProposalCancelled(event);
+              break;
             case "DelegateChanged":
               await handleDelegateChanged(event, topics);
               break;
@@ -326,13 +341,38 @@ export async function processEvents(
         }
       } catch (err) {
         console.error(`Failed to process event ${eventType}:`, err);
+        throw err;
       }
+      if (ledger > latestLedger) latestLedger = ledger;
     }
   } catch (err) {
     console.error("Error fetching events:", err);
+    throw err;
   }
 
   return latestLedger;
+}
+
+function indexerEventId(
+  event: SorobanRpc.Api.EventResponse,
+  eventType: string,
+  contractAddress: string | undefined,
+  serializedPayload: string,
+): string {
+  const rpcEventId = (event as SorobanRpc.Api.EventResponse & { id?: string }).id;
+  if (rpcEventId) return rpcEventId;
+  const digest = createHash("sha256")
+    .update(
+      [
+        event.txHash ?? "",
+        String(event.ledger),
+        contractAddress ?? "",
+        eventType,
+        serializedPayload,
+      ].join(":"),
+    )
+    .digest("hex");
+  return `synthetic:${digest}`;
 }
 
 /**
@@ -353,11 +393,28 @@ async function logToEventLog(
     value: scValToNative(event.value),
     tx_hash: event.txHash,
   };
+  const serializedPayload = stringifyJson(payload);
+  const eventId = indexerEventId(
+    event,
+    eventType,
+    contractAddress,
+    serializedPayload,
+  );
 
   await pool.query(
-    `INSERT INTO event_log (event_type, ledger, transaction_hash, contract_address, payload)
-     VALUES ($1, $2, $3, $4, $5)`,
-    [eventType, ledger, event.txHash ?? null, contractAddress ?? "", stringifyJson(payload)],
+    `INSERT INTO event_log (
+       event_id, event_type, ledger, transaction_hash, contract_address, payload
+     )
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (event_id) DO NOTHING`,
+    [
+      eventId,
+      eventType,
+      ledger,
+      event.txHash ?? null,
+      contractAddress ?? "",
+      serializedPayload,
+    ],
   );
 }
 
@@ -463,6 +520,30 @@ async function handleProposalExecuted(topics: unknown[]): Promise<void> {
   invalidate(`proposal_votes:${proposalId}`);
   invalidatePattern("proposals:");
   broadcast({ type: "proposal_executed", data: { proposal_id: proposalId } });
+}
+
+async function handleProposalCancelled(
+  event: SorobanRpc.Api.EventResponse,
+): Promise<void> {
+  const data = scValToNative(event.value) as
+    | [bigint, bigint, bigint]
+    | { proposal_id?: bigint }
+    | Map<string, bigint>;
+  const proposalId = Array.isArray(data)
+    ? data[0]
+    : data instanceof Map
+      ? data.get("proposal_id")
+      : data?.proposal_id;
+
+  if (proposalId === undefined) {
+    throw new Error("ProposalCancelled event is missing proposal_id");
+  }
+
+  const id = String(proposalId);
+  await pool.query("UPDATE proposals SET cancelled = true WHERE id = $1", [id]);
+  invalidate(`proposal_votes:${id}`);
+  invalidatePattern("proposals:");
+  broadcast({ type: "proposal_cancelled", data: { proposal_id: id } });
 }
 
 async function handleDelegateChanged(
@@ -662,120 +743,168 @@ async function handleTreasuryBatchTransfer(
   );
 }
 
-async function handleStreamCreated(
-  event: SorobanRpc.Api.EventResponse,
-): Promise<void> {
-  // Event: value = (stream_id, name, owner)
-  const data = scValToNative(event.value) as unknown[];
-  const streamId = String(data[0] as bigint);
-  const name = String(data[1]);
-  const owner = String(data[2]);
+type TreasuryStreamEventType =
+  | "stream_created"
+  | "stream_spend"
+  | "stream_batch"
+  | "stream_revoked"
+  | "stream_extended"
+  | "stream_topped_up"
+  | "stream_exhausted"
+  | "stream_expired";
 
-  await pool.query(
-    `INSERT INTO treasury_stream_events (event_type, stream_id, owner, name, ledger)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT DO NOTHING`,
-    ["stream_created", streamId, owner, name, event.ledger],
-  );
+function decodeTreasuryStreamEvent(
+  event: SorobanRpc.Api.EventResponse,
+  eventType: TreasuryStreamEventType,
+): TreasuryStreamEventRecord {
+  const raw = scValToNative(event.value);
+  const data = Array.isArray(raw) ? raw : [raw];
+  const expectedFields: Record<TreasuryStreamEventType, number> = {
+    stream_created: 3,
+    stream_spend: 3,
+    stream_batch: 3,
+    stream_revoked: 3,
+    stream_extended: 3,
+    stream_topped_up: 3,
+    stream_exhausted: 1,
+    stream_expired: 2,
+  };
+  if (data.length !== expectedFields[eventType]) {
+    throw new Error(
+      `${eventType} expected ${expectedFields[eventType]} fields, received ${data.length}`,
+    );
+  }
+  const streamId = String(data[0]);
+  if (!streamId || streamId === "undefined") {
+    throw new Error(`${eventType} is missing stream_id`);
+  }
+  const payload = stringifyJson({
+    topics: event.topic.map((topic) => scValToNative(topic)),
+    value: raw,
+    tx_hash: event.txHash,
+  });
+  const record: TreasuryStreamEventRecord = {
+    eventId: indexerEventId(
+      event,
+      eventType,
+      (event as SorobanRpc.Api.EventResponse & { contractId?: string })
+        .contractId,
+      payload,
+    ),
+    eventType,
+    streamId,
+    ledger: event.ledger,
+    transactionHash: event.txHash,
+    payload,
+  };
+
+  switch (eventType) {
+    case "stream_created":
+      record.name = String(data[1]);
+      record.owner = String(data[2]);
+      break;
+    case "stream_spend":
+      record.recipient = String(data[1]);
+      record.amount = String(data[2]);
+      break;
+    case "stream_batch":
+      record.totalAmount = String(data[1]);
+      record.recipientCount = Number(data[2]);
+      if (!Number.isSafeInteger(record.recipientCount)) {
+        throw new Error(`${eventType} has an invalid recipient_count`);
+      }
+      break;
+    case "stream_revoked":
+      record.caller = String(data[1]);
+      record.unspentReturned = String(data[2]);
+      break;
+    case "stream_extended":
+      record.oldEndLedger = Number(data[1]);
+      record.newEndLedger = Number(data[2]);
+      if (
+        !Number.isSafeInteger(record.oldEndLedger) ||
+        !Number.isSafeInteger(record.newEndLedger)
+      ) {
+        throw new Error(`${eventType} has an invalid ledger value`);
+      }
+      break;
+    case "stream_topped_up":
+      record.additionalAmount = String(data[1]);
+      record.newTotalAmount = String(data[2]);
+      break;
+    case "stream_expired":
+      record.unspent = String(data[1]);
+      break;
+    case "stream_exhausted":
+      break;
+  }
+  return record;
 }
 
-async function handleStreamSpend(
-  event: SorobanRpc.Api.EventResponse,
-): Promise<void> {
-  // Event: value = (stream_id, recipient, amount)
-  const data = scValToNative(event.value) as unknown[];
-  const streamId = String(data[0] as bigint);
-  const recipient = String(data[1]);
-  const amount = String(data[2] as bigint);
-
-  await pool.query(
-    `INSERT INTO treasury_stream_events (event_type, stream_id, recipient, amount, ledger)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT DO NOTHING`,
-    ["stream_spend", streamId, recipient, amount, event.ledger],
-  );
+function treasuryBroadcastData(
+  event: TreasuryStreamEventRecord,
+): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    stream_id: event.streamId,
+    ledger: event.ledger,
+  };
+  const fields: Array<[string, unknown]> = [
+    ["name", event.name],
+    ["owner", event.owner],
+    ["recipient", event.recipient],
+    ["amount", event.amount],
+    ["total_amount", event.totalAmount],
+    ["recipient_count", event.recipientCount],
+    ["caller", event.caller],
+    ["unspent_returned", event.unspentReturned],
+    ["old_end_ledger", event.oldEndLedger],
+    ["new_end_ledger", event.newEndLedger],
+    ["additional_amount", event.additionalAmount],
+    ["new_total_amount", event.newTotalAmount],
+    ["unspent", event.unspent],
+  ];
+  for (const [key, value] of fields) {
+    if (value !== undefined) data[key] = value;
+  }
+  return data;
 }
 
-async function handleStreamBatchSpend(
-  event: SorobanRpc.Api.EventResponse,
+async function handleTreasuryStreamEvent(
+  rpcEvent: SorobanRpc.Api.EventResponse,
+  eventType: TreasuryStreamEventType,
+  reader: TreasuryStateReader | undefined,
 ): Promise<void> {
-  // Event: value = (stream_id, total_amount, recipient_count)
-  const data = scValToNative(event.value) as unknown[];
-  const streamId = String(data[0] as bigint);
-  const totalAmount = String(data[1] as bigint);
-  const recipientCount = Number(data[2]);
+  if (!reader) {
+    throw new Error(
+      "Treasury stream indexing requires TREASURY_SIMULATION_ACCOUNT",
+    );
+  }
+  const event = decodeTreasuryStreamEvent(rpcEvent, eventType);
+  if (await treasuryStreamEventExists(event.eventId)) return;
 
-  await pool.query(
-    `INSERT INTO treasury_stream_events (event_type, stream_id, total_amount, recipient_count, ledger)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT DO NOTHING`,
-    ["stream_batch", streamId, totalAmount, recipientCount, event.ledger],
+  const stream = await reader.getStream(event.streamId);
+  const spends =
+    eventType === "stream_spend" || eventType === "stream_batch"
+      ? await getAllStreamSpends(reader, stream)
+      : [];
+  const inserted = await persistTreasuryStreamEvent({
+    event,
+    stream,
+    spends,
+  });
+  if (!inserted) return;
+
+  invalidate(
+    `treasury:stream:${event.streamId}`,
+    "treasury:budget-summary",
   );
-}
-
-async function handleStreamRevoked(
-  event: SorobanRpc.Api.EventResponse,
-): Promise<void> {
-  // Event: value = (stream_id, caller, unspent_returned)
-  const data = scValToNative(event.value) as unknown[];
-  const streamId = String(data[0] as bigint);
-  const caller = String(data[1]);
-  const unspentReturned = String(data[2] as bigint);
-
-  await pool.query(
-    `INSERT INTO treasury_stream_events (event_type, stream_id, caller, unspent_returned, ledger)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT DO NOTHING`,
-    ["stream_revoked", streamId, caller, unspentReturned, event.ledger],
-  );
-}
-
-async function handleStreamExtended(
-  event: SorobanRpc.Api.EventResponse,
-): Promise<void> {
-  // Event: value = (stream_id, old_end, new_end)
-  const data = scValToNative(event.value) as unknown[];
-  const streamId = String(data[0] as bigint);
-  const oldEnd = Number(data[1]);
-  const newEnd = Number(data[2]);
-
-  await pool.query(
-    `INSERT INTO treasury_stream_events (event_type, stream_id, old_end_ledger, new_end_ledger, ledger)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT DO NOTHING`,
-    ["stream_extended", streamId, oldEnd, newEnd, event.ledger],
-  );
-}
-
-async function handleStreamToppedUp(
-  event: SorobanRpc.Api.EventResponse,
-): Promise<void> {
-  // Event: value = (stream_id, additional, new_total)
-  const data = scValToNative(event.value) as unknown[];
-  const streamId = String(data[0] as bigint);
-  const additional = String(data[1] as bigint);
-  const newTotal = String(data[2] as bigint);
-
-  await pool.query(
-    `INSERT INTO treasury_stream_events (event_type, stream_id, additional_amount, new_total_amount, ledger)
-     VALUES ($1, $2, $3, $4, $5)
-     ON CONFLICT DO NOTHING`,
-    ["stream_topped_up", streamId, additional, newTotal, event.ledger],
-  );
-}
-
-async function handleStreamExhausted(
-  event: SorobanRpc.Api.EventResponse,
-): Promise<void> {
-  // Event: value = stream_id
-  const streamId = String(scValToNative(event.value) as bigint);
-
-  await pool.query(
-    `INSERT INTO treasury_stream_events (event_type, stream_id, ledger)
-     VALUES ($1, $2, $3)
-     ON CONFLICT DO NOTHING`,
-    ["stream_exhausted", streamId, event.ledger],
-  );
+  invalidatePattern("treasury:streams:");
+  invalidatePattern(`treasury:stream:${event.streamId}:spends:`);
+  invalidatePattern(`treasury:stream:${event.streamId}:events:`);
+  broadcast({
+    type: eventType,
+    data: treasuryBroadcastData(event),
+  });
 }
 
 // --- Co-sponsorship / draft events (#767) ---
@@ -1052,3 +1181,625 @@ async function handleGovernorUpgraded(
   );
 }
 
+const SNAPSHOT_INTERVAL_LEDGERS = 100;
+
+export async function maybeTakeGovernanceSnapshot(
+  currentLedger: number,
+): Promise<void> {
+  const lastResult = await pool.query(
+    "SELECT ledger FROM governance_snapshots ORDER BY ledger DESC LIMIT 1",
+  );
+  const lastLedger = lastResult.rows[0]?.ledger ?? 0;
+  if (currentLedger - lastLedger < SNAPSHOT_INTERVAL_LEDGERS) return;
+
+  const votesResult = await pool.query(
+    "SELECT COALESCE(SUM(weight), 0) AS total FROM votes",
+  );
+  const totalVotesCast = String(votesResult.rows[0]?.total ?? 0);
+  await pool.query(
+    `INSERT INTO governance_snapshots (ledger, total_votes_cast)
+     VALUES ($1, $2)
+     ON CONFLICT (ledger) DO NOTHING`,
+    [currentLedger, totalVotesCast],
+  );
+  invalidatePattern("analytics:");
+  broadcast({
+    type: "analytics_snapshot_taken",
+    data: { ledger: currentLedger, total_votes_cast: totalVotesCast },
+  });
+}
+
+async function handleLiquidityAdded(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const provider = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeA = Number(data.outcome_a);
+  const outcomeB = Number(data.outcome_b);
+  const amountA = String(data.amount_a as bigint);
+  const amountB = String(data.amount_b as bigint);
+  const lpTokens = String(data.lp_tokens_minted as bigint);
+  await pool.query(
+    `INSERT INTO liquidity_events
+       (event_type, provider, outcome_a, outcome_b, amount_a, amount_b, lp_tokens, ledger)
+     VALUES ('add', $1, $2, $3, $4, $5, $6, $7)`,
+    [provider, outcomeA, outcomeB, amountA, amountB, lpTokens, event.ledger],
+  );
+  broadcast({
+    type: "liquidity_added",
+    data: {
+      provider,
+      outcome_a: outcomeA,
+      outcome_b: outcomeB,
+      amount_a: amountA,
+      amount_b: amountB,
+      lp_tokens: lpTokens,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleLiquidityRemoved(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const provider = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeA = Number(data.outcome_a);
+  const outcomeB = Number(data.outcome_b);
+  const amountA = String(data.amount_a as bigint);
+  const amountB = String(data.amount_b as bigint);
+  const lpTokens = String(data.lp_tokens_burned as bigint);
+  await pool.query(
+    `INSERT INTO liquidity_events
+       (event_type, provider, outcome_a, outcome_b, amount_a, amount_b, lp_tokens, ledger)
+     VALUES ('remove', $1, $2, $3, $4, $5, $6, $7)`,
+    [provider, outcomeA, outcomeB, amountA, amountB, lpTokens, event.ledger],
+  );
+  broadcast({
+    type: "liquidity_removed",
+    data: {
+      provider,
+      outcome_a: outcomeA,
+      outcome_b: outcomeB,
+      amount_a: amountA,
+      amount_b: amountB,
+      lp_tokens: lpTokens,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleSwap(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const trader = topics[1] as string;
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeIn = Number(data.outcome_in);
+  const outcomeOut = Number(data.outcome_out);
+  const amountIn = String(data.amount_in as bigint);
+  const amountOut = String(data.amount_out as bigint);
+  const fee = String(data.fee as bigint);
+  await pool.query(
+    `INSERT INTO swap_events
+       (trader, outcome_in, outcome_out, amount_in, amount_out, fee, ledger)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [trader, outcomeIn, outcomeOut, amountIn, amountOut, fee, event.ledger],
+  );
+  broadcast({
+    type: "swap",
+    data: {
+      trader,
+      outcome_in: outcomeIn,
+      outcome_out: outcomeOut,
+      amount_in: amountIn,
+      amount_out: amountOut,
+      fee,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handlePoolFeeUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const outcomeA = Number(data.outcome_a);
+  const outcomeB = Number(data.outcome_b);
+  const oldFeeBps = Number(data.old_fee_bps);
+  const newFeeBps = Number(data.new_fee_bps);
+  await pool.query(
+    `INSERT INTO pool_fee_updates
+       (outcome_a, outcome_b, old_fee_bps, new_fee_bps, ledger)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [outcomeA, outcomeB, oldFeeBps, newFeeBps, event.ledger],
+  );
+  broadcast({
+    type: "pool_fee_updated",
+    data: {
+      outcome_a: outcomeA,
+      outcome_b: outcomeB,
+      old_fee_bps: oldFeeBps,
+      new_fee_bps: newFeeBps,
+      ledger: event.ledger,
+    },
+  });
+}
+
+function bytesToHex(value: unknown): string {
+  if (!value) return "";
+  if (typeof value === "string") return value;
+  if (Buffer.isBuffer(value)) return value.toString("hex");
+  if (value instanceof Uint8Array || Array.isArray(value)) {
+    return Buffer.from(value as Uint8Array).toString("hex");
+  }
+  return String(value);
+}
+
+function timelockObject(
+  event: SorobanRpc.Api.EventResponse,
+): Record<string, unknown> | unknown[] {
+  return scValToNative(event.value) as Record<string, unknown> | unknown[];
+}
+
+function timelockEventId(
+  event: SorobanRpc.Api.EventResponse,
+  eventType: string,
+): string {
+  return (
+    (event as SorobanRpc.Api.EventResponse & { id?: string }).id ??
+    `${event.txHash ?? "ledger"}:${event.ledger}:${eventType}`
+  );
+}
+
+async function handleTimelockOperationScheduled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const opId = bytesToHex(data?.[0] ?? object?.op_id);
+  const target = String(data?.[1] ?? object?.target ?? "");
+  const fnName = String(data?.[2] ?? object?.fn_name ?? "");
+  const readyAt = String(data?.[3] ?? object?.ready_at ?? 0);
+  const expiresAt = String(data?.[4] ?? object?.expires_at ?? 0);
+  await pool.query(
+    `INSERT INTO timelock_operations
+       (op_id, target, fn_name, ready_at, expires_at, status, ledger)
+     VALUES ($1, $2, $3, $4, $5, 'scheduled', $6)
+     ON CONFLICT (op_id) DO UPDATE SET
+       target = EXCLUDED.target,
+       fn_name = EXCLUDED.fn_name,
+       ready_at = EXCLUDED.ready_at,
+       expires_at = EXCLUDED.expires_at,
+       ledger = EXCLUDED.ledger`,
+    [opId, target, fnName, readyAt, expiresAt, event.ledger],
+  );
+  invalidate(`timelock:op:${opId}`);
+  invalidatePattern("timelock:ops:");
+  broadcast({
+    type: "timelock_operation_scheduled",
+    data: {
+      op_id: opId,
+      target,
+      fn_name: fnName,
+      ready_at: readyAt,
+      expires_at: expiresAt,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleTimelockOperationExecuted(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const opId = bytesToHex(data?.[0] ?? object?.op_id);
+  const caller = String(data?.[1] ?? object?.caller ?? "");
+  await pool.query(
+    `UPDATE timelock_operations
+     SET status = 'executed', executed_by = $2, executed_at_ledger = $3
+     WHERE op_id = $1`,
+    [opId, caller, event.ledger],
+  );
+  invalidate(`timelock:op:${opId}`);
+  invalidatePattern("timelock:ops:");
+  broadcast({
+    type: "timelock_operation_executed",
+    data: { op_id: opId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockOperationCancelled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const opId = bytesToHex(data?.[0] ?? object?.op_id);
+  const caller = String(data?.[1] ?? object?.caller ?? "");
+  await pool.query(
+    `UPDATE timelock_operations
+     SET status = 'cancelled', cancelled_by = $2, cancelled_at_ledger = $3
+     WHERE op_id = $1`,
+    [opId, caller, event.ledger],
+  );
+  invalidate(`timelock:op:${opId}`);
+  invalidatePattern("timelock:ops:");
+  broadcast({
+    type: "timelock_operation_cancelled",
+    data: { op_id: opId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchOperationScheduled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const targets = ((data?.[1] ?? object?.targets ?? []) as unknown[]).map(String);
+  const fnNames = ((data?.[2] ?? object?.fn_names ?? []) as unknown[]).map(String);
+  const readyAt = String(data?.[3] ?? object?.ready_at ?? 0);
+  const expiresAt = String(data?.[4] ?? object?.expires_at ?? 0);
+  await pool.query(
+    `INSERT INTO timelock_batch_operations
+       (batch_op_id, targets, fn_names, ready_at, expires_at, status, ledger)
+     VALUES ($1, $2, $3, $4, $5, 'scheduled', $6)
+     ON CONFLICT (batch_op_id) DO UPDATE SET
+       targets = EXCLUDED.targets,
+       fn_names = EXCLUDED.fn_names,
+       ready_at = EXCLUDED.ready_at,
+       expires_at = EXCLUDED.expires_at,
+       ledger = EXCLUDED.ledger`,
+    [
+      batchOpId,
+      JSON.stringify(targets),
+      JSON.stringify(fnNames),
+      readyAt,
+      expiresAt,
+      event.ledger,
+    ],
+  );
+  invalidate(`timelock:batch:${batchOpId}`);
+  invalidatePattern("timelock:batches:");
+  broadcast({
+    type: "timelock_batch_operation_scheduled",
+    data: {
+      batch_op_id: batchOpId,
+      targets,
+      fn_names: fnNames,
+      ready_at: readyAt,
+      expires_at: expiresAt,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleTimelockBatchOperationExecuted(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const caller = String(data?.[1] ?? object?.caller ?? "");
+  await pool.query(
+    `UPDATE timelock_batch_operations
+     SET status = 'executed', executed_by = $2, executed_at_ledger = $3
+     WHERE batch_op_id = $1`,
+    [batchOpId, caller, event.ledger],
+  );
+  invalidate(`timelock:batch:${batchOpId}`);
+  invalidatePattern("timelock:batches:");
+  broadcast({
+    type: "timelock_batch_operation_executed",
+    data: { batch_op_id: batchOpId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchOperationCancelled(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const caller = String(data?.[1] ?? object?.caller ?? "");
+  await pool.query(
+    `UPDATE timelock_batch_operations
+     SET status = 'cancelled', cancelled_by = $2, cancelled_at_ledger = $3
+     WHERE batch_op_id = $1`,
+    [batchOpId, caller, event.ledger],
+  );
+  invalidate(`timelock:batch:${batchOpId}`);
+  invalidatePattern("timelock:batches:");
+  broadcast({
+    type: "timelock_batch_operation_cancelled",
+    data: { batch_op_id: batchOpId, caller, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockMinDelayUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const oldDelay = String(data?.[0] ?? object?.old_delay ?? 0);
+  const newDelay = String(data?.[1] ?? object?.new_delay ?? 0);
+  broadcast({
+    type: "timelock_min_delay_updated",
+    data: {
+      old_delay: oldDelay,
+      new_delay: newDelay,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleTimelockDependencyDagValidated(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const opCount = Number(data?.[1] ?? object?.op_count ?? 0);
+  await pool.query(
+    `INSERT INTO timelock_dependency_graphs
+       (validation_id, batch_op_id, op_count, has_cycle, ledger)
+     VALUES ($1, $2, $3, FALSE, $4)
+     ON CONFLICT (validation_id) DO NOTHING`,
+    [
+      timelockEventId(event, "DependencyDagValidated"),
+      batchOpId || null,
+      opCount,
+      event.ledger,
+    ],
+  );
+  if (batchOpId) invalidate(`timelock:dag:${batchOpId}`);
+  broadcast({
+    type: "timelock_dependency_dag_validated",
+    data: { batch_op_id: batchOpId, op_count: opCount, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockCycleDetected(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = scValToNative(event.value);
+  const cyclePath = Array.isArray(raw) ? raw.map(bytesToHex) : [];
+  await pool.query(
+    `INSERT INTO timelock_dependency_graphs
+       (validation_id, batch_op_id, op_count, has_cycle, cycle_path, ledger)
+     VALUES ($1, NULL, $2, TRUE, $3, $4)
+     ON CONFLICT (validation_id) DO NOTHING`,
+    [
+      timelockEventId(event, "CycleDetected"),
+      cyclePath.length,
+      JSON.stringify(cyclePath),
+      event.ledger,
+    ],
+  );
+  broadcast({
+    type: "timelock_cycle_detected",
+    data: { cycle_path: cyclePath, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockPartialBatchStarted(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const totalOps = Number(data?.[1] ?? object?.total_ops ?? 0);
+  await pool.query(
+    `INSERT INTO timelock_partial_batch_state
+       (batch_op_id, total_ops, completed_ops, status, started_at_ledger, updated_at_ledger)
+     VALUES ($1, $2, 0, 'in_progress', $3, $3)
+     ON CONFLICT (batch_op_id) DO UPDATE SET
+       total_ops = EXCLUDED.total_ops,
+       status = 'in_progress',
+       updated_at_ledger = EXCLUDED.updated_at_ledger`,
+    [batchOpId, totalOps, event.ledger],
+  );
+  invalidate(`timelock:partial_state:${batchOpId}`);
+  broadcast({
+    type: "timelock_partial_batch_started",
+    data: { batch_op_id: batchOpId, total_ops: totalOps, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockPartialOpSucceeded(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const opId = bytesToHex(data?.[1] ?? object?.op_id);
+  const completed = Number(data?.[2] ?? object?.completed ?? 0);
+  const total = Number(data?.[3] ?? object?.total ?? 0);
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET completed_ops = $2, total_ops = $3, last_op_id = $4,
+         last_status = 'succeeded', updated_at_ledger = $5
+     WHERE batch_op_id = $1`,
+    [batchOpId, completed, total, opId, event.ledger],
+  );
+  invalidate(`timelock:partial_state:${batchOpId}`);
+  broadcast({
+    type: "timelock_partial_op_succeeded",
+    data: {
+      batch_op_id: batchOpId,
+      op_id: opId,
+      completed,
+      total,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleTimelockPartialOpFailed(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const opId = bytesToHex(data?.[1] ?? object?.op_id);
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET last_op_id = $2, last_status = 'failed', updated_at_ledger = $3
+     WHERE batch_op_id = $1`,
+    [batchOpId, opId, event.ledger],
+  );
+  invalidate(`timelock:partial_state:${batchOpId}`);
+  broadcast({
+    type: "timelock_partial_op_failed",
+    data: { batch_op_id: batchOpId, op_id: opId, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchRecoveryEntered(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const recoveryDeadline = Number(
+    data?.[1] ?? object?.recovery_deadline ?? 0,
+  );
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET status = 'recovery', recovery_deadline = $2, updated_at_ledger = $3
+     WHERE batch_op_id = $1`,
+    [batchOpId, recoveryDeadline, event.ledger],
+  );
+  invalidate(`timelock:partial_state:${batchOpId}`);
+  broadcast({
+    type: "timelock_batch_recovery_entered",
+    data: {
+      batch_op_id: batchOpId,
+      recovery_deadline: recoveryDeadline,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleTimelockFailedOpRetried(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const opId = bytesToHex(data?.[1] ?? object?.op_id);
+  const retryCount = Number(data?.[2] ?? object?.retry_count ?? 0);
+  const succeeded = Boolean(data?.[3] ?? object?.succeeded ?? false);
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET last_op_id = $2, retry_count = $3, last_status = $4,
+         updated_at_ledger = $5
+     WHERE batch_op_id = $1`,
+    [
+      batchOpId,
+      opId,
+      retryCount,
+      succeeded ? "succeeded" : "failed",
+      event.ledger,
+    ],
+  );
+  invalidate(`timelock:partial_state:${batchOpId}`);
+  broadcast({
+    type: "timelock_failed_op_retried",
+    data: {
+      batch_op_id: batchOpId,
+      op_id: opId,
+      retry_count: retryCount,
+      succeeded,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handleTimelockFailedOpSkipped(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = timelockObject(event);
+  const data = Array.isArray(raw) ? raw : null;
+  const object = Array.isArray(raw) ? null : raw;
+  const batchOpId = bytesToHex(data?.[0] ?? object?.batch_op_id);
+  const opId = bytesToHex(data?.[1] ?? object?.op_id);
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET last_op_id = $2, last_status = 'skipped', updated_at_ledger = $3
+     WHERE batch_op_id = $1`,
+    [batchOpId, opId, event.ledger],
+  );
+  invalidate(`timelock:partial_state:${batchOpId}`);
+  broadcast({
+    type: "timelock_failed_op_skipped",
+    data: { batch_op_id: batchOpId, op_id: opId, ledger: event.ledger },
+  });
+}
+
+async function handleTimelockBatchFullyComplete(
+  event: SorobanRpc.Api.EventResponse,
+  _topics: unknown[],
+): Promise<void> {
+  const raw = scValToNative(event.value);
+  const batchOpId = Array.isArray(raw)
+    ? bytesToHex(raw[0])
+    : typeof raw === "object" && raw !== null && "batch_op_id" in raw
+      ? bytesToHex((raw as Record<string, unknown>).batch_op_id)
+      : bytesToHex(raw);
+  await pool.query(
+    `UPDATE timelock_partial_batch_state
+     SET status = 'completed', completed_at_ledger = $2,
+         updated_at_ledger = $2
+     WHERE batch_op_id = $1`,
+    [batchOpId, event.ledger],
+  );
+  await pool.query(
+    `UPDATE timelock_batch_operations
+     SET status = 'executed',
+         executed_at_ledger = COALESCE(executed_at_ledger, $2)
+     WHERE batch_op_id = $1`,
+    [batchOpId, event.ledger],
+  );
+  invalidate(
+    `timelock:partial_state:${batchOpId}`,
+    `timelock:batch:${batchOpId}`,
+  );
+  invalidatePattern("timelock:batches:");
+  broadcast({
+    type: "timelock_batch_fully_complete",
+    data: { batch_op_id: batchOpId, ledger: event.ledger },
+  });
+}

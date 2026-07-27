@@ -79,11 +79,19 @@ const TEMPLATES: Record<TriggerType, (event: IndexerEvent) => NotificationMessag
     body: "A guardian veto was issued on a proposal you're watching.",
     short: "Guardian veto issued",
   }),
-  treasury_stream_spend: () => ({
-    subject: "Treasury stream spend",
-    body: "A spend was made from a treasury stream you own.",
-    short: "Treasury stream spend",
-  }),
+  treasury_stream_spend: (event) => {
+    const value = Array.isArray(event.payload.value)
+      ? event.payload.value
+      : [];
+    const streamId = value[0] ?? "unknown";
+    const amount = value[event.event_type === "stream_batch" ? 1 : 2] ?? "0";
+    return {
+      subject: `Treasury stream #${streamId} spend`,
+      body: `A spend of ${amount} was made from treasury stream #${streamId}.`,
+      short: `Treasury stream #${streamId} spent ${amount}`,
+      actionUrl: `/treasury/streams/${streamId}`,
+    };
+  },
   config_updated: () => ({
     subject: "Governor configuration updated",
     body: "The governor's configuration parameters were updated.",

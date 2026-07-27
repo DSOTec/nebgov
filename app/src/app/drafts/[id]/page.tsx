@@ -10,7 +10,6 @@ import { readGovernorConfig } from "../../../lib/nebgov-env";
 import { useLedgerClock } from "../../../lib/hooks/useLedgerClock";
 import { CoSponsorModal } from "../../../components/CoSponsorModal";
 import { Skeleton } from "../../../components/ui/Skeleton";
-import { useLedgerClock } from "../../../lib/hooks/useLedgerClock";
 import { getTimerInfo } from "../../../lib/utils/ledgerTime";
 
 function formatAddress(address: string): string {
@@ -43,6 +42,9 @@ export default function DraftDetailPage() {
   const alreadyCoSponsored =
     !!publicKey && !!draft && draft.coSponsors.includes(publicKey);
   const isExpired = !!draft && currentLedger > draft.expiryLedger;
+  const expiryTimer = draft
+    ? getTimerInfo("Expires in", draft.expiryLedger, currentLedger)
+    : null;
 
   async function withWallet(action: (publicKey: string) => Promise<void>) {
     let pk = publicKey;

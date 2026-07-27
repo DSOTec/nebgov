@@ -20,7 +20,7 @@
   "steps": [
     { "type": "ScheduleBatch", "actor": "alice", "targets": ["target", "treasury"], "fn_names": ["noop", "threshold"], "delay": 1 },
     { "type": "ValidateDag", "schedule_step_indices": [0] },
-    { "type": "AdvanceLedger", "ledgers": 15 },
+    { "type": "AdvanceLedger", "ledgers": 1 },
     { "type": "ExecuteBatch", "actor": "alice", "schedule_step_index": 0 },
     { "type": "TakeAnalyticsSnapshot" }
   ]

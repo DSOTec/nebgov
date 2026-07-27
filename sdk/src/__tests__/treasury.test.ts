@@ -425,4 +425,44 @@ describe("TreasuryClient", () => {
       expect(remaining).toBeNull();
     });
   });
+
+  describe("getStreamHistory()", () => {
+    it("decodes stream_expired events from the indexer", async () => {
+      const indexedClient = new TreasuryClient({
+        treasuryAddress: validCAddr,
+        network: "testnet",
+        simulationAccount: validGAddr,
+        indexerUrl: "https://indexer.example",
+        maxAttempts: 1,
+      });
+      const mockFetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: jest.fn().mockResolvedValue({
+          data: [
+            {
+              event_type: "stream_expired",
+              stream_id: "7",
+              unspent: "170141183460469231731687303715884105727",
+              ledger: 500,
+            },
+          ],
+        }),
+      });
+      global.fetch = mockFetch as unknown as typeof fetch;
+
+      const events = await indexedClient.getStreamHistory(7n);
+
+      expect(events).toEqual([
+        {
+          type: "stream_expired",
+          streamId: 7n,
+          unspent: 170141183460469231731687303715884105727n,
+          ledger: 500,
+        },
+      ]);
+      expect(mockFetch).toHaveBeenCalledWith(
+        "https://indexer.example/treasury/stream-events?stream_id=7&limit=20&offset=0",
+      );
+    });
+  });
 });

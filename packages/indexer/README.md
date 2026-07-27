@@ -122,7 +122,9 @@ GOVERNOR_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 TIMELOCK_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 WRAPPER_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 TREASURY_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+TREASURY_SIMULATION_ACCOUNT=GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
 LIQUIDITY_ADDRESS=CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+STELLAR_NETWORK_PASSPHRASE=Test SDF Network ; September 2015
 POLL_INTERVAL_MS=5000
 PORT=3001
 HEALTH_LAG_THRESHOLD=100
@@ -223,7 +225,9 @@ docker run --env-file packages/indexer/.env \
 | `WRAPPER_ADDRESS` | No | - | Stellar contract address of the token wrapper |
 | `TOKEN_VOTES_ADDRESS` | No | - | Stellar contract address of the token-votes contract (delegation registry events) |
 | `TREASURY_ADDRESS` | No | - | Stellar contract address of the treasury |
+| `TREASURY_SIMULATION_ACCOUNT` | When treasury is set | - | Funded Stellar account used to simulate treasury read calls for stream hydration |
 | `LIQUIDITY_ADDRESS` | No | - | Stellar contract address of the liquidity pool |
+| `STELLAR_NETWORK_PASSPHRASE` | No | Testnet passphrase | Network passphrase used for treasury read simulations |
 | `POLL_INTERVAL_MS` | No | `5000` | Milliseconds between event polling cycles |
 | `PORT` | No | `3001` | HTTP server port |
 | `HEALTH_LAG_THRESHOLD` | No | `100` | Ledger lag threshold for health check (ledgers) |
@@ -775,6 +779,30 @@ Get treasury transfer history.
 }
 ```
 
+#### GET /streams
+
+List indexed budget streams. Use `owner` to filter by stream owner. `limit`
+defaults to 20 and is capped at 100; `offset` defaults to 0.
+
+#### GET /streams/:id
+
+Get the current indexed state of one budget stream.
+
+#### GET /streams/:id/spends
+
+Get complete spend records, including memo and executor, ordered by spend
+index. `limit` defaults to 50 and is capped at 200.
+
+#### GET /treasury/stream-events
+
+Get lifecycle history for `stream_id`. This is the endpoint used by
+`TreasuryClient.getStreamHistory`.
+
+#### GET /treasury/budget-summary
+
+Get stream counts and exact allocated, spent, and remaining amounts grouped by
+token. Soroban integer values are returned as decimal strings.
+
 ### Configuration & Upgrades
 
 #### GET /config-history
@@ -933,6 +961,14 @@ ws.send(JSON.stringify({
 | `liquidity_removed` | `provider`, `outcome_a`, `outcome_b`, `amount_a`, `amount_b`, `lp_tokens`, `ledger` |
 | `swap` | `trader`, `outcome_in`, `outcome_out`, `amount_in`, `amount_out`, `fee`, `ledger` |
 | `pool_fee_updated` | `outcome_a`, `outcome_b`, `old_fee_bps`, `new_fee_bps`, `ledger` |
+| `stream_created` | `stream_id`, `name`, `owner`, `ledger` |
+| `stream_spend` | `stream_id`, `recipient`, `amount`, `ledger` |
+| `stream_batch` | `stream_id`, `total_amount`, `recipient_count`, `ledger` |
+| `stream_revoked` | `stream_id`, `caller`, `unspent_returned`, `ledger` |
+| `stream_extended` | `stream_id`, `old_end_ledger`, `new_end_ledger`, `ledger` |
+| `stream_topped_up` | `stream_id`, `additional_amount`, `new_total_amount`, `ledger` |
+| `stream_exhausted` | `stream_id`, `ledger` |
+| `stream_expired` | `stream_id`, `unspent`, `ledger` |
 
 ### Example Event
 

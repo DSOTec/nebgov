@@ -323,7 +323,7 @@ impl TimelockContract {
             let args = Self::decode_invocation_args(&env, &data);
 
             // Execute the contract invocation (will panic/revert if it fails)
-            env.invoke_contract::<()>(&target, &fn_name, args);
+            let _: Val = env.invoke_contract(&target, &fn_name, args);
             completed_ops.push_back(op_id.clone());
             emit_partial_op_succeeded(
                 &env,
@@ -393,7 +393,7 @@ impl TimelockContract {
             .set(&DataKey::FailedOpRetryCount(op_id.clone()), &retry_count);
 
         // Invoke the contract. If it fails, the transaction reverts (standard behavior).
-        env.invoke_contract::<()>(&failed_op.target, &failed_op.fn_name, Vec::new(&env));
+        let _: Val = env.invoke_contract(&failed_op.target, &failed_op.fn_name, Vec::new(&env));
 
         // If we reach here, invocation succeeded
         state.failed_ops.remove(failed_op_index);
@@ -576,7 +576,7 @@ impl TimelockContract {
             .set(&DataKey::Operation(op_id.clone()), &op);
 
         let args = Self::decode_invocation_args(&env, &op.data);
-        env.invoke_contract::<()>(&op.target, &op.fn_name, args);
+        let _: Val = env.invoke_contract(&op.target, &op.fn_name, args);
 
         env.events().publish((symbol_short!("execute"),), op_id.clone());
         emit_operation_executed(&env, &op_id, &caller);
@@ -620,7 +620,7 @@ impl TimelockContract {
             let fn_name = batch.fn_names.get(i).unwrap();
             let data = batch.datas.get(i).unwrap();
             let args = Self::decode_invocation_args(&env, &data);
-            env.invoke_contract::<()>(&target, &fn_name, args);
+            let _: Val = env.invoke_contract(&target, &fn_name, args);
         }
 
         env.events()

@@ -9,7 +9,7 @@ describe("Governor mock validation (issues #882-885)", () => {
   let setup: ReturnType<typeof buildTestSetup>;
 
   beforeAll(async () => {
-    setup = buildTestSetup({ proposers: 1, voters: 2 });
+    setup = buildTestSetup({ proposers: 1, voters: 2, hasGuardian: true });
     harness = new SimulationHarness(setup.config);
     harness.registerActors(setup.actors);
     addresses = await harness.boot();

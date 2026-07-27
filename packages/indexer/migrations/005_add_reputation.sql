@@ -1,5 +1,25 @@
 -- Up Migration
 
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'proposer_reputation'
+          AND column_name = 'proposer'
+    ) AND NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'proposer_reputation'
+          AND column_name = 'proposer_address'
+    ) THEN
+        ALTER TABLE proposer_reputation RENAME TO proposer_reputation_events;
+    END IF;
+END
+$$;
+
 CREATE TABLE IF NOT EXISTS proposer_reputation (
     id SERIAL PRIMARY KEY,
     proposer_address VARCHAR(56) NOT NULL UNIQUE,
@@ -26,3 +46,12 @@ CREATE INDEX IF NOT EXISTS idx_reputation_history_proposer ON reputation_score_h
 
 DROP TABLE IF EXISTS reputation_score_history;
 DROP TABLE IF EXISTS proposer_reputation;
+
+DO $$
+BEGIN
+    IF to_regclass(current_schema() || '.proposer_reputation_events') IS NOT NULL
+       AND to_regclass(current_schema() || '.proposer_reputation') IS NULL THEN
+        ALTER TABLE proposer_reputation_events RENAME TO proposer_reputation;
+    END IF;
+END
+$$;

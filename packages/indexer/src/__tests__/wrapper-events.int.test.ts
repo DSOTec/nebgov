@@ -1,4 +1,4 @@
-import { SorobanRpc, nativeToScVal, xdr } from "@stellar/stellar-sdk";
+import { SorobanRpc, StrKey, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { initDb, pool } from "../db";
 import { processEvents } from "../events";
 
@@ -44,8 +44,8 @@ describe("wrapper event indexing (integration)", () => {
     return;
   }
 
-  const WRAPPER = "CWRAPPERTESTADDRESS0000000000000000000000000000000000000000";
-  const GOVERNOR = "CGOVERNORTESTADDRESS00000000000000000000000000000000000000";
+  const WRAPPER = StrKey.encodeContract(Buffer.alloc(32, 3));
+  const GOVERNOR = StrKey.encodeContract(Buffer.alloc(32, 1));
   const ACCOUNT = "GTESTACCOUNTWRAPPEREVENTS0000000000000000000000000000000";
 
   beforeAll(async () => {
@@ -86,4 +86,3 @@ describe("wrapper event indexing (integration)", () => {
     expect(rows.rows[0].ledger).toBe(123);
   });
 });
-

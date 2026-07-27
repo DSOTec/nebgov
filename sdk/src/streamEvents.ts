@@ -19,7 +19,15 @@ export type WsEventType =
   | "co_sponsorship_withdrawn"
   | "draft_finalized"
   | "draft_cancelled"
-  | "draft_expired";
+  | "draft_expired"
+  | "stream_created"
+  | "stream_spend"
+  | "stream_batch"
+  | "stream_revoked"
+  | "stream_extended"
+  | "stream_topped_up"
+  | "stream_exhausted"
+  | "stream_expired";
 
 export interface IndexerEvent {
   type: WsEventType;
@@ -31,6 +39,8 @@ export interface StreamEventsOptions {
   types?: WsEventType[];
   /** Filter to a specific proposal ID. */
   proposalId?: string;
+  /** Filter to a specific treasury stream ID. */
+  streamId?: string;
   /** Filter to events implying a specific proposal lifecycle state (e.g. "Active", "Queued"). */
   state?: string;
   /** Reconnect delay in ms (default 3000). */
@@ -77,6 +87,7 @@ export function streamEvents(
   const {
     types,
     proposalId,
+    streamId,
     state,
     reconnectDelayMs = 3000,
     pollIntervalMs = 10_000,
@@ -133,6 +144,10 @@ export function streamEvents(
       const pid = (event.data as any).proposal_id ?? (event.data as any).id;
       if (String(pid) !== proposalId) return false;
     }
+    if (streamId !== undefined) {
+      const id = (event.data as any).stream_id;
+      if (String(id) !== streamId) return false;
+    }
     if (state !== undefined && EVENT_STATE_HINT[event.type] !== state) return false;
     return true;
   }
@@ -157,8 +172,8 @@ export function streamEvents(
     ws.onopen = () => {
       stopPolling();
       usingPolling = false;
-      if (types || proposalId) {
-        ws!.send(JSON.stringify({ types, proposalId }));
+      if (types || proposalId || streamId) {
+        ws!.send(JSON.stringify({ types, proposalId, streamId }));
       }
       if (state !== undefined) {
         ws!.send(JSON.stringify({ subscribe: "state", state }));

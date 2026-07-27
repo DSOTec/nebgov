@@ -1,4 +1,4 @@
-import { SorobanRpc, nativeToScVal } from "@stellar/stellar-sdk";
+import { SorobanRpc, StrKey, nativeToScVal, xdr } from "@stellar/stellar-sdk";
 import { initDb, pool } from "../db";
 import { processEvents } from "../events";
 
@@ -7,6 +7,13 @@ class FakeServer {
   async getEvents() {
     return { events: this.events };
   }
+}
+
+function encodeValue(value: unknown): xdr.ScVal {
+  if (Array.isArray(value)) {
+    return xdr.ScVal.scvVec(value.map(encodeValue));
+  }
+  return nativeToScVal(value);
 }
 
 function makeEvent(params: {
@@ -19,9 +26,11 @@ function makeEvent(params: {
 }): SorobanRpc.Api.EventResponse {
   const topic = [
     nativeToScVal(params.type, { type: "symbol" }),
-    ...(params.topicArgs ?? []).map((a) => nativeToScVal(a, { type: "symbol" })),
+    ...(params.topicArgs ?? []).map((a) =>
+      nativeToScVal(a, { type: "address" }),
+    ),
   ];
-  const value = nativeToScVal(params.value);
+  const value = encodeValue(params.value);
   return {
     type: "contract",
     ledger: params.ledger,
@@ -39,7 +48,9 @@ describe("governor event indexing (integration)", () => {
     return;
   }
 
-  const GOVERNOR = "CGOVERNORTESTADDRESS00000000000000000000000000000000000000";
+  const GOVERNOR = StrKey.encodeContract(Buffer.alloc(32, 1));
+  const CALLER = StrKey.encodeEd25519PublicKey(Buffer.alloc(32, 2));
+  const PROPOSER = StrKey.encodeEd25519PublicKey(Buffer.alloc(32, 3));
 
   beforeAll(async () => {
     await initDb();
@@ -209,8 +220,9 @@ describe("governor event indexing (integration)", () => {
     // Insert a proposal row so the UPDATE has something to affect
     await pool.query(
       `INSERT INTO proposals (id, proposer, description, start_ledger, end_ledger)
-       VALUES ('77', 'GCALLER00000000000000000000000000000000000000000000000000', 'cancel_queued test', 1, 100)
+       VALUES ('77', $1, 'cancel_queued test', 1, 100)
        ON CONFLICT (id) DO NOTHING`,
+      [CALLER],
     );
 
     // cancel_queued() raw event shape:
@@ -224,7 +236,7 @@ describe("governor event indexing (integration)", () => {
       contractId: GOVERNOR,
       topic: [
         nativeToScVal("ProposalCancelled", { type: "symbol" }),
-        nativeToScVal("GCALLER00000000000000000000000000000000000000000000000000", { type: "address" }),
+        nativeToScVal(CALLER, { type: "address" }),
       ],
       value: nativeToScVal([77n, 50n, 210n]),
     } as unknown as SorobanRpc.Api.EventResponse;
@@ -246,8 +258,9 @@ describe("governor event indexing (integration)", () => {
   it("indexes ProposalCancelled from cancel() — value is an object { proposal_id, caller }", async () => {
     await pool.query(
       `INSERT INTO proposals (id, proposer, description, start_ledger, end_ledger)
-       VALUES ('78', 'GPROPOSER0000000000000000000000000000000000000000000000000', 'cancel test', 1, 100)
+       VALUES ('78', $1, 'cancel test', 1, 100)
        ON CONFLICT (id) DO NOTHING`,
+      [PROPOSER],
     );
 
     // cancel() / emit_proposal_cancelled event shape:
@@ -261,7 +274,7 @@ describe("governor event indexing (integration)", () => {
       topic: [
         nativeToScVal("ProposalCancelled", { type: "symbol" }),
       ],
-      value: nativeToScVal({ proposal_id: 78n, caller: "GPROPOSER0000000000000000000000000000000000000000000000000" }),
+      value: nativeToScVal({ proposal_id: 78n, caller: PROPOSER }),
     } as unknown as SorobanRpc.Api.EventResponse;
 
     const server = new FakeServer([cancelEvent]) as unknown as SorobanRpc.Server;
@@ -306,7 +319,7 @@ describe("governor event indexing (integration)", () => {
   });
 
   it("indexes ReputationUpdated event into proposer_reputation", async () => {
-    const proposer = "GPROPOSER111111111111111111111111111111111";
+    const proposer = StrKey.encodeEd25519PublicKey(Buffer.alloc(32, 4));
     const reputationUpdated = makeEvent({
       contractId: GOVERNOR,
       ledger: 204,
@@ -334,7 +347,7 @@ describe("governor event indexing (integration)", () => {
   });
 
   it("indexes EffectiveThresholdChanged event into effective_threshold_history (issue #919)", async () => {
-    const proposer = "GPROPOSER222222222222222222222222222222222";
+    const proposer = StrKey.encodeEd25519PublicKey(Buffer.alloc(32, 5));
     const thresholdChanged = makeEvent({
       contractId: GOVERNOR,
       ledger: 205,

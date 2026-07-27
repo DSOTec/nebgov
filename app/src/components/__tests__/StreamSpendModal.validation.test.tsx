@@ -24,7 +24,7 @@ const mockStream: TreasuryBudgetStream = {
   id: BigInt(1),
   name: "engineering",
   owner: VALID_ADDRESS_2,
-  tokenAddress: "CTOKEN123",
+  token: "CTOKEN123",
   totalAllocated: BigInt(1000000),
   totalSpent: BigInt(100000),
   maxSingleSpend: BigInt(500000),
@@ -32,8 +32,11 @@ const mockStream: TreasuryBudgetStream = {
   endLedger: 200000,
   cooldownLedgers: 0,
   lastSpendLedger: 0,
-  proposalId: BigInt(0),
+  spendCount: 0,
+  createdByProposalId: 0n,
   isActive: true,
+  isRevoked: false,
+  revokedAtLedger: null,
 };
 
 const defaultProps = {

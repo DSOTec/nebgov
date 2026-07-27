@@ -705,6 +705,7 @@ export class TreasuryClient {
         new_end_ledger?: number;
         additional_amount?: string;
         new_total_amount?: string;
+        unspent?: string;
         ledger: number;
       }>;
     };
@@ -766,6 +767,13 @@ export class TreasuryClient {
           return {
             type: "stream_exhausted" as const,
             streamId,
+            ...common,
+          };
+        case "stream_expired":
+          return {
+            type: "stream_expired" as const,
+            streamId,
+            unspent: BigInt(row.unspent ?? "0"),
             ...common,
           };
         default:

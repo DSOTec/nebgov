@@ -23,10 +23,12 @@ export type { GovernorEntry, DeploySettings } from "./factory";
 export { TimelockClient } from "./timelock";
 export { TreasuryClient } from "./treasury";
 export { LiquidityClient } from "./liquidity";
+export { AnalyticsClient } from "./analytics";
+export { ReputationClient } from "./reputation";
 export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
-export { CoSponsorshipClient } from "./cosponsor";
-export type { CoSponsorshipConfig } from "./cosponsor";
+export { CoSponsorshipClient } from "./coSponsorship";
+export type { CoSponsorshipConfig } from "./coSponsorship";
 export {
   GovernorError,
   GovernorErrorCode,
