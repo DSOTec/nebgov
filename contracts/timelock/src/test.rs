@@ -653,7 +653,11 @@ fn test_salt_uniqueness() {
 }
 
 #[test]
-/// Test that same salt produces same ID (idempotent scheduling).
+#[should_panic]
+/// Regression test for the bug #832 guard: scheduling the same operation twice
+/// (identical target/data/salt) must be rejected now that the duplicate-scheduling
+/// guard is in place. Previously this would silently overwrite the first
+/// operation's storage entry (the unsafe behavior the bug described).
 fn test_same_salt_same_id() {
     let env = Env::default();
     env.mock_all_auths();
@@ -670,7 +674,8 @@ fn test_same_salt_same_id() {
     let delay = 1000u64;
     let salt = Bytes::from_slice(&env, b"same_salt");
 
-    let op_id1 = client.schedule(
+    // First call succeeds.
+    client.schedule(
         &governor,
         &target,
         &data,
@@ -679,7 +684,8 @@ fn test_same_salt_same_id() {
         &Bytes::new(&env),
         &salt,
     );
-    let op_id2 = client.schedule(
+    // Second call with identical inputs must panic with "operation already scheduled".
+    client.schedule(
         &governor,
         &target,
         &data,
@@ -688,18 +694,6 @@ fn test_same_salt_same_id() {
         &Bytes::new(&env),
         &salt,
     );
-
-    assert_eq!(op_id1, op_id2);
-
-    // The second schedule should overwrite the first (same storage key)
-    let op: Operation = env.as_contract(&contract_id, || {
-        env.storage()
-            .persistent()
-            .get(&DataKey::Operation(op_id1.clone()))
-            .unwrap()
-    });
-    // Both operations have same ID, so only one record exists
-    assert_eq!(op.data, data);
 }
 
 #[test]
@@ -728,7 +722,10 @@ fn test_predecessor_changes_id() {
 }
 
 #[test]
-/// Test that empty predecessor and empty salt produce consistent ID.
+#[should_panic]
+/// Regression test for the bug #832 guard: scheduling the same operation
+/// twice with empty predecessor and empty salt must be rejected. Previously
+/// the second call silently overwrote the first operation's storage entry.
 fn test_empty_predecessor_and_salt() {
     let env = Env::default();
     env.mock_all_auths();
@@ -744,7 +741,8 @@ fn test_empty_predecessor_and_salt() {
     let fn_name = Symbol::new(&env, "exec");
     let delay = 1000u64;
 
-    let op_id1 = client.schedule(
+    // First call succeeds.
+    client.schedule(
         &governor,
         &target,
         &data,
@@ -753,7 +751,8 @@ fn test_empty_predecessor_and_salt() {
         &Bytes::new(&env),
         &Bytes::new(&env),
     );
-    let op_id2 = client.schedule(
+    // Second call with identical inputs must panic with "operation already scheduled".
+    client.schedule(
         &governor,
         &target,
         &data,
@@ -762,8 +761,6 @@ fn test_empty_predecessor_and_salt() {
         &Bytes::new(&env),
         &Bytes::new(&env),
     );
-
-    assert_eq!(op_id1, op_id2);
 }
 
 #[test]
@@ -1093,6 +1090,154 @@ fn test_initialize_guard_prevents_reinitialization() {
 
     client.initialize(&admin, &governor, &100, &1000);
 
+
     // Second initialize attempt should panic
     client.initialize(&attacker, &attacker, &0, &u64::MAX);
+}
+
+#[test]
+/// Regression test for #832: schedule() and schedule_with_deps() with the
+/// same target/data/salt MUST produce different op_ids.
+/// Before the fix, both called compute_op_id with an empty predecessor bytes,
+/// causing hash collisions and silent storage overwrites.
+fn test_schedule_and_schedule_with_deps_do_not_collide() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = Address::generate(&env);
+    let data = Bytes::new(&env);
+    let fn_name = Symbol::new(&env, "exec");
+    let salt = Bytes::from_slice(&env, b"same_salt");
+
+    // Schedule a predecessor so schedule_with_deps can reference it.
+    let pred_op_id = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"pred_salt"),
+    );
+
+    // Plain schedule call with the same target/data/salt.
+    let op_id_plain = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0,
+        &Bytes::new(&env),
+        &salt,
+    );
+
+    // schedule_with_deps with the same target/data/salt but a non-empty
+    // predecessors list must produce a DIFFERENT op_id.
+    let mut predecessors = Vec::new(&env);
+    predecessors.push_back(pred_op_id.clone());
+
+    let op_id_with_deps = client.schedule_with_deps(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0,
+        &predecessors,
+        &salt,
+    );
+
+    assert_ne!(
+        op_id_plain, op_id_with_deps,
+        "schedule() and schedule_with_deps() with the same target/data/salt \
+         must NOT produce the same op_id (fix for bug #832)"
+    );
+
+    // Both operations should independently exist in storage.
+    assert!(
+        client.get_operation(&op_id_plain).is_some(),
+        "plain schedule op should be stored"
+    );
+    assert!(
+        client.get_operation(&op_id_with_deps).is_some(),
+        "schedule_with_deps op should be stored"
+    );
+}
+
+#[test]
+/// Regression test for #832 (part 2): two schedule_with_deps calls with
+/// different predecessor sets but the same target/data/salt must produce
+/// different op_ids.
+fn test_schedule_with_deps_different_predecessors_do_not_collide() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let target = Address::generate(&env);
+    let data = Bytes::new(&env);
+    let fn_name = Symbol::new(&env, "exec");
+    let salt = Bytes::from_slice(&env, b"shared_salt");
+
+    // Create two distinct predecessor operations.
+    let pred_a = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"salt_a"),
+    );
+    let pred_b = client.schedule(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"salt_b"),
+    );
+
+    // First call: depends only on pred_a.
+    let mut preds_a = Vec::new(&env);
+    preds_a.push_back(pred_a.clone());
+    let op_id_a = client.schedule_with_deps(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0,
+        &preds_a,
+        &salt,
+    );
+
+    // Second call: depends only on pred_b — same target/data/salt, different predecessors.
+    let mut preds_b = Vec::new(&env);
+    preds_b.push_back(pred_b.clone());
+    let op_id_b = client.schedule_with_deps(
+        &governor,
+        &target,
+        &data,
+        &fn_name,
+        &0,
+        &preds_b,
+        &salt,
+    );
+
+    assert_ne!(
+        op_id_a, op_id_b,
+        "schedule_with_deps with different predecessor sets must produce \
+         different op_ids even when target/data/salt are identical (fix for bug #832)"
+    );
+
+    assert!(client.get_operation(&op_id_a).is_some());
+    assert!(client.get_operation(&op_id_b).is_some());
 }

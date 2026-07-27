@@ -202,7 +202,39 @@ impl TimelockContract {
         Bytes::from_array(&env, &hash.to_array())
     }
 
+    /// Compute a deterministic op_id that folds the full predecessors list into
+    /// the hash, preventing collisions with plain `schedule` calls that pass an
+    /// empty predecessor.  Each predecessor's bytes are appended after the
+    /// fn_name so that different predecessor sets always yield different IDs.
+    fn compute_op_id_with_deps(
+        env: &Env,
+        target: &Address,
+        data: &Bytes,
+        fn_name: &Symbol,
+        predecessors: &Vec<Bytes>,
+        salt: &Bytes,
+    ) -> Bytes {
+        let mut combined = Bytes::new(env);
+        combined.append(&target.to_xdr(env));
+        combined.append(data);
+        combined.append(&fn_name.to_xdr(env));
+        for pred in predecessors.iter() {
+            combined.append(&pred);
+        }
+        combined.append(salt);
+        let hash = env.crypto().sha256(&combined);
+        Bytes::from_array(env, &hash.to_array())
+    }
+
     /// Schedule an operation with multiple predecessor dependencies.
+    ///
+    /// The op_id is computed by [`compute_op_id_with_deps`], which folds the
+    /// full predecessors list into the hash.  This guarantees that:
+    /// - `schedule(target, data, fn, delay, Bytes::new(), salt)` and
+    ///   `schedule_with_deps(target, data, fn, delay, preds, salt)` with
+    ///   identical target/data/salt **never** share an op_id.
+    /// - Two `schedule_with_deps` calls with different predecessor sets but
+    ///   identical target/data/salt also **never** share an op_id.
     #[allow(clippy::too_many_arguments)]
     pub fn schedule_with_deps(
         env: Env,
@@ -221,8 +253,57 @@ impl TimelockContract {
             Self::validate_predecessor(&env, &pred);
         }
 
-        let op_id =
-            Self::schedule_operation(env.clone(), target, data, fn_name, delay, Bytes::new(&env), salt);
+        let min_delay = Self::min_delay(env.clone());
+        assert!(delay >= min_delay, "delay too short");
+
+        // Compute op_id that includes the predecessors list so that it is
+        // always distinct from a plain `schedule` call with the same
+        // target/data/salt.
+        let op_id = Self::compute_op_id_with_deps(
+            &env,
+            &target,
+            &data,
+            &fn_name,
+            &predecessors,
+            &salt,
+        );
+
+        // Guard against a second call silently overwriting an existing operation.
+        assert!(
+            !env.storage().persistent().has(&DataKey::Operation(op_id.clone())),
+            "operation already scheduled"
+        );
+
+        let execution_window = Self::execution_window(env.clone());
+        let ready_at = env.ledger().timestamp() + delay;
+        let expires_at = ready_at + execution_window;
+
+        let op = Operation {
+            target: target.clone(),
+            data,
+            fn_name: fn_name.clone(),
+            ready_at,
+            expires_at,
+            executed: false,
+            cancelled: false,
+            predecessor: Bytes::new(&env),
+        };
+
+        env.storage()
+            .persistent()
+            .set(&DataKey::Operation(op_id.clone()), &op);
+
+        // Extend TTL to cover the full operation lifecycle (delay + execution window)
+        // plus a safety buffer. Stellar mainnet closes ledgers roughly every 5 seconds.
+        let seconds_until_expiry = delay + execution_window;
+        let ttl_ledgers = ((seconds_until_expiry / 5) + 1000) as u32;
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::Operation(op_id.clone()), ttl_ledgers, ttl_ledgers);
+
+        env.events()
+            .publish((symbol_short!("schedule"),), op_id.clone());
+        emit_operation_scheduled(&env, &op_id, &target, &fn_name, ready_at, expires_at);
 
         // Persist the predecessor set so all_predecessors_done() and the
         // topological sort can resolve this operation's dependencies later.
@@ -859,6 +940,14 @@ impl TimelockContract {
             data.clone(),
             predecessor.clone(),
             salt,
+        );
+
+        // Guard: reject scheduling when the op_id already exists to prevent
+        // silent overwrites of an existing operation's ready_at/expires_at/
+        // executed state.
+        assert!(
+            !env.storage().persistent().has(&DataKey::Operation(op_id.clone())),
+            "operation already scheduled"
         );
 
         let op = Operation {
