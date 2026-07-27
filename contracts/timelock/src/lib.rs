@@ -387,6 +387,9 @@ impl TimelockContract {
         if env.ledger().timestamp() < batch.ready_at {
             env.panic_with_error(TimelockError::PredecessorNotComplete);
         }
+        if env.ledger().timestamp() > batch.expires_at {
+            env.panic_with_error(TimelockError::OperationExpired);
+        }
 
         let mut completed_ops: Vec<Bytes> = Vec::new(&env);
         // No failures accumulate here: any sub-call panic reverts the whole tx.
