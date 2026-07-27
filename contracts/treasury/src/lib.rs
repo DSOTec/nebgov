@@ -730,6 +730,23 @@ impl TreasuryContract {
                 .set(&DataKey::Threshold, &threshold);
         }
 
+        // Revoke all budget streams owned by the slashed address so they
+        // cannot be spent from even if the caller somehow bypasses the
+        // is_slashed guard in stream_spend/stream_batch_spend.
+        let stream_count: u64 = env
+            .storage()
+            .persistent()
+            .get(&StreamDataKey::OwnerStreamCount(signer.clone()))
+            .unwrap_or(0);
+        for i in 0..stream_count {
+            let stream_id: u64 = env
+                .storage()
+                .persistent()
+                .get(&StreamDataKey::OwnerStream(signer.clone(), i))
+                .unwrap();
+            streams::revoke_stream_internal(&env, stream_id, &caller);
+        }
+
         env.events()
             .publish((symbol_short!("slash"), signer), reason);
     }

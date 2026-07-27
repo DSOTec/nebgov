@@ -114,7 +114,7 @@ fn test_stream_spend_transfers_token_and_updates_spent() {
 }
 
 #[test]
-#[should_panic(expected = "exceeds max single spend")]
+#[should_panic(expected = "Error(Contract, #15)")]
 fn test_stream_spend_exceeds_max_single_spend_reverts() {
     let env = Env::default();
     env.mock_all_auths();
@@ -136,7 +136,7 @@ fn test_stream_spend_exceeds_max_single_spend_reverts() {
 }
 
 #[test]
-#[should_panic(expected = "cooldown not elapsed")]
+#[should_panic(expected = "Error(Contract, #16)")]
 fn test_stream_spend_in_cooldown_reverts() {
     let env = Env::default();
     env.mock_all_auths();
@@ -168,7 +168,7 @@ fn test_stream_spend_in_cooldown_reverts() {
 }
 
 #[test]
-#[should_panic(expected = "stream not active")]
+#[should_panic(expected = "Error(Contract, #11)")]
 fn test_stream_spend_exhausts_budget_then_reverts() {
     let env = Env::default();
     env.mock_all_auths();
@@ -206,7 +206,7 @@ fn test_stream_spend_exhausts_budget_then_reverts() {
 }
 
 #[test]
-#[should_panic(expected = "stream expired")]
+#[should_panic(expected = "Error(Contract, #12)")]
 fn test_stream_spend_after_end_ledger_reverts() {
     let env = Env::default();
     env.mock_all_auths();
@@ -236,7 +236,7 @@ fn test_stream_spend_after_end_ledger_reverts() {
 }
 
 #[test]
-#[should_panic(expected = "not stream owner")]
+#[should_panic(expected = "Error(Contract, #17)")]
 fn test_stream_spend_by_non_owner_reverts() {
     let env = Env::default();
     env.mock_all_auths();
@@ -504,7 +504,7 @@ fn test_get_stream_report_computes_utilization_bps() {
 }
 
 #[test]
-#[should_panic(expected = "stream revoked")]
+#[should_panic(expected = "Error(Contract, #13)")]
 fn test_stream_revoked_blocks_further_spends() {
     let env = Env::default();
     env.mock_all_auths();
@@ -535,7 +535,7 @@ fn test_stream_revoked_blocks_further_spends() {
 }
 
 #[test]
-#[should_panic(expected = "stream not started")]
+#[should_panic(expected = "Error(Contract, #12)")]
 fn test_stream_with_future_start_ledger_cannot_spend_immediately() {
     let env = Env::default();
     env.mock_all_auths();
@@ -611,7 +611,7 @@ fn test_stream_top_up_after_exhaustion_allows_additional_spends() {
 }
 
 #[test]
-#[should_panic(expected = "stream expired")]
+#[should_panic(expected = "Error(Contract, #12)")]
 fn test_stream_extend_on_expired_allows_spend_until_new_end() {
     let env = Env::default();
     env.mock_all_auths();
@@ -642,7 +642,7 @@ fn test_stream_extend_on_expired_allows_spend_until_new_end() {
 }
 
 #[test]
-#[should_panic(expected = "cooldown not elapsed")]
+#[should_panic(expected = "Error(Contract, #16)")]
 fn test_stream_batch_spend_cooldown_with_zero_and_multiple_spends() {
     let env = Env::default();
     env.mock_all_auths();
@@ -821,7 +821,7 @@ fn test_revoke_stream_records_event_payload() {
 // ── Regression tests for #867, #872, #873 ──────────────────────────────
 
 #[test]
-#[should_panic(expected = "stream not started")]
+#[should_panic(expected = "Error(Contract, #12)")]
 fn test_stream_batch_spend_before_start_ledger_reverts() {
     let env = Env::default();
     env.mock_all_auths();
@@ -853,7 +853,7 @@ fn test_stream_batch_spend_before_start_ledger_reverts() {
 }
 
 #[test]
-#[should_panic(expected = "new end must be in the future")]
+#[should_panic(expected = "Error(Contract, #12)")]
 fn test_extend_stream_to_past_ledger_reverts() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1000,4 +1000,865 @@ fn test_get_budget_summary_excludes_revoked_and_expired_from_active_count() {
     assert_eq!(summary.total_streams, 3);
     // Only the one non-revoked, non-expired stream should still count as active
     assert_eq!(summary.active_streams, 1);
+}
+
+// ── Regression tests for #869: stream spends must respect spending cap ───────
+
+#[test]
+#[should_panic(expected = "spending cap exceeded")]
+fn test_stream_spend_blocked_by_spending_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // Set a cap of 300 over 100 ledgers on this token.
+    client.set_spending_cap(&governor, &token_addr, &300i128, &100u32);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "capped"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    let recipient = Address::generate(&env);
+    let memo = String::from_str(&env, "within cap");
+
+    // First spend of 200 — fine.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &200i128, &memo);
+
+    // Second spend of 200 — would push period total to 400, exceeding cap of 300.
+    let memo2 = String::from_str(&env, "over cap");
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &200i128, &memo2);
+}
+
+#[test]
+#[should_panic(expected = "spending cap exceeded")]
+fn test_stream_batch_spend_blocked_by_spending_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // Cap of 400 over 100 ledgers.
+    client.set_spending_cap(&governor, &token_addr, &400i128, &100u32);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "batched"),
+        &stream_owner,
+        &token_addr,
+        &2_000i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    let alice = Address::generate(&env);
+    let bob = Address::generate(&env);
+    let charlie = Address::generate(&env);
+
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(alice.clone());
+    recipients.push_back(bob.clone());
+    recipients.push_back(charlie.clone());
+
+    // 200 + 200 + 200 = 600 > cap of 400 — should panic.
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(200i128);
+    amounts.push_back(200i128);
+    amounts.push_back(200i128);
+
+    let memo = String::from_str(&env, "over cap batch");
+    client.stream_batch_spend(&stream_owner, &stream_id, &recipients, &amounts, &memo);
+}
+
+#[test]
+fn test_stream_spend_cap_resets_after_period() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let period_ledgers = 100u32;
+    // Cap of 300 per period.
+    client.set_spending_cap(&governor, &token_addr, &300i128, &period_ledgers);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "periodic"),
+        &stream_owner,
+        &token_addr,
+        &2_000i128,
+        &0u32,
+        &100_000u32,
+        &300i128,
+        &0u32,
+        &1u64,
+    );
+
+    let recipient = Address::generate(&env);
+    let memo = String::from_str(&env, "spend");
+
+    // Exhaust the cap in period 0.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &300i128, &memo);
+
+    // Advance into the next period.
+    env.ledger()
+        .with_mut(|l| l.sequence_number = period_ledgers + 1);
+
+    // Same amount should succeed in the fresh period.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &300i128, &memo);
+
+    let stream: BudgetStream = client.get_stream(&stream_id);
+    assert_eq!(stream.total_spent, 600);
+}
+
+#[test]
+fn test_stream_and_batch_transfer_share_spending_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Need a setup with both stream capability and batch_transfer.
+    let governor = Address::generate(&env);
+    let asset_owner = Address::generate(&env);
+    let stream_owner = Address::generate(&env);
+
+    let sac = env.register_stellar_asset_contract_v2(asset_owner.clone());
+    let token_addr = sac.address();
+
+    let treasury_id = env.register(
+        crate::TreasuryContract,
+        (),
+    );
+    let client = crate::TreasuryContractClient::new(&env, &treasury_id);
+
+    let mut owners = Vec::new(&env);
+    owners.push_back(asset_owner.clone());
+    client.initialize(&owners, &1u32, &governor);
+
+    let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&treasury_id, &10_000i128);
+
+    env.ledger().set_sequence_number(1);
+
+    // Shared cap of 500 per 100-ledger period.
+    client.set_spending_cap(&governor, &token_addr, &500i128, &100u32);
+
+    // Create a stream with 2000 allocation (well above the cap).
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "shared"),
+        &stream_owner,
+        &token_addr,
+        &2_000i128,
+        &0u32,
+        &100_000u32,
+        &400i128,
+        &0u32,
+        &1u64,
+    );
+
+    let recipient = Address::generate(&env);
+    let memo = String::from_str(&env, "stream spend");
+
+    // Stream spends 300, period accumulator = 300.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &300i128, &memo);
+
+    // Verify period spent is 300 via get_spent_this_period.
+    let spent = client.get_spent_this_period(&token_addr);
+    assert_eq!(spent, 300i128, "period accumulator should reflect stream spend");
+
+    // Remaining should be 200 (500 cap - 300 spent).
+    let remaining = client.get_spending_remaining(&token_addr);
+    assert_eq!(remaining, 200i128);
+}
+
+#[test]
+#[should_panic(expected = "spending cap exceeded")]
+fn test_batch_transfer_blocked_after_stream_consumes_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governor = Address::generate(&env);
+    let asset_owner = Address::generate(&env);
+    let stream_owner = Address::generate(&env);
+
+    let sac = env.register_stellar_asset_contract_v2(asset_owner.clone());
+    let token_addr = sac.address();
+
+    let treasury_id = env.register(crate::TreasuryContract, ());
+    let client = crate::TreasuryContractClient::new(&env, &treasury_id);
+
+    let mut owners = Vec::new(&env);
+    owners.push_back(asset_owner.clone());
+    client.initialize(&owners, &1u32, &governor);
+
+    let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&treasury_id, &10_000i128);
+
+    env.ledger().set_sequence_number(1);
+
+    // Cap of 500.
+    client.set_spending_cap(&governor, &token_addr, &500i128, &100u32);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "consume"),
+        &stream_owner,
+        &token_addr,
+        &2_000i128,
+        &0u32,
+        &100_000u32,
+        &400i128,
+        &0u32,
+        &1u64,
+    );
+
+    let recipient = Address::generate(&env);
+
+    // Stream consumes 400 of the 500 cap.
+    client.stream_spend(
+        &stream_owner,
+        &stream_id,
+        &recipient,
+        &400i128,
+        &String::from_str(&env, "stream"),
+    );
+
+    // batch_transfer of 200 would push total to 600 — must panic.
+    let mut batch_recipients = Vec::new(&env);
+    batch_recipients.push_back(crate::BatchRecipient {
+        recipient: recipient.clone(),
+        amount: 200,
+    });
+    client.batch_transfer(&governor, &token_addr, &batch_recipients);
+}
+
+#[test]
+#[should_panic(expected = "spending cap exceeded")]
+fn test_stream_spend_blocked_after_batch_transfer_consumes_cap() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governor = Address::generate(&env);
+    let asset_owner = Address::generate(&env);
+    let stream_owner = Address::generate(&env);
+
+    let sac = env.register_stellar_asset_contract_v2(asset_owner.clone());
+    let token_addr = sac.address();
+
+    let treasury_id = env.register(crate::TreasuryContract, ());
+    let client = crate::TreasuryContractClient::new(&env, &treasury_id);
+
+    let mut owners = Vec::new(&env);
+    owners.push_back(asset_owner.clone());
+    client.initialize(&owners, &1u32, &governor);
+
+    let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&treasury_id, &10_000i128);
+
+    env.ledger().set_sequence_number(1);
+
+    // Cap of 500.
+    client.set_spending_cap(&governor, &token_addr, &500i128, &100u32);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "blocked"),
+        &stream_owner,
+        &token_addr,
+        &2_000i128,
+        &0u32,
+        &100_000u32,
+        &400i128,
+        &0u32,
+        &1u64,
+    );
+
+    let recipient = Address::generate(&env);
+
+    // batch_transfer consumes 400 of the 500 cap.
+    let mut batch_recipients = Vec::new(&env);
+    batch_recipients.push_back(crate::BatchRecipient {
+        recipient: recipient.clone(),
+        amount: 400,
+    });
+    client.batch_transfer(&governor, &token_addr, &batch_recipients);
+
+    // Stream spend of 200 would push total to 600 — must panic.
+    client.stream_spend(
+        &stream_owner,
+        &stream_id,
+        &recipient,
+        &200i128,
+        &String::from_str(&env, "over"),
+    );
+}
+
+// ── Regression tests for #870: slashing blocks stream spending and auto-revokes streams ──
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn test_stream_spend_blocked_when_owner_is_slashed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "ops"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Slash the stream owner.  stream_owner must also be a multisig owner
+    // for slash_signer to accept it, so we need a two-owner treasury here.
+    // Instead, we write IsSlashed directly to test the guard in isolation.
+    env.as_contract(&treasury_id, || {
+        env.storage()
+            .persistent()
+            .set(&crate::DataKey::IsSlashed(stream_owner.clone()), &true);
+    });
+
+    let recipient = Address::generate(&env);
+    let memo = String::from_str(&env, "post-slash spend");
+    // Must panic because owner is slashed.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &100i128, &memo);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn test_stream_batch_spend_blocked_when_owner_is_slashed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "batch"),
+        &stream_owner,
+        &token_addr,
+        &1_000i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Mark owner as slashed.
+    env.as_contract(&treasury_id, || {
+        env.storage()
+            .persistent()
+            .set(&crate::DataKey::IsSlashed(stream_owner.clone()), &true);
+    });
+
+    let recipient = Address::generate(&env);
+    let mut recipients = Vec::new(&env);
+    recipients.push_back(recipient.clone());
+    let mut amounts = Vec::new(&env);
+    amounts.push_back(100i128);
+    let memo = String::from_str(&env, "post-slash batch");
+    // Must panic.
+    client.stream_batch_spend(&stream_owner, &stream_id, &recipients, &amounts, &memo);
+}
+
+/// Full end-to-end: slash_signer auto-revokes streams owned by the slashed address.
+/// Uses a two-owner treasury so slash_signer actually executes.
+#[test]
+fn test_slash_signer_auto_revokes_owned_streams() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    // Build a treasury with two multisig owners so we can slash one without
+    // hitting the "cannot slash the last owner" guard.
+    let governor = Address::generate(&env);
+    let owner_a = Address::generate(&env);
+    let owner_b = Address::generate(&env); // will be slashed
+    let stream_owner = owner_b.clone();    // b is also the stream owner
+
+    let sac = env.register_stellar_asset_contract_v2(governor.clone());
+    let token_addr = sac.address();
+
+    let treasury_id = env.register(crate::TreasuryContract, ());
+    let client = crate::TreasuryContractClient::new(&env, &treasury_id);
+
+    let mut owners = Vec::new(&env);
+    owners.push_back(owner_a.clone());
+    owners.push_back(owner_b.clone());
+    client.initialize(&owners, &1u32, &governor);
+
+    let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&treasury_id, &10_000i128);
+
+    env.ledger().set_sequence_number(1);
+
+    // Create two streams owned by owner_b.
+    let stream1 = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "dept1"),
+        &stream_owner,
+        &token_addr,
+        &500i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+    let stream2 = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "dept2"),
+        &stream_owner,
+        &token_addr,
+        &500i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &2u64,
+    );
+
+    // Both streams are active before slashing.
+    let s1_before: BudgetStream = client.get_stream(&stream1);
+    let s2_before: BudgetStream = client.get_stream(&stream2);
+    assert!(s1_before.is_active && !s1_before.is_revoked);
+    assert!(s2_before.is_active && !s2_before.is_revoked);
+
+    // Slash owner_b — this should auto-revoke both of their streams.
+    client.slash_signer(&governor, &owner_b, &Symbol::new(&env, "malicious"));
+
+    // Both streams must now be revoked and inactive.
+    let s1_after: BudgetStream = client.get_stream(&stream1);
+    let s2_after: BudgetStream = client.get_stream(&stream2);
+    assert!(s1_after.is_revoked, "stream1 must be revoked after slash");
+    assert!(!s1_after.is_active, "stream1 must be inactive after slash");
+    assert!(s2_after.is_revoked, "stream2 must be revoked after slash");
+    assert!(!s2_after.is_active, "stream2 must be inactive after slash");
+
+    // Verify the streams are also blocked at the spend guard (revoked takes
+    // priority over is_slashed — both protect the same execution path).
+    // The actual "stream revoked" panic is covered by test_slashed_owner_stream_revoked_blocks_spend.
+    let _recipient = Address::generate(&env);
+    let _memo = String::from_str(&env, "attempt");
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")]
+fn test_slashed_owner_stream_revoked_blocks_spend() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governor = Address::generate(&env);
+    let owner_a = Address::generate(&env);
+    let owner_b = Address::generate(&env);
+
+    let sac = env.register_stellar_asset_contract_v2(governor.clone());
+    let token_addr = sac.address();
+
+    let treasury_id = env.register(crate::TreasuryContract, ());
+    let client = crate::TreasuryContractClient::new(&env, &treasury_id);
+
+    let mut owners = Vec::new(&env);
+    owners.push_back(owner_a.clone());
+    owners.push_back(owner_b.clone());
+    client.initialize(&owners, &1u32, &governor);
+
+    let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&treasury_id, &10_000i128);
+
+    env.ledger().set_sequence_number(1);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "dept"),
+        &owner_b,
+        &token_addr,
+        &500i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Slash owner_b — auto-revokes the stream.
+    client.slash_signer(&governor, &owner_b, &Symbol::new(&env, "bad"));
+
+    // Spending from the now-revoked stream must panic with "stream revoked".
+    let recipient = Address::generate(&env);
+    let memo = String::from_str(&env, "attempt");
+    client.stream_spend(&owner_b, &stream_id, &recipient, &100i128, &memo);
+}
+
+/// Slashing an address that owns no streams must complete without panic.
+#[test]
+fn test_slash_signer_with_no_streams_succeeds() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governor = Address::generate(&env);
+    let owner_a = Address::generate(&env);
+    let owner_b = Address::generate(&env); // no streams
+
+    let sac = env.register_stellar_asset_contract_v2(governor.clone());
+    let token_addr = sac.address();
+
+    let treasury_id = env.register(crate::TreasuryContract, ());
+    let client = crate::TreasuryContractClient::new(&env, &treasury_id);
+
+    let mut owners = Vec::new(&env);
+    owners.push_back(owner_a.clone());
+    owners.push_back(owner_b.clone());
+    client.initialize(&owners, &1u32, &governor);
+
+    let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&treasury_id, &1_000i128);
+
+    env.ledger().set_sequence_number(1);
+
+    // Give owner_a a stream (so token list is set up) but not owner_b.
+    client.create_stream(
+        &governor,
+        &Symbol::new(&env, "dept"),
+        &owner_a,
+        &token_addr,
+        &500i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Slashing owner_b (who has zero streams) must not panic.
+    client.slash_signer(&governor, &owner_b, &Symbol::new(&env, "reason"));
+
+    assert!(client.is_slashed(&owner_b));
+}
+
+/// An already-revoked stream owned by a slashed address must be skipped gracefully.
+#[test]
+fn test_slash_signer_skips_already_revoked_streams() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let governor = Address::generate(&env);
+    let owner_a = Address::generate(&env);
+    let owner_b = Address::generate(&env);
+
+    let sac = env.register_stellar_asset_contract_v2(governor.clone());
+    let token_addr = sac.address();
+
+    let treasury_id = env.register(crate::TreasuryContract, ());
+    let client = crate::TreasuryContractClient::new(&env, &treasury_id);
+
+    let mut owners = Vec::new(&env);
+    owners.push_back(owner_a.clone());
+    owners.push_back(owner_b.clone());
+    client.initialize(&owners, &1u32, &governor);
+
+    let sac_client = soroban_sdk::token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&treasury_id, &10_000i128);
+
+    env.ledger().set_sequence_number(1);
+
+    let stream_id = client.create_stream(
+        &governor,
+        &Symbol::new(&env, "early"),
+        &owner_b,
+        &token_addr,
+        &500i128,
+        &0u32,
+        &100_000u32,
+        &500i128,
+        &0u32,
+        &1u64,
+    );
+
+    // Revoke the stream before slashing.
+    client.revoke_stream(&governor, &stream_id);
+
+    let s: BudgetStream = client.get_stream(&stream_id);
+    assert!(s.is_revoked);
+
+    // Slashing should succeed and not double-count the already-revoked stream.
+    client.slash_signer(&governor, &owner_b, &Symbol::new(&env, "late"));
+
+    // Stream is still revoked; revoked_at_ledger unchanged from the first revocation.
+    let s_after: BudgetStream = client.get_stream(&stream_id);
+    assert!(s_after.is_revoked);
+    assert!(client.is_slashed(&owner_b));
+}
+
+// ── Regression tests for #871: stream errors emit Error(Contract, #N) ────────
+//
+// Each test asserts the *exact* SDK error-code string produced by
+// env.panic_with_error(TreasuryError::X) so parseTreasuryError in the SDK
+// can extract the code via extractContractErrorCode.
+
+/// StreamRevoked = 13
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")]
+fn test_error_code_stream_revoked() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "r"), &stream_owner,
+        &token_addr, &1_000i128, &0u32, &100_000u32, &500i128, &0u32, &1u64,
+    );
+    client.revoke_stream(&governor, &stream_id);
+
+    client.stream_spend(
+        &stream_owner, &stream_id,
+        &Address::generate(&env), &100i128,
+        &String::from_str(&env, "x"),
+    );
+}
+
+/// StreamNotActive = 11  (stream exhausted → is_active = false)
+#[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_error_code_stream_not_active() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "na"), &stream_owner,
+        &token_addr, &100i128, &0u32, &100_000u32, &100i128, &0u32, &1u64,
+    );
+    let recipient = Address::generate(&env);
+    // Exhaust the stream so is_active flips to false.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &100i128,
+        &String::from_str(&env, "exhaust"));
+
+    // Second spend must fire StreamNotActive = #11.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &1i128,
+        &String::from_str(&env, "fail"));
+}
+
+/// StreamExpired = 12  (past end_ledger)
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_error_code_stream_expired() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "exp"), &stream_owner,
+        &token_addr, &1_000i128, &0u32, &10u32, &500i128, &0u32, &1u64,
+    );
+    env.ledger().with_mut(|l| l.sequence_number = 20);
+
+    client.stream_spend(
+        &stream_owner, &stream_id,
+        &Address::generate(&env), &100i128,
+        &String::from_str(&env, "x"),
+    );
+}
+
+/// StreamExpired = 12  (before start_ledger — same code, both bounds)
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_error_code_stream_not_started() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "ns"), &stream_owner,
+        &token_addr, &1_000i128, &1_000u32, &100_000u32, &500i128, &0u32, &1u64,
+    );
+    // Ledger is at 1 (set in setup), stream starts at 1000.
+    client.stream_spend(
+        &stream_owner, &stream_id,
+        &Address::generate(&env), &100i128,
+        &String::from_str(&env, "x"),
+    );
+}
+
+/// StreamBudgetExhausted = 14
+#[test]
+#[should_panic(expected = "Error(Contract, #14)")]
+fn test_error_code_stream_budget_exhausted() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // Allocate 200 but try to spend 201 in one go (within max_single_spend = 300).
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "be"), &stream_owner,
+        &token_addr, &200i128, &0u32, &100_000u32, &300i128, &0u32, &1u64,
+    );
+    client.stream_spend(
+        &stream_owner, &stream_id,
+        &Address::generate(&env), &201i128,
+        &String::from_str(&env, "x"),
+    );
+}
+
+/// StreamSpendExceedsMax = 15
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_error_code_stream_spend_exceeds_max() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "mx"), &stream_owner,
+        &token_addr, &1_000i128, &0u32, &100_000u32, &100i128, &0u32, &1u64,
+    );
+    // max_single_spend = 100; try 101.
+    client.stream_spend(
+        &stream_owner, &stream_id,
+        &Address::generate(&env), &101i128,
+        &String::from_str(&env, "x"),
+    );
+}
+
+/// StreamCooldownNotElapsed = 16
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn test_error_code_stream_cooldown_not_elapsed() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "cd"), &stream_owner,
+        &token_addr, &1_000i128, &0u32, &100_000u32, &500i128, &10u32, &1u64,
+    );
+    let recipient = Address::generate(&env);
+    let memo = String::from_str(&env, "x");
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &100i128, &memo);
+    // Second spend before 10-ledger cooldown elapses.
+    client.stream_spend(&stream_owner, &stream_id, &recipient, &100i128, &memo);
+}
+
+/// UnauthorizedStreamOwner = 17  (wrong owner)
+#[test]
+#[should_panic(expected = "Error(Contract, #17)")]
+fn test_error_code_unauthorized_stream_owner() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "uo"), &stream_owner,
+        &token_addr, &1_000i128, &0u32, &100_000u32, &500i128, &0u32, &1u64,
+    );
+    let intruder = Address::generate(&env);
+    client.stream_spend(
+        &intruder, &stream_id,
+        &Address::generate(&env), &100i128,
+        &String::from_str(&env, "x"),
+    );
+}
+
+/// StreamAlreadyRevoked = 19  (revoke_stream called twice)
+/// The public revoke_stream (which calls revoke_stream_internal) is
+/// governor-gated and no-ops on already-revoked; the error code is
+/// reserved for callers who explicitly want to detect the condition.
+/// Here we validate that the StreamRevoked (#13) code fires on stream_spend
+/// after revocation, confirming the on-chain path is reachable.
+#[test]
+#[should_panic(expected = "Error(Contract, #13)")]
+fn test_error_code_stream_revoked_on_spend_after_revoke() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    let stream_id = client.create_stream(
+        &governor, &Symbol::new(&env, "rv"), &stream_owner,
+        &token_addr, &1_000i128, &0u32, &100_000u32, &500i128, &0u32, &1u64,
+    );
+    client.revoke_stream(&governor, &stream_id);
+
+    // stream_spend must emit Error(Contract, #13) — StreamRevoked.
+    client.stream_spend(
+        &stream_owner, &stream_id,
+        &Address::generate(&env), &100i128,
+        &String::from_str(&env, "x"),
+    );
+}
+
+/// StreamEndBeforeStart = 20  (create with end_ledger <= start_ledger)
+#[test]
+#[should_panic(expected = "Error(Contract, #20)")]
+fn test_error_code_stream_end_before_start() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, token_addr, governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // end_ledger (5) <= start_ledger (10) — must fire StreamEndBeforeStart.
+    client.create_stream(
+        &governor, &Symbol::new(&env, "eb"), &stream_owner,
+        &token_addr, &1_000i128, &10u32, &5u32, &500i128, &0u32, &1u64,
+    );
+}
+
+/// StreamNotFound = 10  (load non-existent stream)
+#[test]
+#[should_panic(expected = "Error(Contract, #10)")]
+fn test_error_code_stream_not_found() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let (treasury_id, _token_addr, _governor, stream_owner) = setup(&env);
+    let client = TreasuryContractClient::new(&env, &treasury_id);
+
+    // Stream ID 999 was never created.
+    client.stream_spend(
+        &stream_owner, &999u64,
+        &Address::generate(&env), &100i128,
+        &String::from_str(&env, "x"),
+    );
 }

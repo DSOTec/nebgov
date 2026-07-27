@@ -3,7 +3,7 @@
 //! Allows governance to allocate per-department budget streams with
 //! independent spending authority, cooldowns, and utilization tracking.
 
-use crate::{DataKey, StreamDataKey, TreasuryError};
+use crate::{DataKey, SpendingCap, StreamDataKey, TreasuryError};
 use soroban_sdk::{contracttype, token, Address, Env, IntoVal, String, Symbol, TryFromVal, Vec};
 
 /// A budget stream allocated to a department owner.
@@ -260,6 +260,15 @@ fn require_governor(env: &Env, caller: &Address) {
     assert!(caller == &governor, "not authorized");
 }
 
+/// Check whether `addr` has been slashed by governance.
+/// Mirrors `DataKey::IsSlashed` from lib.rs.
+fn is_slashed(env: &Env, addr: &Address) -> bool {
+    env.storage()
+        .persistent()
+        .get(&DataKey::IsSlashed(addr.clone()))
+        .unwrap_or(false)
+}
+
 fn load_stream(env: &Env, stream_id: u64) -> BudgetStream {
     env.storage()
         .persistent()
@@ -294,6 +303,58 @@ fn paginate<T: Clone + TryFromVal<Env, soroban_sdk::Val> + IntoVal<Env, soroban_
     result
 }
 
+// ── Spending-cap helpers ────────────────────────────────────────────────────
+
+/// Compute the period-start ledger for `current_ledger` given `period_ledgers`.
+/// Mirrors `TreasuryContract::period_start_for` in lib.rs.
+fn period_start_for(current_ledger: u32, period_ledgers: u32) -> u32 {
+    (current_ledger / period_ledgers) * period_ledgers
+}
+
+/// Check the treasury-wide spending cap for `token` and return
+/// `(period_start, new_accumulated_spent)` ready to be persisted
+/// **after** the transfer succeeds.
+///
+/// Panics with `"spending cap exceeded"` if `amount` would push the
+/// period accumulator over `cap.max_amount`.  Does nothing (returns
+/// `(0, 0)` with a `false` flag) when no cap is configured.
+fn check_spending_cap(
+    env: &Env,
+    token: &Address,
+    amount: i128,
+) -> (bool, u32, i128) {
+    let cap: Option<SpendingCap> = env
+        .storage()
+        .instance()
+        .get(&DataKey::SpendingCap(token.clone()));
+
+    let Some(cap) = cap else {
+        return (false, 0, 0);
+    };
+
+    let current_ledger = env.ledger().sequence();
+    let period_start = period_start_for(current_ledger, cap.period_ledgers);
+    let spent: i128 = env
+        .storage()
+        .persistent()
+        .get(&DataKey::SpentThisPeriod(token.clone(), period_start))
+        .unwrap_or(0i128);
+    let new_spent = spent
+        .checked_add(amount)
+        .expect("spending accumulator overflow");
+    assert!(new_spent <= cap.max_amount, "spending cap exceeded");
+
+    (true, period_start, new_spent)
+}
+
+/// Persist the updated period accumulator after a successful transfer.
+fn commit_spending_cap(env: &Env, token: &Address, period_start: u32, new_spent: i128) {
+    env.storage().persistent().set(
+        &DataKey::SpentThisPeriod(token.clone(), period_start),
+        &new_spent,
+    );
+}
+
 // ── Public stream functions ─────────────────────────────────────────────────
 
 /// Governance-gated: allocate a new budget stream to a department owner.
@@ -314,11 +375,12 @@ pub fn create_stream(
 
     assert!(total_allocated > 0, "allocation must be positive");
     assert!(max_single_spend > 0, "max single spend must be positive");
-    assert!(end_ledger > start_ledger, "end before start");
-    assert!(
-        end_ledger > env.ledger().sequence(),
-        "end ledger already passed"
-    );
+    if end_ledger <= start_ledger {
+        env.panic_with_error(TreasuryError::StreamEndBeforeStart);
+    }
+    if end_ledger <= env.ledger().sequence() {
+        env.panic_with_error(TreasuryError::StreamExpired);
+    }
 
     let id = get_stream_count(&env) + 1;
     let stream = BudgetStream {
@@ -364,32 +426,54 @@ pub fn stream_spend(
 
     let mut stream = load_stream(&env, stream_id);
 
-    assert!(!stream.is_revoked, "stream revoked");
-    assert!(stream.is_active, "stream not active");
-    assert!(owner == stream.owner, "not stream owner");
+    if stream.is_revoked {
+        env.panic_with_error(TreasuryError::StreamRevoked);
+    }
+    if !stream.is_active {
+        env.panic_with_error(TreasuryError::StreamNotActive);
+    }
+    if owner != stream.owner {
+        env.panic_with_error(TreasuryError::UnauthorizedStreamOwner);
+    }
+    if is_slashed(&env, &owner) {
+        env.panic_with_error(TreasuryError::UnauthorizedStreamOwner);
+    }
 
     let current_ledger = env.ledger().sequence();
-    assert!(current_ledger >= stream.start_ledger, "stream not started");
-    assert!(current_ledger <= stream.end_ledger, "stream expired");
+    if current_ledger < stream.start_ledger || current_ledger > stream.end_ledger {
+        env.panic_with_error(TreasuryError::StreamExpired);
+    }
 
     assert!(amount > 0, "amount must be positive");
-    assert!(
-        amount <= stream.max_single_spend,
-        "exceeds max single spend"
-    );
+    if amount > stream.max_single_spend {
+        env.panic_with_error(TreasuryError::StreamSpendExceedsMax);
+    }
 
     let remaining = stream.total_allocated - stream.total_spent;
-    assert!(amount <= remaining, "budget exhausted");
+    if amount > remaining {
+        env.panic_with_error(TreasuryError::StreamBudgetExhausted);
+    }
 
     if stream.cooldown_ledgers > 0 && stream.spend_count > 0 {
         let elapsed = current_ledger - stream.last_spend_ledger;
-        assert!(elapsed >= stream.cooldown_ledgers, "cooldown not elapsed");
+        if elapsed < stream.cooldown_ledgers {
+            env.panic_with_error(TreasuryError::StreamCooldownNotElapsed);
+        }
     }
+
+    // Check treasury-wide spending cap before any token movement.
+    let (cap_active, period_start, new_cap_spent) =
+        check_spending_cap(&env, &stream.token, amount);
 
     // Transfer tokens from treasury to recipient
     let token_client = token::TokenClient::new(&env, &stream.token);
     let treasury = env.current_contract_address();
     token_client.transfer(&treasury, &recipient, &amount);
+
+    // Persist spending-cap accumulator now that the transfer succeeded.
+    if cap_active {
+        commit_spending_cap(&env, &stream.token, period_start, new_cap_spent);
+    }
 
     // Update stream state
     stream.total_spent = stream
@@ -445,30 +529,50 @@ pub fn stream_batch_spend(
     assert!(!recipients.is_empty(), "empty batch");
 
     let mut stream = load_stream(&env, stream_id);
-    assert!(!stream.is_revoked, "stream revoked");
-    assert!(stream.is_active, "stream not active");
-    assert!(owner == stream.owner, "not stream owner");
+    if stream.is_revoked {
+        env.panic_with_error(TreasuryError::StreamRevoked);
+    }
+    if !stream.is_active {
+        env.panic_with_error(TreasuryError::StreamNotActive);
+    }
+    if owner != stream.owner {
+        env.panic_with_error(TreasuryError::UnauthorizedStreamOwner);
+    }
+    if is_slashed(&env, &owner) {
+        env.panic_with_error(TreasuryError::UnauthorizedStreamOwner);
+    }
 
     let current_ledger = env.ledger().sequence();
-    assert!(current_ledger >= stream.start_ledger, "stream not started");
-    assert!(current_ledger <= stream.end_ledger, "stream expired");
+    if current_ledger < stream.start_ledger || current_ledger > stream.end_ledger {
+        env.panic_with_error(TreasuryError::StreamExpired);
+    }
 
     // Validate all amounts
     let mut total: i128 = 0;
     for i in 0..amounts.len() {
         let amt = amounts.get(i).unwrap();
         assert!(amt > 0, "amount must be positive");
-        assert!(amt <= stream.max_single_spend, "exceeds max single spend");
+        if amt > stream.max_single_spend {
+            env.panic_with_error(TreasuryError::StreamSpendExceedsMax);
+        }
         total = total.checked_add(amt).expect("batch total overflow");
     }
 
     let remaining = stream.total_allocated - stream.total_spent;
-    assert!(total <= remaining, "budget exhausted");
+    if total > remaining {
+        env.panic_with_error(TreasuryError::StreamBudgetExhausted);
+    }
 
     if stream.cooldown_ledgers > 0 && stream.spend_count > 0 {
         let elapsed = current_ledger - stream.last_spend_ledger;
-        assert!(elapsed >= stream.cooldown_ledgers, "cooldown not elapsed");
+        if elapsed < stream.cooldown_ledgers {
+            env.panic_with_error(TreasuryError::StreamCooldownNotElapsed);
+        }
     }
+
+    // Check treasury-wide spending cap for the full batch total before any transfer.
+    let (cap_active, period_start, new_cap_spent) =
+        check_spending_cap(&env, &stream.token, total);
 
     // Execute transfers
     let token_client = token::TokenClient::new(&env, &stream.token);
@@ -477,6 +581,11 @@ pub fn stream_batch_spend(
         let r = recipients.get(i).unwrap();
         let amt = amounts.get(i).unwrap();
         token_client.transfer(&treasury, &r, &amt);
+    }
+
+    // Persist spending-cap accumulator now that all transfers succeeded.
+    if cap_active {
+        commit_spending_cap(&env, &stream.token, period_start, new_cap_spent);
     }
 
     // Update stream
@@ -524,19 +633,26 @@ pub fn stream_batch_spend(
 /// Governance-gated: revoke an active stream and return unspent funds to treasury.
 pub fn revoke_stream(env: Env, caller: Address, stream_id: u64) {
     require_governor(&env, &caller);
+    revoke_stream_internal(&env, stream_id, &caller);
+}
 
-    let mut stream = load_stream(&env, stream_id);
-    assert!(!stream.is_revoked, "already revoked");
+/// Internal revoke — skips governor auth (caller must have already verified it).
+/// Silently no-ops if the stream is already revoked.
+pub fn revoke_stream_internal(env: &Env, stream_id: u64, caller: &Address) {
+    let mut stream = load_stream(env, stream_id);
+    if stream.is_revoked {
+        return;
+    }
 
     let unspent = stream.total_allocated - stream.total_spent;
     stream.is_revoked = true;
     stream.is_active = false;
     stream.revoked_at_ledger = Some(env.ledger().sequence());
 
-    remove_active_stream(&env, stream_id);
-    save_stream(&env, &stream);
+    remove_active_stream(env, stream_id);
+    save_stream(env, &stream);
 
-    emit_stream_revoked(&env, stream_id, &caller, unspent);
+    emit_stream_revoked(env, stream_id, caller, unspent);
 }
 
 /// Governance-gated: extend a stream's end_ledger.
@@ -544,12 +660,15 @@ pub fn extend_stream(env: Env, caller: Address, stream_id: u64, new_end_ledger: 
     require_governor(&env, &caller);
 
     let mut stream = load_stream(&env, stream_id);
-    assert!(!stream.is_revoked, "stream revoked");
-    assert!(new_end_ledger > stream.end_ledger, "new end must be later");
-    assert!(
-        new_end_ledger > env.ledger().sequence(),
-        "new end must be in the future"
-    );
+    if stream.is_revoked {
+        env.panic_with_error(TreasuryError::StreamRevoked);
+    }
+    if new_end_ledger <= stream.end_ledger {
+        env.panic_with_error(TreasuryError::StreamEndBeforeStart);
+    }
+    if new_end_ledger <= env.ledger().sequence() {
+        env.panic_with_error(TreasuryError::StreamExpired);
+    }
 
     let old_end = stream.end_ledger;
     stream.end_ledger = new_end_ledger;
@@ -565,7 +684,9 @@ pub fn top_up_stream(env: Env, caller: Address, stream_id: u64, additional_amoun
     assert!(additional_amount > 0, "additional must be positive");
 
     let mut stream = load_stream(&env, stream_id);
-    assert!(!stream.is_revoked, "stream revoked");
+    if stream.is_revoked {
+        env.panic_with_error(TreasuryError::StreamRevoked);
+    }
 
     stream.total_allocated = stream
         .total_allocated
@@ -586,11 +707,6 @@ pub fn top_up_stream(env: Env, caller: Address, stream_id: u64, additional_amoun
 
     let new_total = stream.total_allocated;
     add_total_streamed_by_token(&env, &stream.token, additional_amount);
-
-    if new_total > stream.total_spent && !stream.is_active && !stream.is_revoked {
-        stream.is_active = true;
-        add_active_stream(&env, stream_id);
-    }
 
     save_stream(&env, &stream);
     emit_stream_topped_up(&env, stream_id, additional_amount, new_total);
