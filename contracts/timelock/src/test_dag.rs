@@ -24,6 +24,10 @@ impl MockTarget {
             .unwrap_or(false)
     }
 
+    pub fn fail(_env: Env) {
+        panic!("forced failure")
+    }
+
     pub fn store_i128(env: Env, value: i128) {
         env.storage()
             .persistent()
@@ -367,7 +371,7 @@ fn test_partial_batch_enters_recovery_on_first_failure() {
     datas.push_back(Bytes::new(&env));
 
     let mut fn_names = Vec::new(&env);
-    fn_names.push_back(Symbol::new(&env, "exec"));
+    fn_names.push_back(Symbol::new(&env, "fail"));
 
     let batch_op_id = client.schedule_batch(
         &governor,
@@ -381,11 +385,12 @@ fn test_partial_batch_enters_recovery_on_first_failure() {
 
     env.ledger().with_mut(|l| l.timestamp = 1);
 
-    // Execute batch partially
     let state = client.execute_batch_partial(&governor, &batch_op_id);
 
-    // Verify state structure
     assert_eq!(state.batch_op_id, batch_op_id);
+    assert!(state.recovery_mode, "a failed sub-operation should enable recovery mode");
+    assert_eq!(state.failed_ops.len(), 1, "the failed sub-operation should be recorded");
+    assert!(state.completed_ops.is_empty(), "no successful sub-operations should be recorded when the batch fails");
 }
 
 #[test]

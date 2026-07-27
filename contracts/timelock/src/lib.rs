@@ -369,8 +369,8 @@ impl TimelockContract {
     }
 
     /// Execute a batch with partial completion tolerance (queues for recovery on any failure).
-    /// Note: Individual operation failures will cause the entire transaction to revert.
-    /// This function sets up recovery state that can be used to retry operations after investigation.
+    /// Each sub-operation is attempted independently. If one fails, it is recorded in recovery state
+    /// and the batch continues to the next operation.
     pub fn execute_batch_partial(env: Env, caller: Address, batch_op_id: Bytes) -> PartialBatchExecutionState {
         caller.require_auth();
         Self::require_governor(&env, &caller);
@@ -392,11 +392,9 @@ impl TimelockContract {
         }
 
         let mut completed_ops: Vec<Bytes> = Vec::new(&env);
-        // No failures accumulate here: any sub-call panic reverts the whole tx.
-        // The empty vec documents the shape of the state that gets persisted.
-        let failed_ops: Vec<FailedOperation> = Vec::new(&env);
+        let mut failed_ops: Vec<FailedOperation> = Vec::new(&env);
+        let mut recovery_mode = false;
 
-        // Execute all operations in order. If any fails, transaction reverts (standard Soroban behavior).
         for i in 0..batch.targets.len() {
             let op_id = Self::hash_op_in_batch(
                 &env,
@@ -411,16 +409,33 @@ impl TimelockContract {
             let data = batch.datas.get(i).unwrap();
             let args = Self::decode_invocation_args(&env, &data);
 
-            // Execute the contract invocation (will panic/revert if it fails)
-            let _: Val = env.invoke_contract(&target, &fn_name, args);
-            completed_ops.push_back(op_id.clone());
-            emit_partial_op_succeeded(
-                &env,
-                &batch_op_id,
-                &op_id,
-                completed_ops.len(),
-                batch.targets.len(),
-            );
+            let invocation_result = env.try_invoke_contract::<(), soroban_sdk::Error>(&target, &fn_name, args);
+            match invocation_result {
+                Ok(Ok(_)) => {
+                    completed_ops.push_back(op_id.clone());
+                    emit_partial_op_succeeded(
+                        &env,
+                        &batch_op_id,
+                        &op_id,
+                        completed_ops.len(),
+                        batch.targets.len(),
+                    );
+                }
+                Ok(Err(_)) | Err(_) => {
+                    let failed_op = FailedOperation {
+                        op_id: op_id.clone(),
+                        target: target.clone(),
+                        fn_name: fn_name.clone(),
+                        data: data.clone(),
+                        failure_reason: symbol_short!("failed"),
+                        failed_at_ledger: env.ledger().sequence(),
+                        retry_count: 0,
+                    };
+                    failed_ops.push_back(failed_op);
+                    recovery_mode = true;
+                    emit_partial_op_failed(&env, &batch_op_id, &op_id);
+                }
+            }
         }
 
         let recovery_deadline = env.ledger().sequence() + 100_000;
@@ -430,12 +445,16 @@ impl TimelockContract {
             completed_ops: completed_ops.clone(),
             failed_ops: failed_ops.clone(),
             pending_ops: Vec::new(&env),
-            recovery_mode: false,
+            recovery_mode,
             recovery_deadline,
         };
 
         let state_key = DataKey::PartialBatchState(batch_op_id.clone());
         env.storage().persistent().set(&state_key, &state);
+
+        if recovery_mode {
+            emit_batch_recovery_entered(&env, &batch_op_id, recovery_deadline);
+        }
 
         emit_partial_batch_started(&env, &batch_op_id, batch.targets.len());
 
