@@ -1,12 +1,15 @@
 import {
   parseConfigUpdatedEvent,
+  parseDelegatedBySigEvent,
   parseGovernorUpgradedEvent,
   parsePauseEvent,
+  parsePermitsInvalidatedEvent,
   parseProposalCancelledEvent,
   parseProposalCreatedEvent,
   parseProposalExecutedEvent,
   parseProposalExpiredEvent,
   parseProposalQueuedEvent,
+  parseRelayerWhitelistUpdatedEvent,
   parseUnpauseEvent,
   parseVoteCastEvent,
   SorobanEvent,
@@ -259,5 +262,95 @@ describe("event parsers", () => {
       value: { ledger: 10 },
     };
     expect(parseUnpauseEvent(event)).toBeNull();
+  });
+
+  it("parses DelegatedBySig", () => {
+    const event: SorobanEvent = {
+      ledger: 11,
+      contractId: "C123",
+      topic: ["DelegatedBySig", "GDELEGATOR"],
+      value: {
+        delegator: "GDELEGATOR",
+        delegatee: "GDELEGATEE",
+        relayer: "GRELAYER",
+        nonce: "5",
+      },
+    };
+
+    expect(parseDelegatedBySigEvent(event)).toEqual({
+      delegator: "GDELEGATOR",
+      delegatee: "GDELEGATEE",
+      relayer: "GRELAYER",
+      nonce: 5n,
+    });
+  });
+
+  it("parseDelegatedBySigEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 11,
+      contractId: "C123",
+      topic: ["SomethingElse", "GDELEGATOR"],
+      value: {
+        delegator: "GDELEGATOR",
+        delegatee: "GDELEGATEE",
+        relayer: "GRELAYER",
+        nonce: "5",
+      },
+    };
+    expect(parseDelegatedBySigEvent(event)).toBeNull();
+  });
+
+  it("parses PermitsInvalidated", () => {
+    const event: SorobanEvent = {
+      ledger: 12,
+      contractId: "C123",
+      topic: ["PermitsInvalidated", "GDELEGATOR"],
+      value: {
+        delegator: "GDELEGATOR",
+        new_nonce: "6",
+      },
+    };
+
+    expect(parsePermitsInvalidatedEvent(event)).toEqual({
+      delegator: "GDELEGATOR",
+      newNonce: 6n,
+    });
+  });
+
+  it("parsePermitsInvalidatedEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 12,
+      contractId: "C123",
+      topic: ["SomethingElse", "GDELEGATOR"],
+      value: { delegator: "GDELEGATOR", new_nonce: "6" },
+    };
+    expect(parsePermitsInvalidatedEvent(event)).toBeNull();
+  });
+
+  it("parses RelayerWhitelistUpdated", () => {
+    const event: SorobanEvent = {
+      ledger: 13,
+      contractId: "C123",
+      topic: ["RelayerWhitelistUpdated", "GRELAYER"],
+      value: {
+        relayer: "GRELAYER",
+        whitelisted: true,
+      },
+    };
+
+    expect(parseRelayerWhitelistUpdatedEvent(event)).toEqual({
+      relayer: "GRELAYER",
+      whitelisted: true,
+    });
+  });
+
+  it("parseRelayerWhitelistUpdatedEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 13,
+      contractId: "C123",
+      topic: ["SomethingElse", "GRELAYER"],
+      value: { relayer: "GRELAYER", whitelisted: true },
+    };
+    expect(parseRelayerWhitelistUpdatedEvent(event)).toBeNull();
   });
 });
