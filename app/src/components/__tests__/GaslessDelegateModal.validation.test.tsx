@@ -8,8 +8,10 @@ import { GaslessDelegateModal } from "../GaslessDelegateModal";
 
 const VALID_ADDRESS = "GDOOXICJPSOZDQRCEHZPR6MAX5PUZXVWGJ3QPVEU4DADIZQ4YBQOJNIB";
 const VALID_ADDRESS_2 = "GD6HLZWRE5FHK3SDLZB3FH56R3H3ECAAYCPWWU7O7EK4FCNT2Z7S6D5I";
+const mockDelegateGasless = jest.fn();
+const mockInvalidateAllPermits = jest.fn();
 
-jest.mock("../lib/wallet-context", () => ({
+jest.mock("../../lib/wallet-context", () => ({
   useWallet: () => ({
     isConnected: true,
     publicKey: VALID_ADDRESS_2,
@@ -22,9 +24,10 @@ jest.mock("react-hot-toast", () => ({
   default: { success: jest.fn(), error: jest.fn() },
 }));
 
-jest.mock("../hooks/useGaslessDelegation", () => ({
+jest.mock("../../hooks/useGaslessDelegation", () => ({
   useGaslessDelegation: () => ({
-    delegateGasless: jest.fn().mockResolvedValue({ txHash: "txhash789" }),
+    delegateGasless: mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" }),
+    invalidateAllPermits: mockInvalidateAllPermits.mockResolvedValue({ txHash: "txhash123" }),
     submitting: false,
   }),
   EXPIRY_PRESET_LABELS: {
@@ -44,6 +47,10 @@ const defaultProps = {
 describe("GaslessDelegateModal — Stellar address validation", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockDelegateGasless.mockReset();
+    mockInvalidateAllPermits.mockReset();
+    mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" });
+    mockInvalidateAllPermits.mockResolvedValue({ txHash: "txhash123" });
   });
 
   describe("rendering", () => {
@@ -233,6 +240,14 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
       render(<GaslessDelegateModal {...defaultProps} onClose={onClose} />);
       await userEvent.click(screen.getByRole("button", { name: /cancel/i }));
       expect(onClose).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("permit invalidation", () => {
+    it("invokes the invalidation action when the user requests it", async () => {
+      render(<GaslessDelegateModal {...defaultProps} />);
+      await userEvent.click(screen.getByRole("button", { name: /invalidate pending gasless permits/i }));
+      expect(mockInvalidateAllPermits).toHaveBeenCalledTimes(1);
     });
   });
 });

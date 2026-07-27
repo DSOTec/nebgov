@@ -31,7 +31,7 @@ export const EXPIRY_PRESET_LABELS: Record<ExpiryPreset, string> = {
 
 export interface GaslessDelegationResult {
   txHash: string;
-  nonce: number;
+  nonce?: number;
 }
 
 function getDelegationSigClientFromEnv(): DelegationSigClient {
@@ -56,7 +56,7 @@ function getDelegationSigClientFromEnv(): DelegationSigClient {
  * transaction itself, it only signs an authorization off-chain.
  */
 export function useGaslessDelegation() {
-  const { isConnected, publicKey, signAuthEntry } = useWallet();
+  const { isConnected, publicKey, signTransaction } = useWallet();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -120,5 +120,26 @@ export function useGaslessDelegation() {
     [isConnected, publicKey, signAuthEntry],
   );
 
-  return { delegateGasless, submitting, error };
+  const invalidateAllPermits = useCallback(async (): Promise<GaslessDelegationResult> => {
+    if (!isConnected || !publicKey) {
+      throw new Error("Connect your wallet first.");
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const client = getDelegationSigClientFromEnv();
+      const tx = await client.invalidateAllPermitsWithSign(publicKey, signTransaction);
+
+      return { txHash: tx.hash };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      throw err;
+    } finally {
+      setSubmitting(false);
+    }
+  }, [isConnected, publicKey, signTransaction]);
+
+  return { delegateGasless, invalidateAllPermits, submitting, error };
 }
