@@ -150,6 +150,14 @@ export class DelegationSigClient {
     );
   }
 
+  /**
+   * `fallback` is only used when simulation *succeeds* but returns no
+   * retval — a genuinely empty result. A failed simulation (RPC/contract
+   * error) throws instead of returning `fallback`, so transient RPC
+   * failures can't masquerade as legitimate default values (e.g. `getNonce`
+   * returning `0n` on a network hiccup, indistinguishable from an unused
+   * nonce — see issue #828).
+   */
   private async simulateRead<T>(
     fnName: string,
     args: xdr.ScVal[],
@@ -167,7 +175,13 @@ export class DelegationSigClient {
           .build(),
       );
 
-      if (SorobanRpc.Api.isSimulationError(result)) return fallback;
+      if (SorobanRpc.Api.isSimulationError(result)) {
+        throw new VotesError(
+          VotesErrorCode.SimulationFailed,
+          `Simulation of "${fnName}" failed: ${result.error}`,
+          result,
+        );
+      }
       const raw = (result as SorobanRpc.Api.SimulateTransactionSuccessResponse)
         .result?.retval;
       return raw ? decode(raw) : fallback;
