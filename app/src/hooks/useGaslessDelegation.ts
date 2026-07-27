@@ -2,6 +2,7 @@
 
 import { useCallback, useState } from "react";
 import { DelegationSigClient, type Network } from "@nebgov/sdk";
+import { isValidStellarAddress } from "../lib/utils/stellarAddress";
 import { useWallet } from "../lib/wallet-context";
 import { backendFetch } from "../lib/backend";
 
@@ -34,6 +35,11 @@ export interface GaslessDelegationResult {
   nonce: number;
 }
 
+export interface GaslessPreflightResult {
+  ok: boolean;
+  error?: string;
+}
+
 function getDelegationSigClientFromEnv(): DelegationSigClient {
   const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
   const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
@@ -59,6 +65,48 @@ export function useGaslessDelegation() {
   const { isConnected, publicKey, signAuthEntry } = useWallet();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const preflightDelegatee = useCallback(
+    async (delegatee: string): Promise<GaslessPreflightResult> => {
+      if (!delegatee.trim()) {
+        return { ok: false, error: "Address is required." };
+      }
+
+      if (!isValidStellarAddress(delegatee)) {
+        return { ok: false, error: "Invalid Stellar address." };
+      }
+
+      if (!isConnected || !publicKey) {
+        return { ok: false, error: "Connect your wallet first." };
+      }
+
+      try {
+        const client = getDelegationSigClientFromEnv();
+        const [wouldCreateCycle, depthLimit, currentDepth] = await Promise.all([
+          client.wouldCreateCycle(publicKey, delegatee.trim()),
+          client.getDelegationDepthLimit(),
+          client.getChainDepth(publicKey),
+        ]);
+
+        if (wouldCreateCycle) {
+          return { ok: false, error: "This delegation would create a cycle." };
+        }
+
+        if (currentDepth + 1 > depthLimit) {
+          return {
+            ok: false,
+            error: `This delegation would exceed the maximum delegation depth of ${depthLimit}.`,
+          };
+        }
+
+        return { ok: true };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: message };
+      }
+    },
+    [isConnected, publicKey],
+  );
 
   const delegateGasless = useCallback(
     async (
@@ -120,5 +168,5 @@ export function useGaslessDelegation() {
     [isConnected, publicKey, signAuthEntry],
   );
 
-  return { delegateGasless, submitting, error };
+  return { delegateGasless, preflightDelegatee, submitting, error };
 }
