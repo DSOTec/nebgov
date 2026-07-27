@@ -874,6 +874,135 @@ export function subscribeToDraftExpired(
   return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.draftExpired, callback, opts);
 }
 
+// ── Token-votes delegation registry events (#912) ───────────────────────────
+
+const DELEGATION_REGISTRY_TOPICS = {
+  delegationRegistered: "DelegationRegistered",
+  delegationRevoked: "DelegationRevoked",
+  delegationDepthLimitUpdated: "DelegationDepthLimitUpdated",
+} as const;
+
+export interface DelegationRegisteredEventData {
+  delegator: string;
+  delegatee: string;
+  power: bigint;
+  chainDepth: number;
+}
+
+export function parseDelegationRegisteredEvent(
+  event: SorobanEvent
+): DelegationRegisteredEventData | null {
+  if (
+    event.topic[0] !== DELEGATION_REGISTRY_TOPICS.delegationRegistered ||
+    !Array.isArray(event.value) ||
+    event.value.length < 3
+  ) {
+    return null;
+  }
+
+  const power = toBigInt(event.value[1]);
+  const chainDepth = toNumber(event.value[2]);
+
+  if (power === null || chainDepth === null) return null;
+
+  return {
+    delegator: String(event.topic[1] ?? ""),
+    delegatee: String(event.value[0] ?? ""),
+    power,
+    chainDepth,
+  };
+}
+
+export interface DelegationRevokedEventData {
+  delegator: string;
+  previousDelegatee: string;
+  atLedger: number;
+}
+
+export function parseDelegationRevokedEvent(
+  event: SorobanEvent
+): DelegationRevokedEventData | null {
+  if (
+    event.topic[0] !== DELEGATION_REGISTRY_TOPICS.delegationRevoked ||
+    !Array.isArray(event.value) ||
+    event.value.length < 2
+  ) {
+    return null;
+  }
+
+  const atLedger = toNumber(event.value[1]);
+  if (atLedger === null) return null;
+
+  return {
+    delegator: String(event.topic[1] ?? ""),
+    previousDelegatee: String(event.value[0] ?? ""),
+    atLedger,
+  };
+}
+
+export interface DelegationDepthLimitUpdatedEventData {
+  oldLimit: number;
+  newLimit: number;
+}
+
+export function parseDelegationDepthLimitUpdatedEvent(
+  event: SorobanEvent
+): DelegationDepthLimitUpdatedEventData | null {
+  if (
+    event.topic[0] !== DELEGATION_REGISTRY_TOPICS.delegationDepthLimitUpdated ||
+    !Array.isArray(event.value) ||
+    event.value.length < 2
+  ) {
+    return null;
+  }
+
+  const oldLimit = toNumber(event.value[0]);
+  const newLimit = toNumber(event.value[1]);
+
+  if (oldLimit === null || newLimit === null) return null;
+
+  return { oldLimit, newLimit };
+}
+
+export function subscribeToDelegationRegistered(
+  tokenVotesAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(
+    tokenVotesAddress,
+    DELEGATION_REGISTRY_TOPICS.delegationRegistered,
+    callback,
+    opts
+  );
+}
+
+export function subscribeToDelegationRevoked(
+  tokenVotesAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(
+    tokenVotesAddress,
+    DELEGATION_REGISTRY_TOPICS.delegationRevoked,
+    callback,
+    opts
+  );
+}
+
+export function subscribeToDelegationDepthLimitUpdated(
+  tokenVotesAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(
+    tokenVotesAddress,
+    DELEGATION_REGISTRY_TOPICS.delegationDepthLimitUpdated,
+    callback,
+    opts
+  );
+}
+
 // ── Treasury budget-stream events ───────────────────────────────────────────
 
 const STREAM_TOPICS = {
