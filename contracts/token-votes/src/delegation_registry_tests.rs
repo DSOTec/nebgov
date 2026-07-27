@@ -295,12 +295,12 @@ fn test_delegation_snapshot_at_past_ledger() {
     client.delegate(&delegator, &b);
 
     set_ledger(&env, 25);
-    let snapshot_at_15 = client.get_delegation_snapshot(&a, &15);
+    let snapshot_at_15 = client.get_delegation_snapshot(&a, &15, &0, &100);
     assert_eq!(snapshot_at_15.len(), 1);
     assert_eq!(snapshot_at_15.get(0).unwrap().address, delegator);
     assert_eq!(snapshot_at_15.get(0).unwrap().delegated_power, 777);
 
-    let snapshot_at_20 = client.get_delegation_snapshot(&a, &20);
+    let snapshot_at_20 = client.get_delegation_snapshot(&a, &20, &0, &100);
     assert_eq!(snapshot_at_20.len(), 0);
 }
 

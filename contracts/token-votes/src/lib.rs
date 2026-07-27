@@ -62,12 +62,11 @@ pub enum DataKey {
     DelegationRecord(Address, Address), // (delegator, delegatee) -> DelegationEntry
     DelegationHistory(Address),         // delegator -> Vec<DelegationHistoryEntry>
     ReceivedDelegations(Address),       // delegatee -> Vec<Address> (all current delegators)
+    HistoricalDelegations(Address),     // delegatee -> Vec<Address> (all delegators who ever delegated, for snapshots)
     DelegationDepthLimit,               // u32: max chain depth (default 1, upgradeable)
     TotalDelegatorsFor(Address),        // delegatee -> u32: count of current delegators
     DelegationChain(Address),           // delegator -> Vec<Address>: full chain from delegator to tip
     ChainDepth(Address),                // delegator -> u32: depth of delegation chain from this delegator
-    AllDelegators,                      // Vec<Address>: every address that has ever registered a delegation
-    IsKnownDelegator(Address),          // bool marker for O(1) AllDelegators membership check
 }
 
 #[contract]
@@ -488,8 +487,10 @@ impl TokenVotesContract {
         env: Env,
         delegatee: Address,
         at_ledger: u32,
+        offset: u32,
+        limit: u32,
     ) -> Vec<DelegatorInfo> {
-        delegation_registry::get_delegation_snapshot(&env, delegatee, at_ledger)
+        delegation_registry::get_delegation_snapshot(&env, delegatee, at_ledger, offset, limit)
     }
 
     /// Get voting power at a past ledger sequence (snapshot).

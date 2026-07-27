@@ -94,20 +94,6 @@ fn resolve_chain(env: &Env, start: Address) -> Vec<Address> {
     chain
 }
 
-fn register_known_delegator(env: &Env, delegator: &Address) {
-    let known_key = DataKey::IsKnownDelegator(delegator.clone());
-    let already: bool = env.storage().persistent().get(&known_key).unwrap_or(false);
-    if !already {
-        let mut all: Vec<Address> = env
-            .storage()
-            .persistent()
-            .get(&DataKey::AllDelegators)
-            .unwrap_or(Vec::new(env));
-        all.push_back(delegator.clone());
-        env.storage().persistent().set(&DataKey::AllDelegators, &all);
-        env.storage().persistent().set(&known_key, &true);
-    }
-}
 
 fn emit_delegation_registered(
     env: &Env,
@@ -200,6 +186,17 @@ pub(crate) fn register_delegation(
     received.push_back(delegator.clone());
     env.storage().persistent().set(&received_key, &received);
 
+    let historical_key = DataKey::HistoricalDelegations(delegatee.clone());
+    let mut historical: Vec<Address> = env
+        .storage()
+        .persistent()
+        .get(&historical_key)
+        .unwrap_or(Vec::new(env));
+    if !historical.contains(delegator.clone()) {
+        historical.push_back(delegator.clone());
+        env.storage().persistent().set(&historical_key, &historical);
+    }
+
     let count_key = DataKey::TotalDelegatorsFor(delegatee.clone());
     let count: u32 = env.storage().persistent().get(&count_key).unwrap_or(0);
     env.storage().persistent().set(&count_key, &(count + 1));
@@ -213,7 +210,6 @@ pub(crate) fn register_delegation(
         .persistent()
         .set(&DataKey::ChainDepth(delegator.clone()), &depth);
 
-    register_known_delegator(env, delegator);
 
     emit_delegation_registered(env, delegator, delegatee, power, depth);
 }
@@ -436,15 +432,21 @@ pub(crate) fn get_delegation_snapshot(
     env: &Env,
     delegatee: Address,
     at_ledger: u32,
+    offset: u32,
+    limit: u32,
 ) -> Vec<DelegatorInfo> {
-    let all_delegators: Vec<Address> = env
+    let historical_delegators: Vec<Address> = env
         .storage()
         .persistent()
-        .get(&DataKey::AllDelegators)
+        .get(&DataKey::HistoricalDelegations(delegatee.clone()))
         .unwrap_or(Vec::new(env));
 
     let mut result = Vec::new(env);
-    for delegator in all_delegators.iter() {
+    let len = historical_delegators.len();
+    let mut i = offset;
+    let end = offset.saturating_add(limit).min(len);
+    while i < end {
+        let delegator = historical_delegators.get(i).unwrap();
         let history: Vec<DelegationHistoryEntry> = env
             .storage()
             .persistent()
@@ -465,6 +467,7 @@ pub(crate) fn get_delegation_snapshot(
                 break;
             }
         }
+        i += 1;
     }
     result
 }
