@@ -1,6 +1,7 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
+import type { PoolClient } from "pg";
 import {
   Contract,
   Keypair,
@@ -174,9 +175,27 @@ function isWellFormedAuthEntry(base64Xdr: string): boolean {
   }
 }
 
+/**
+ * Serializes daily-quota check-and-log for `delegator` against concurrent
+ * requests (including other permits for the same delegator within one
+ * batch): callers must hold this lock for the lifetime of the transaction
+ * that performs the count check, so that no other request can read the same
+ * pre-log count before this one commits its log entry. Postgres advisory
+ * locks taken with the `_xact_` variant release automatically on
+ * COMMIT/ROLLBACK.
+ */
+async function lockDelegator(client: PoolClient, delegator: string): Promise<void> {
+  await client.query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))", [
+    delegator,
+  ]);
+}
+
 /** Rolling 24h count of permits this relayer has already submitted for `delegator`. */
-async function relayedPermitCountToday(delegator: string): Promise<number> {
-  const { rows } = await pool.query<{ count: string }>(
+async function relayedPermitCountToday(
+  client: PoolClient,
+  delegator: string,
+): Promise<number> {
+  const { rows } = await client.query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM relayer_permit_log
      WHERE delegator = $1 AND created_at > NOW() - INTERVAL '1 day'`,
     [delegator],
@@ -185,10 +204,11 @@ async function relayedPermitCountToday(delegator: string): Promise<number> {
 }
 
 async function logRelayedPermit(
+  client: PoolClient,
   permit: PermitInput,
   txHash: string,
 ): Promise<void> {
-  await pool.query(
+  await client.query(
     `INSERT INTO relayer_permit_log (delegator, delegatee, nonce, tx_hash)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (delegator, nonce) DO NOTHING`,
@@ -237,13 +257,24 @@ async function submitInvocation(
 router.post("/delegate", validate({ body: delegateSchema }), async (req, res) => {
   const { permit, signature } = req.body as z.infer<typeof delegateSchema>;
 
-  try {
-    if (!isWellFormedAuthEntry(signature)) {
-      return res.status(400).json({ error: "Malformed authorization signature" });
-    }
+  if (!isWellFormedAuthEntry(signature)) {
+    return res.status(400).json({ error: "Malformed authorization signature" });
+  }
 
-    const relayedToday = await relayedPermitCountToday(permit.delegator);
+  // The daily-quota check and the eventual log write are held in the same
+  // transaction, behind a per-delegator advisory lock, so a second
+  // concurrent request for this delegator can't read the same pre-log count
+  // — it blocks until this transaction commits or rolls back. The lock is
+  // held across the on-chain submission below, which is the whole point:
+  // that's the window the count must stay accurate through.
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await lockDelegator(client, permit.delegator);
+
+    const relayedToday = await relayedPermitCountToday(client, permit.delegator);
     if (relayedToday >= RELAYER_DAILY_PERMIT_LIMIT) {
+      await client.query("ROLLBACK");
       return res.status(429).json({
         error: "Relayer daily permit limit reached for this address",
       });
@@ -257,16 +288,20 @@ router.post("/delegate", validate({ body: delegateSchema }), async (req, res) =>
       [nativeToScVal(relayer.publicKey(), { type: "address" }), permitToScVal(permit)],
       [entry],
     );
-    await logRelayedPermit(permit, txHash);
+    await logRelayedPermit(client, permit, txHash);
+    await client.query("COMMIT");
 
     res.json({ txHash, nonce: Number(permit.nonce) + 1 });
   } catch (error) {
+    await client.query("ROLLBACK");
     logger.error({ err: error }, "Error in POST /relayer/delegate");
     const contractMessage = extractContractErrorMessage(error);
     if (contractMessage) {
       return res.status(400).json({ error: contractMessage });
     }
     res.status(500).json({ error: "Failed to submit delegation" });
+  } finally {
+    client.release();
   }
 });
 
@@ -285,18 +320,41 @@ router.post(
         .json({ error: "permits and signatures must have the same length" });
     }
 
+    if (!signatures.every(isWellFormedAuthEntry)) {
+      return res.status(400).json({ error: "Malformed authorization signature" });
+    }
+
+    // Same per-delegator advisory lock as /delegate, but a batch can contain
+    // several permits for the same delegator, none of which are logged yet
+    // when the others are checked. A running in-memory tally (seeded from
+    // the DB count, then incremented as each permit in this batch is
+    // provisionally accepted) makes each subsequent check in the loop see
+    // the permits already "spent" earlier in the same request.
+    const uniqueDelegators = Array.from(
+      new Set(permits.map((p) => p.delegator)),
+    ).sort();
+
+    const client = await pool.connect();
     try {
-      if (!signatures.every(isWellFormedAuthEntry)) {
-        return res.status(400).json({ error: "Malformed authorization signature" });
+      await client.query("BEGIN");
+      // Lock in a fixed (sorted) order so two overlapping batches can't deadlock.
+      for (const delegator of uniqueDelegators) {
+        await lockDelegator(client, delegator);
       }
 
+      const pendingCounts = new Map<string, number>();
       for (const permit of permits) {
-        const relayedToday = await relayedPermitCountToday(permit.delegator);
-        if (relayedToday >= RELAYER_DAILY_PERMIT_LIMIT) {
+        let count = pendingCounts.get(permit.delegator);
+        if (count === undefined) {
+          count = await relayedPermitCountToday(client, permit.delegator);
+        }
+        if (count >= RELAYER_DAILY_PERMIT_LIMIT) {
+          await client.query("ROLLBACK");
           return res.status(429).json({
             error: `Relayer daily permit limit reached for ${permit.delegator}`,
           });
         }
+        pendingCounts.set(permit.delegator, count + 1);
       }
 
       const relayer = getRelayerKeypair();
@@ -310,19 +368,25 @@ router.post(
         [nativeToScVal(relayer.publicKey(), { type: "address" }), permitsScVal],
         entries,
       );
-      await Promise.all(permits.map((permit) => logRelayedPermit(permit, txHash)));
+      for (const permit of permits) {
+        await logRelayedPermit(client, permit, txHash);
+      }
+      await client.query("COMMIT");
 
       res.json({
         txHash,
         nonces: permits.map((p) => Number(p.nonce) + 1),
       });
     } catch (error) {
+      await client.query("ROLLBACK");
       logger.error({ err: error }, "Error in POST /relayer/delegate-batch");
       const contractMessage = extractContractErrorMessage(error);
       if (contractMessage) {
         return res.status(400).json({ error: contractMessage });
       }
       res.status(500).json({ error: "Failed to submit batch delegation" });
+    } finally {
+      client.release();
     }
   },
 );
