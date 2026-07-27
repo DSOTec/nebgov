@@ -449,4 +449,37 @@ export class DelegationSigClient {
       return { hash: result.hash };
     });
   }
+
+  /** Wallet-signing variant of {@link invalidateAllPermits}. */
+  async invalidateAllPermitsWithSign(
+    signerPublicKey: string,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<DelegationTxResult> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signerPublicKey);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "invalidate_all_permits",
+            nativeToScVal(signerPublicKey, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      const signedXdr = await signUnsignedXdr(prepared.toXDR());
+      const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+
+      const result = await this.server.sendTransaction(signed);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return { hash: result.hash };
+    });
+  }
 }
