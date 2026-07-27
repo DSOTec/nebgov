@@ -417,6 +417,93 @@ describe("GET /proposals with cursor pagination", () => {
     });
   });
 
+  describe("GET /relayers (issue #910)", () => {
+    it("should return current whitelist status per relayer", async () => {
+      const mockRows = [
+        { relayer_address: "GRELAYER1", whitelisted: true, ledger: 200 },
+        { relayer_address: "GRELAYER2", whitelisted: false, ledger: 190 },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/relayers");
+
+      expect(response.status).toBe(200);
+      expect(response.body.relayers).toEqual(mockRows);
+    });
+
+    it("should filter by whitelisted=true", async () => {
+      const mockRows = [
+        { relayer_address: "GRELAYER1", whitelisted: true, ledger: 200 },
+        { relayer_address: "GRELAYER2", whitelisted: false, ledger: 190 },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/relayers?whitelisted=true");
+
+      expect(response.status).toBe(200);
+      expect(response.body.relayers).toEqual([mockRows[0]]);
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("Database error"));
+
+      const response = await request(app).get("/relayers");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
+
+  describe("GET /delegations/by-sig (issue #910)", () => {
+    it("should paginate results and report hasMore", async () => {
+      const mockRows = [
+        {
+          delegator_address: "GDEL1",
+          delegatee_address: "GDEE1",
+          relayer_address: "GRELAYER1",
+          nonce: "5",
+          ledger: 200,
+          created_at: "2026-07-01T00:00:00Z",
+        },
+      ];
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: mockRows });
+
+      const response = await request(app).get("/delegations/by-sig?limit=1&offset=0");
+
+      expect(response.status).toBe(200);
+      expect(response.body.data).toEqual(mockRows);
+      expect(response.body.pagination).toEqual({ limit: 1, offset: 0, hasMore: true });
+    });
+
+    it("should filter by relayer", async () => {
+      (mockPool.query as jest.Mock).mockResolvedValueOnce({ rows: [] });
+
+      const response = await request(app).get("/delegations/by-sig?relayer=GRELAYER1");
+
+      expect(response.status).toBe(200);
+      expect(mockPool.query).toHaveBeenCalledWith(
+        expect.stringContaining("WHERE relayer_address = $1"),
+        ["GRELAYER1", 50, 0],
+      );
+    });
+
+    it("should return 400 for invalid pagination", async () => {
+      const response = await request(app).get("/delegations/by-sig?limit=9999");
+
+      expect(response.status).toBe(400);
+      expect(response.body).toEqual({ error: "Invalid pagination parameters" });
+    });
+
+    it("should return 500 on database error", async () => {
+      (mockPool.query as jest.Mock).mockRejectedValueOnce(new Error("Database error"));
+
+      const response = await request(app).get("/delegations/by-sig");
+
+      expect(response.status).toBe(500);
+      expect(response.body).toEqual({ error: "Internal server error" });
+    });
+  });
+
   describe("GET /reputation/:address/history (paginated, issue #921)", () => {
     it("should paginate results and report hasMore", async () => {
       const mockRows = [
