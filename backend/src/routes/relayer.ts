@@ -1,4 +1,5 @@
 import { Router } from "express";
+import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import {
   Contract,
@@ -16,6 +17,22 @@ import { validate } from "../middleware/validate";
 import { logger } from "../logger";
 
 const router = Router();
+
+// IP-based rate limiting independent of the per-delegator quota.
+// Prevents Sybil attackers from rotating addresses to exhaust the relayer's fee budget.
+const relayerIpLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many relayer requests from this IP" },
+  keyGenerator: (req) =>
+    (req.headers["x-forwarded-for"] as string)?.split(",")[0].trim() ??
+    req.ip ??
+    "unknown",
+});
+
+router.use(relayerIpLimiter);
 
 // The backend already depends on @stellar/stellar-sdk ^15 (a different major
 // version than the ^12 pinned by @nebgov/sdk for the browser app), so this
