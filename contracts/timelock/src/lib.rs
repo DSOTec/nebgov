@@ -526,6 +526,8 @@ impl TimelockContract {
             .persistent()
             .set(&DataKey::BatchOperation(batch_op_id.clone()), &batch);
 
+        Self::persist_batch_dependency_graph(env.clone(), &batch_op_id, &batch.predecessor);
+
         // Extend TTL to cover the full operation lifecycle (delay + execution window)
         // plus a safety buffer. Stellar mainnet closes ledgers roughly every 5 seconds.
         let seconds_until_expiry = delay + execution_window;
@@ -890,6 +892,25 @@ impl TimelockContract {
         emit_operation_scheduled(&env, &op_id, &target, &fn_name, ready_at, expires_at);
 
         op_id
+    }
+
+    fn persist_batch_dependency_graph(env: Env, batch_op_id: &Bytes, predecessor: &Bytes) {
+        let mut nodes = Vec::new(&env);
+        nodes.push_back(batch_op_id.clone());
+
+        let mut edges = Vec::new(&env);
+        if !predecessor.is_empty() {
+            nodes.push_back(predecessor.clone());
+            edges.push_back(DependencyEdge {
+                from: predecessor.clone(),
+                to: batch_op_id.clone(),
+            });
+        }
+
+        let graph = DependencyGraph { nodes, edges };
+        env.storage()
+            .persistent()
+            .set(&DataKey::BatchDependencyGraph(batch_op_id.clone()), &graph);
     }
 
     fn validate_predecessor(env: &Env, predecessor: &Bytes) {

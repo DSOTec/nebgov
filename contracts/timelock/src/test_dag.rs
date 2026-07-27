@@ -746,19 +746,45 @@ fn test_get_batch_dependency_graph_populated() {
     let governor = Address::generate(&env);
     client.initialize(&admin, &governor, &0, &1_209_600);
 
-    let op_a = Bytes::from_slice(&env, b"op_a");
-    let op_b = Bytes::from_slice(&env, b"op_b");
+    let target = env.register(MockTarget, ());
 
-    // A depends on B
-    let mut a_preds = Vec::new(&env);
-    a_preds.push_back(op_b.clone());
-    set_predecessors(&env, &contract_id, &op_a, &a_preds);
+    let pred_op_id = client.schedule(
+        &governor,
+        &target,
+        &Bytes::new(&env),
+        &Symbol::new(&env, "exec"),
+        &0,
+        &Bytes::new(&env),
+        &Bytes::from_slice(&env, b"pred_salt"),
+    );
 
-    // Verify the DAG is retrievable (currently returns None since
-    // batch dependency graphs are only persisted on schedule_batch).
-    let batch_op_id = Bytes::from_slice(&env, b"nonexistent_batch");
+    let mut targets = Vec::new(&env);
+    targets.push_back(target.clone());
+
+    let mut datas = Vec::new(&env);
+    datas.push_back(Bytes::new(&env));
+
+    let mut fn_names = Vec::new(&env);
+    fn_names.push_back(Symbol::new(&env, "exec"));
+
+    let batch_op_id = client.schedule_batch(
+        &governor,
+        &targets,
+        &datas,
+        &fn_names,
+        &0,
+        &pred_op_id,
+        &Bytes::from_slice(&env, b"batch_salt"),
+    );
+
     let graph = client.get_batch_dependency_graph(&batch_op_id);
-    assert!(graph.is_none(), "non-existent batch should return None");
+    assert!(graph.is_some(), "scheduled batch should persist a dependency graph");
+
+    let graph = graph.unwrap();
+    assert_eq!(graph.nodes.len(), 2);
+    assert_eq!(graph.edges.len(), 1);
+    assert_eq!(graph.edges.get(0).unwrap().from, pred_op_id);
+    assert_eq!(graph.edges.get(0).unwrap().to, batch_op_id);
 }
 
 #[test]
