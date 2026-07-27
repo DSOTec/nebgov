@@ -9,7 +9,7 @@ import { GaslessDelegateModal } from "../GaslessDelegateModal";
 const VALID_ADDRESS = "GDOOXICJPSOZDQRCEHZPR6MAX5PUZXVWGJ3QPVEU4DADIZQ4YBQOJNIB";
 const VALID_ADDRESS_2 = "GD6HLZWRE5FHK3SDLZB3FH56R3H3ECAAYCPWWU7O7EK4FCNT2Z7S6D5I";
 const mockDelegateGasless = jest.fn();
-const mockInvalidateAllPermits = jest.fn();
+const mockPreflightDelegatee = jest.fn();
 
 jest.mock("../../lib/wallet-context", () => ({
   useWallet: () => ({
@@ -27,7 +27,7 @@ jest.mock("react-hot-toast", () => ({
 jest.mock("../../hooks/useGaslessDelegation", () => ({
   useGaslessDelegation: () => ({
     delegateGasless: mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" }),
-    invalidateAllPermits: mockInvalidateAllPermits.mockResolvedValue({ txHash: "txhash123" }),
+    preflightDelegatee: mockPreflightDelegatee.mockResolvedValue(undefined),
     submitting: false,
   }),
   EXPIRY_PRESET_LABELS: {
@@ -48,9 +48,9 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     mockDelegateGasless.mockReset();
-    mockInvalidateAllPermits.mockReset();
+    mockPreflightDelegatee.mockReset();
     mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" });
-    mockInvalidateAllPermits.mockResolvedValue({ txHash: "txhash123" });
+    mockPreflightDelegatee.mockResolvedValue(undefined);
   });
 
   describe("rendering", () => {
@@ -207,6 +207,20 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
       await userEvent.type(input, VALID_ADDRESS);
       const btn = screen.getByRole("button", { name: /delegate for free/i });
       expect(btn).not.toBeDisabled();
+    });
+
+    it("shows an inline error and skips the wallet-sign flow when preflight validation fails", async () => {
+      mockPreflightDelegatee.mockRejectedValueOnce(new Error("This delegation would create a cycle."));
+      render(<GaslessDelegateModal {...defaultProps} />);
+      const input = screen.getByPlaceholderText("Stellar address (G...)");
+      await userEvent.type(input, VALID_ADDRESS);
+      const form = input.closest("form")!;
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        expect(screen.getByText("This delegation would create a cycle.")).toBeInTheDocument();
+      });
+      expect(mockDelegateGasless).not.toHaveBeenCalled();
     });
   });
 

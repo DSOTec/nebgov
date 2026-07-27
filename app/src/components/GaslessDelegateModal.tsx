@@ -46,9 +46,10 @@ export function GaslessDelegateModal({
 }: Props) {
   const [delegatee, setDelegatee] = useState(prefillAddress || "");
   const [delegateeError, setDelegateeError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const [expiryPreset, setExpiryPreset] = useState<ExpiryPreset>("1month");
   const { isConnected, publicKey, connect } = useWallet();
-  const { delegateGasless, invalidateAllPermits, submitting } = useGaslessDelegation();
+  const { delegateGasless, preflightDelegatee } = useGaslessDelegation();
   const dialogRef = useFocusTrap<HTMLDivElement>(open, onClose);
 
   useEffect(() => {
@@ -74,9 +75,24 @@ export function GaslessDelegateModal({
     e.preventDefault();
     if (!validateDelegatee(delegatee)) return;
 
+    setSubmitting(true);
     try {
       if (!isConnected || !publicKey) {
         toast.error("Connect your wallet first.");
+        return;
+      }
+
+      let preflight;
+      try {
+        preflight = await preflightDelegatee(delegatee);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        setDelegateeError(msg);
+        return;
+      }
+
+      if (!preflight.ok) {
+        setDelegateeError(preflight.error ?? "Unable to validate this delegation.");
         return;
       }
 
@@ -100,6 +116,8 @@ export function GaslessDelegateModal({
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       toast.error(`Gasless delegation failed: ${msg}`);
+    } finally {
+      setSubmitting(false);
     }
   }
 
