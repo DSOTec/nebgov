@@ -293,6 +293,7 @@ export interface FailedOperation {
   opId: string;
   target: string;
   fnName: string;
+  data: string;
   failureReason: string;
   failedAtLedger: number;
   retryCount: number;
