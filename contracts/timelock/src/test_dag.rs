@@ -24,6 +24,10 @@ impl MockTarget {
             .unwrap_or(false)
     }
 
+    pub fn fail(_env: Env) {
+        panic!("forced failure")
+    }
+
     pub fn store_i128(env: Env, value: i128) {
         env.storage()
             .persistent()
@@ -367,7 +371,7 @@ fn test_partial_batch_enters_recovery_on_first_failure() {
     datas.push_back(Bytes::new(&env));
 
     let mut fn_names = Vec::new(&env);
-    fn_names.push_back(Symbol::new(&env, "exec"));
+    fn_names.push_back(Symbol::new(&env, "fail"));
 
     let batch_op_id = client.schedule_batch(
         &governor,
@@ -381,11 +385,12 @@ fn test_partial_batch_enters_recovery_on_first_failure() {
 
     env.ledger().with_mut(|l| l.timestamp = 1);
 
-    // Execute batch partially
     let state = client.execute_batch_partial(&governor, &batch_op_id);
 
-    // Verify state structure
     assert_eq!(state.batch_op_id, batch_op_id);
+    assert!(state.recovery_mode, "a failed sub-operation should enable recovery mode");
+    assert_eq!(state.failed_ops.len(), 1, "the failed sub-operation should be recorded");
+    assert!(state.completed_ops.is_empty(), "no successful sub-operations should be recorded when the batch fails");
 }
 
 #[test]
@@ -633,6 +638,78 @@ fn test_diamond_dag_validates_successfully() {
     let result = client.validate_dependency_dag(&op_ids);
     assert!(result.valid, "diamond DAG should validate");
     assert_eq!(result.cycle_path.len(), 0);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #16)")]
+fn test_incomplete_predecessor_closure_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let op_a = Bytes::from_slice(&env, b"op_a");
+    let op_b = Bytes::from_slice(&env, b"op_b");
+    let op_c = Bytes::from_slice(&env, b"op_c");
+
+    // A depends on B, B depends on C
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_c.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
+
+    let mut a_preds = Vec::new(&env);
+    a_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_a, &a_preds);
+
+    // Only pass A and B, omitting C (which is a transitive predecessor)
+    let mut op_ids = Vec::new(&env);
+    op_ids.push_back(op_a.clone());
+    op_ids.push_back(op_b.clone());
+
+    // This should panic with IncompletePredecessorClosure error
+    let _result = client.validate_dependency_dag(&op_ids);
+}
+
+#[test]
+fn test_cycle_path_contains_only_unsorted_nodes() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(TimelockContract, ());
+    let client = TimelockContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let governor = Address::generate(&env);
+    client.initialize(&admin, &governor, &0, &1_209_600);
+
+    let op_x = Bytes::from_slice(&env, b"op_x");
+    let op_a = Bytes::from_slice(&env, b"op_a");
+    let op_b = Bytes::from_slice(&env, b"op_b");
+
+    // X has no predecessors (can be sorted)
+    // A and B form a cycle: A depends on B, B depends on A
+    let mut a_preds = Vec::new(&env);
+    a_preds.push_back(op_b.clone());
+    set_predecessors(&env, &contract_id, &op_a, &a_preds);
+
+    let mut b_preds = Vec::new(&env);
+    b_preds.push_back(op_a.clone());
+    set_predecessors(&env, &contract_id, &op_b, &b_preds);
+
+    let mut op_ids = Vec::new(&env);
+    op_ids.push_back(op_x.clone());
+    op_ids.push_back(op_a.clone());
+    op_ids.push_back(op_b.clone());
+
+    let result = client.validate_dependency_dag(&op_ids);
+    assert!(!result.valid, "cycle should be detected");
+    
+    // cycle_path should only contain A and B (the unsorted nodes), not X
+    assert_eq!(result.cycle_path.len(), 2);
+    assert!(result.cycle_path.contains(&op_a));
+    assert!(result.cycle_path.contains(&op_b));
+    assert!(!result.cycle_path.contains(&op_x));
 }
 
 #[test]

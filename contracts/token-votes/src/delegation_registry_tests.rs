@@ -391,3 +391,50 @@ fn test_delegation_depth_limit_update_rejects_non_admin() {
 
     client.set_delegation_depth_limit(&not_admin, &10);
 }
+
+/// Test that demonstrates the silent truncation bug when the delegation depth
+/// limit exceeds MAX_CHAIN_WALK (64). This test creates a 64-hop chain, sets
+/// the depth limit to 65, then attempts to add one more hop. The delegation
+/// should be rejected because it would create a 65-hop chain exceeding the
+/// configured limit of 65, but due to the bug in resolve_chain (which truncates
+/// at MAX_CHAIN_WALK), the validation incorrectly passes.
+#[test]
+#[should_panic(expected = "delegation would exceed max chain depth")]
+fn test_chain_depth_limit_above_max_chain_walk() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let admin = Address::generate(&env);
+
+    let (contract_id, _token_addr) = setup(&env, &admin);
+    let client = TokenVotesContractClient::new(&env, &contract_id);
+
+    // Create a chain of exactly 64 hops: A0 -> A1 -> A2 -> ... -> A64
+    // This is at the MAX_CHAIN_WALK boundary
+    let mut addresses: Vec<Address> = Vec::new(&env);
+    for i in 0..=64 {
+        addresses.push_back(Address::generate(&env));
+    }
+
+    // Build the chain by delegating each address to the next
+    for i in 0..64 {
+        let current = addresses.get(i).unwrap();
+        let next = addresses.get(i + 1).unwrap();
+        set_ledger(&env, i as u32);
+        client.delegate(current, next);
+    }
+
+    // Set the depth limit to 65 (above MAX_CHAIN_WALK)
+    set_ledger(&env, 100);
+    client.set_delegation_depth_limit(&admin, &65);
+
+    // Verify the chain is exactly 64 hops
+    let chain = client.get_delegation_chain(&addresses.get(0).unwrap());
+    assert_eq!(chain.len(), 65); // 64 hops means 65 addresses in the chain
+
+    // Now attempt to add one more hop by delegating a new address to A0
+    // This would create a 65-hop chain: A_new -> A0 -> A1 -> ... -> A64
+    // This should be rejected because it exceeds the configured limit of 65
+    let new_address = Address::generate(&env);
+    set_ledger(&env, 101);
+    client.delegate(&new_address, &addresses.get(0).unwrap());
+}

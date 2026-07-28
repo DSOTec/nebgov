@@ -308,6 +308,9 @@ impl TokenVotesContract {
             .get(&DataKey::Delegate(delegator.clone()));
 
         if let Some(old_delegatee) = previous_delegate {
+            if old_delegatee == delegator {
+                return;
+            }
             let record: DelegatorRecord = env
                 .storage()
                 .persistent()
