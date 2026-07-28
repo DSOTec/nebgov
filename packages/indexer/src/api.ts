@@ -114,6 +114,7 @@ const TTL = {
   profile: 30_000, // 30 seconds
   stats: 60_000, // 60 seconds
   delegationRegistry: 30_000, // 30 seconds
+  delegationSig: 30_000, // 30 seconds
   analytics: 30_000, // 30 seconds
   reputation: 30_000, // 30 seconds
   treasury: 30_000, // 30 seconds
@@ -833,6 +834,101 @@ export function createApp(server: SorobanRpc.Server): express.Application {
               delegator_count: r.delegator_count,
               total_delegated_power: String(r.total_delegated_power),
             })),
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // --- Signed ("gasless") delegation / relayer endpoints (issue #910) ---
+  //
+  // Backed by `delegated_by_sig_events` and `relayer_whitelist_history`,
+  // populated from the token-votes contract's DelegatedBySig and
+  // RelayerWhitelistUpdated events (delegate_by_sig / delegate_batch_by_sig
+  // and set_relayer_whitelisted). Distinct from the delegation-registry
+  // endpoints above, which track single-hop delegation ownership rather than
+  // who relayed a signed permit.
+
+  // GET /relayers?whitelisted=true|false — current whitelist status per
+  // relayer, derived from the latest row per relayer_address.
+  app.get(
+    "/relayers",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const whitelistedFilter =
+        req.query.whitelisted === "true"
+          ? true
+          : req.query.whitelisted === "false"
+          ? false
+          : undefined;
+      const key = `relayers:${whitelistedFilter ?? "all"}`;
+      try {
+        const data = await cached(key, TTL.delegationSig, async () => {
+          const result = await pool.query(
+            `SELECT relayer_address, whitelisted, ledger
+             FROM relayer_whitelist_history r1
+             WHERE ledger = (
+               SELECT MAX(r2.ledger) FROM relayer_whitelist_history r2
+               WHERE r2.relayer_address = r1.relayer_address
+             )
+             ORDER BY relayer_address ASC`,
+          );
+          const relayers =
+            whitelistedFilter === undefined
+              ? result.rows
+              : result.rows.filter(
+                  (r: { whitelisted: boolean }) => r.whitelisted === whitelistedFilter,
+                );
+          return { relayers };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /delegations/by-sig?relayer=...&offset=0&limit=50 — signed
+  // delegations applied via delegate_by_sig / delegate_batch_by_sig,
+  // optionally filtered to a single relayer.
+  app.get(
+    "/delegations/by-sig",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const pagination = parsePagination(req.query.limit, req.query.offset, 50, 200);
+      if (!pagination) {
+        res.status(400).json({ error: "Invalid pagination parameters" });
+        return;
+      }
+      const { limit, offset } = pagination;
+      const relayer =
+        typeof req.query.relayer === "string" && req.query.relayer.length > 0
+          ? req.query.relayer
+          : undefined;
+      const key = `delegations_by_sig:${relayer ?? "all"}:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.delegationSig, async () => {
+          const params: unknown[] = [];
+          let where = "";
+          if (relayer) {
+            params.push(relayer);
+            where = `WHERE relayer_address = $${params.length}`;
+          }
+          params.push(limit, offset);
+          const result = await pool.query(
+            `SELECT delegator_address, delegatee_address, relayer_address, nonce, ledger, created_at
+             FROM delegated_by_sig_events
+             ${where}
+             ORDER BY ledger DESC
+             LIMIT $${params.length - 1} OFFSET $${params.length}`,
+            params,
+          );
+          return {
+            data: result.rows,
+            pagination: { limit, offset, hasMore: result.rows.length === limit },
           };
         });
         res.json(data);

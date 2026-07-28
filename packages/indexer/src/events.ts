@@ -42,6 +42,9 @@ const TOPIC_MAP: Record<string, string> = {
   GovernorUpgraded: "GovernorUpgraded",
   ReputationUpdated: "ReputationUpdated",
   EffectiveThresholdChanged: "EffectiveThresholdChanged",
+  DelegatedBySig: "DelegatedBySig",
+  PermitsInvalidated: "PermitsInvalidated",
+  RelayerWhitelistUpdated: "RelayerWhitelistUpdated",
   stream_created: "stream_created",
   stream_spend: "stream_spend",
   stream_batch: "stream_batch",
@@ -243,6 +246,15 @@ export async function processEvents(
               break;
             case "DelegationDepthLimitUpdated":
               await handleDelegationDepthLimitUpdated(event, topics);
+              break;
+            case "DelegatedBySig":
+              await handleDelegatedBySig(event, topics);
+              break;
+            case "PermitsInvalidated":
+              await handlePermitsInvalidated(event, topics);
+              break;
+            case "RelayerWhitelistUpdated":
+              await handleRelayerWhitelistUpdated(event, topics);
               break;
             default:
               break;
@@ -621,6 +633,85 @@ async function handleDelegationDepthLimitUpdated(
   broadcast({
     type: "delegation_depth_limit_updated",
     data: { old_limit: oldLimit, new_limit: newLimit, ledger: event.ledger },
+  });
+}
+
+// --- Signed ("gasless") delegation events (#910) ---
+//
+// Backed by `delegated_by_sig_events` (one row per applied permit, powering
+// GET /delegations/by-sig) and `relayer_whitelist_history` (append-only, so
+// GET /relayers can report current status via a MAX(ledger)-per-relayer
+// query while still preserving the whitelist/dewhitelist audit trail).
+// PermitsInvalidated gets no dedicated table — like DelegationDepthLimitUpdated
+// above, it's broadcast-only; the raw event is still captured in `event_log`.
+
+async function handleDelegatedBySig(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+  const data = scValToNative(event.value) as {
+    delegator: string;
+    delegatee: string;
+    relayer: string;
+    nonce: bigint | number | string;
+  };
+  const nonce = String(data.nonce);
+
+  await pool.query(
+    `INSERT INTO delegated_by_sig_events
+       (delegator_address, delegatee_address, relayer_address, nonce, ledger)
+     VALUES ($1, $2, $3, $4, $5)`,
+    [delegator, data.delegatee, data.relayer, nonce, event.ledger],
+  );
+  invalidatePattern("delegations_by_sig:");
+  broadcast({
+    type: "delegated_by_sig",
+    data: {
+      delegator,
+      delegatee: data.delegatee,
+      relayer: data.relayer,
+      nonce,
+      ledger: event.ledger,
+    },
+  });
+}
+
+async function handlePermitsInvalidated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+  const data = scValToNative(event.value) as {
+    delegator: string;
+    new_nonce: bigint | number | string;
+  };
+
+  broadcast({
+    type: "permits_invalidated",
+    data: { delegator, new_nonce: String(data.new_nonce), ledger: event.ledger },
+  });
+}
+
+async function handleRelayerWhitelistUpdated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const relayer = topics[1] as string;
+  const data = scValToNative(event.value) as {
+    relayer: string;
+    whitelisted: boolean;
+  };
+
+  await pool.query(
+    `INSERT INTO relayer_whitelist_history (relayer_address, whitelisted, ledger)
+     VALUES ($1, $2, $3)`,
+    [relayer, data.whitelisted, event.ledger],
+  );
+  invalidatePattern("relayers:");
+  broadcast({
+    type: "relayer_whitelist_updated",
+    data: { relayer, whitelisted: data.whitelisted, ledger: event.ledger },
   });
 }
 
