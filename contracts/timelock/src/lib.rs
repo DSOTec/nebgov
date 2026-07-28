@@ -404,6 +404,14 @@ impl TimelockContract {
             env.panic_with_error(TimelockError::OperationExpired);
         }
 
+        if !batch.predecessor.is_empty() {
+            let pred_done = Self::is_done(env.clone(), batch.predecessor.clone())
+                || Self::is_batch_done(env.clone(), batch.predecessor.clone());
+            if !pred_done {
+                env.panic_with_error(TimelockError::PredecessorNotDone);
+            }
+        }
+
         let mut completed_ops: Vec<Bytes> = Vec::new(&env);
         let mut failed_ops: Vec<FailedOperation> = Vec::new(&env);
         let mut recovery_mode = false;
