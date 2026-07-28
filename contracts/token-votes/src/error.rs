@@ -23,4 +23,5 @@ pub enum TokenVotesError {
     RelayerNotWhitelisted = 14,
     InvalidChainId = 15,
     InvalidContractId = 16,
+    ChainDepthExceeded = 17,
 }

@@ -7,7 +7,7 @@
 //! (already representable via the existing `Delegate` mapping) can be
 //! resolved, audited, and bounded.
 
-use crate::{DataKey, TokenVotesContract};
+use crate::{DataKey, TokenVotesContract, TokenVotesError};
 use soroban_sdk::{contracttype, Address, Env, Symbol, Vec};
 
 /// Safety bound on delegation-chain traversal. Real chains are already
@@ -76,7 +76,7 @@ fn resolve_chain(env: &Env, start: Address) -> Vec<Address> {
     let mut hops = 0u32;
     loop {
         if hops >= MAX_CHAIN_WALK {
-            break;
+            env.panic_with_error(TokenVotesError::ChainDepthExceeded);
         }
         let next: Option<Address> = env
             .storage()
@@ -203,13 +203,6 @@ pub(crate) fn register_delegation(
 
     let full_chain = resolve_chain(env, delegator.clone());
     let depth = full_chain.len() - 1;
-    env.storage()
-        .persistent()
-        .set(&DataKey::DelegationChain(delegator.clone()), &full_chain);
-    env.storage()
-        .persistent()
-        .set(&DataKey::ChainDepth(delegator.clone()), &depth);
-
 
     emit_delegation_registered(env, delegator, delegatee, power, depth);
 }
@@ -224,15 +217,16 @@ pub(crate) fn revoke_registry_entry(
     current_ledger: u32,
 ) {
     let record_key = DataKey::DelegationRecord(delegator.clone(), old_delegatee.clone());
-    if let Some(mut entry) = env
+    let Some(mut entry) = env
         .storage()
         .persistent()
         .get::<_, DelegationEntry>(&record_key)
-    {
-        entry.active = false;
-        entry.revoked_at_ledger = Some(current_ledger);
-        env.storage().persistent().set(&record_key, &entry);
-    }
+    else {
+        return;
+    };
+    entry.active = false;
+    entry.revoked_at_ledger = Some(current_ledger);
+    env.storage().persistent().set(&record_key, &entry);
 
     let history_key = DataKey::DelegationHistory(delegator.clone());
     if let Some(mut history) = env
@@ -414,6 +408,7 @@ pub(crate) fn get_received_delegations(
 
 pub(crate) fn set_delegation_depth_limit(env: &Env, new_limit: u32) {
     assert!(new_limit >= 1, "depth limit must be at least 1");
+    assert!(new_limit <= MAX_CHAIN_WALK, "depth limit must not exceed MAX_CHAIN_WALK");
     let old_limit = get_depth_limit(env);
     env.storage()
         .instance()
