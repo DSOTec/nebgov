@@ -940,6 +940,122 @@ export function subscribeToDraftExpired(
   return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.draftExpired, callback, opts);
 }
 
+// ── Token-votes signed ("gasless") delegation events (#913) ────────────────
+//
+// Struct-encoded events published by contracts/token-votes/src/events.rs's
+// emit_delegated_by_sig / emit_permits_invalidated /
+// emit_relayer_whitelist_updated, backing DelegationSigClient's
+// delegate_by_sig / delegate_batch_by_sig flow.
+
+const DELEGATION_SIG_TOPICS = {
+  delegatedBySig: "DelegatedBySig",
+  permitsInvalidated: "PermitsInvalidated",
+  relayerWhitelistUpdated: "RelayerWhitelistUpdated",
+} as const;
+
+export interface DelegatedBySigEventData {
+  delegator: string;
+  delegatee: string;
+  relayer: string;
+  nonce: bigint;
+}
+
+export function parseDelegatedBySigEvent(
+  event: SorobanEvent
+): DelegatedBySigEventData | null {
+  if (event.topic[0] !== DELEGATION_SIG_TOPICS.delegatedBySig || !isRecord(event.value)) {
+    return null;
+  }
+
+  const nonce = toBigInt(event.value.nonce);
+  if (nonce === null) return null;
+
+  return {
+    delegator: String(event.value.delegator ?? event.topic[1] ?? ""),
+    delegatee: String(event.value.delegatee ?? ""),
+    relayer: String(event.value.relayer ?? ""),
+    nonce,
+  };
+}
+
+export interface PermitsInvalidatedEventData {
+  delegator: string;
+  newNonce: bigint;
+}
+
+export function parsePermitsInvalidatedEvent(
+  event: SorobanEvent
+): PermitsInvalidatedEventData | null {
+  if (event.topic[0] !== DELEGATION_SIG_TOPICS.permitsInvalidated || !isRecord(event.value)) {
+    return null;
+  }
+
+  const newNonce = toBigInt(event.value.new_nonce);
+  if (newNonce === null) return null;
+
+  return {
+    delegator: String(event.value.delegator ?? event.topic[1] ?? ""),
+    newNonce,
+  };
+}
+
+export interface RelayerWhitelistUpdatedEventData {
+  relayer: string;
+  whitelisted: boolean;
+}
+
+export function parseRelayerWhitelistUpdatedEvent(
+  event: SorobanEvent
+): RelayerWhitelistUpdatedEventData | null {
+  if (event.topic[0] !== DELEGATION_SIG_TOPICS.relayerWhitelistUpdated || !isRecord(event.value)) {
+    return null;
+  }
+
+  return {
+    relayer: String(event.value.relayer ?? event.topic[1] ?? ""),
+    whitelisted: Boolean(event.value.whitelisted),
+  };
+}
+
+export function subscribeToDelegatedBySig(
+  tokenVotesAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(
+    tokenVotesAddress,
+    DELEGATION_SIG_TOPICS.delegatedBySig,
+    callback,
+    opts
+  );
+}
+
+export function subscribeToPermitsInvalidated(
+  tokenVotesAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(
+    tokenVotesAddress,
+    DELEGATION_SIG_TOPICS.permitsInvalidated,
+    callback,
+    opts
+  );
+}
+
+export function subscribeToRelayerWhitelistUpdated(
+  tokenVotesAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(
+    tokenVotesAddress,
+    DELEGATION_SIG_TOPICS.relayerWhitelistUpdated,
+    callback,
+    opts
+  );
+}
+
 // ── Treasury budget-stream events ───────────────────────────────────────────
 
 const STREAM_TOPICS = {

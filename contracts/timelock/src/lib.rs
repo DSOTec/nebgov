@@ -32,6 +32,8 @@ pub enum TimelockError {
     OperationAlreadyInBatch = 14,
     /// Invalid predecessor list provided.
     InvalidPredecessorList = 15,
+    /// The provided op_ids set does not include all transitive predecessors.
+    IncompletePredecessorClosure = 16,
 }
 
 /// A scheduled timelock operation.
@@ -349,7 +351,18 @@ impl TimelockContract {
     /// `cycle_path` when the operations can be topologically ordered. When a
     /// cycle is present, `valid = false` and `cycle_path` lists the operations
     /// that could not be ordered.
+    ///
+    /// # Panics
+    ///
+    /// Panics with `TimelockError::IncompletePredecessorClosure` if the provided
+    /// `op_ids` does not include all transitive predecessors of the operations.
+    /// This is required for accurate cycle detection, as Kahn's algorithm only
+    /// considers edges where both endpoints are present in the input set.
     pub fn validate_dependency_dag(env: Env, op_ids: Vec<Bytes>) -> DagValidationResult {
+        if !Self::has_full_predecessor_closure(&env, &op_ids) {
+            env.panic_with_error(TimelockError::IncompletePredecessorClosure);
+        }
+        
         match Self::kahn_topological_sort(&env, &op_ids) {
             Ok(_) => {
                 emit_dependency_dag_validated(&env, &Bytes::new(&env), op_ids.len());
@@ -358,19 +371,19 @@ impl TimelockContract {
                     cycle_path: Vec::new(&env),
                 }
             }
-            Err(()) => {
-                emit_cycle_detected(&env, &op_ids);
+            Err(unsorted) => {
+                emit_cycle_detected(&env, &unsorted);
                 DagValidationResult {
                     valid: false,
-                    cycle_path: op_ids,
+                    cycle_path: unsorted,
                 }
             }
         }
     }
 
     /// Execute a batch with partial completion tolerance (queues for recovery on any failure).
-    /// Note: Individual operation failures will cause the entire transaction to revert.
-    /// This function sets up recovery state that can be used to retry operations after investigation.
+    /// Each sub-operation is attempted independently. If one fails, it is recorded in recovery state
+    /// and the batch continues to the next operation.
     pub fn execute_batch_partial(env: Env, caller: Address, batch_op_id: Bytes) -> PartialBatchExecutionState {
         caller.require_auth();
         Self::require_governor(&env, &caller);
@@ -391,12 +404,18 @@ impl TimelockContract {
             env.panic_with_error(TimelockError::OperationExpired);
         }
 
-        let mut completed_ops: Vec<Bytes> = Vec::new(&env);
-        // No failures accumulate here: any sub-call panic reverts the whole tx.
-        // The empty vec documents the shape of the state that gets persisted.
-        let failed_ops: Vec<FailedOperation> = Vec::new(&env);
+        if !batch.predecessor.is_empty() {
+            let pred_done = Self::is_done(env.clone(), batch.predecessor.clone())
+                || Self::is_batch_done(env.clone(), batch.predecessor.clone());
+            if !pred_done {
+                env.panic_with_error(TimelockError::PredecessorNotDone);
+            }
+        }
 
-        // Execute all operations in order. If any fails, transaction reverts (standard Soroban behavior).
+        let mut completed_ops: Vec<Bytes> = Vec::new(&env);
+        let mut failed_ops: Vec<FailedOperation> = Vec::new(&env);
+        let mut recovery_mode = false;
+
         for i in 0..batch.targets.len() {
             let op_id = Self::hash_op_in_batch(
                 &env,
@@ -411,16 +430,33 @@ impl TimelockContract {
             let data = batch.datas.get(i).unwrap();
             let args = Self::decode_invocation_args(&env, &data);
 
-            // Execute the contract invocation (will panic/revert if it fails)
-            let _: Val = env.invoke_contract(&target, &fn_name, args);
-            completed_ops.push_back(op_id.clone());
-            emit_partial_op_succeeded(
-                &env,
-                &batch_op_id,
-                &op_id,
-                completed_ops.len(),
-                batch.targets.len(),
-            );
+            let invocation_result = env.try_invoke_contract::<(), soroban_sdk::Error>(&target, &fn_name, args);
+            match invocation_result {
+                Ok(Ok(_)) => {
+                    completed_ops.push_back(op_id.clone());
+                    emit_partial_op_succeeded(
+                        &env,
+                        &batch_op_id,
+                        &op_id,
+                        completed_ops.len(),
+                        batch.targets.len(),
+                    );
+                }
+                Ok(Err(_)) | Err(_) => {
+                    let failed_op = FailedOperation {
+                        op_id: op_id.clone(),
+                        target: target.clone(),
+                        fn_name: fn_name.clone(),
+                        data: data.clone(),
+                        failure_reason: symbol_short!("failed"),
+                        failed_at_ledger: env.ledger().sequence(),
+                        retry_count: 0,
+                    };
+                    failed_ops.push_back(failed_op);
+                    recovery_mode = true;
+                    emit_partial_op_failed(&env, &batch_op_id, &op_id);
+                }
+            }
         }
 
         let recovery_deadline = env.ledger().sequence() + 100_000;
@@ -430,12 +466,16 @@ impl TimelockContract {
             completed_ops: completed_ops.clone(),
             failed_ops: failed_ops.clone(),
             pending_ops: Vec::new(&env),
-            recovery_mode: false,
+            recovery_mode,
             recovery_deadline,
         };
 
         let state_key = DataKey::PartialBatchState(batch_op_id.clone());
         env.storage().persistent().set(&state_key, &state);
+
+        if recovery_mode {
+            emit_batch_recovery_entered(&env, &batch_op_id, recovery_deadline);
+        }
 
         emit_partial_batch_started(&env, &batch_op_id, batch.targets.len());
 
@@ -1086,17 +1126,64 @@ impl TimelockContract {
         None
     }
 
+    /// Compute the transitive predecessor closure for a set of nodes.
+    ///
+    /// Returns `true` if `op_ids` includes all transitive predecessors of every
+    /// node in the set. Returns `false` if any predecessor is missing.
+    ///
+    /// This is necessary because Kahn's algorithm only considers edges where
+    /// both endpoints are present in the input set. If a predecessor is omitted,
+    /// cycles involving that predecessor will not be detected.
+    fn has_full_predecessor_closure(env: &Env, op_ids: &Vec<Bytes>) -> bool {
+        // Collect all transitive predecessors using a worklist approach
+        let mut external_preds: Vec<Bytes> = Vec::new(env);
+        let mut worklist: Vec<Bytes> = op_ids.clone();
+        
+        while !worklist.is_empty() {
+            let node = worklist.get(0).unwrap();
+            worklist.remove(0);
+            
+            let pred_key = DataKey::OperationPredecessors(node.clone());
+            if let Some(preds) = env.storage().persistent().get::<_, Vec<Bytes>>(&pred_key) {
+                let pred_len = preds.len();
+                let mut p = 0u32;
+                while p < pred_len {
+                    let pred = preds.get(p).unwrap();
+                    // Only track predecessors that are NOT in the original op_ids set
+                    if Self::index_of(op_ids, &pred).is_none() {
+                        // Check if this external predecessor is already tracked
+                        if Self::index_of(&external_preds, &pred).is_none() {
+                            external_preds.push_back(pred.clone());
+                            // Add to worklist to process its predecessors too
+                            worklist.push_back(pred.clone());
+                        }
+                    } else {
+                        // Predecessor is in op_ids, but we still need to check its predecessors
+                        // to ensure we don't miss external predecessors deeper in the chain
+                        if Self::index_of(&worklist, &pred).is_none() && Self::index_of(&external_preds, &pred).is_none() {
+                            worklist.push_back(pred.clone());
+                        }
+                    }
+                    p += 1;
+                }
+            }
+        }
+        
+        // If we found any external predecessors, the closure is incomplete
+        external_preds.is_empty()
+    }
+
     /// Kahn's algorithm for topological sorting over `nodes`.
     ///
     /// Edges are derived from each node's stored predecessor list: an edge
     /// `pred -> node` means `pred` must complete before `node`.  Returns the
-    /// sorted order on success, or an empty `Vec` wrapped in `Err` when a cycle
-    /// prevents a full ordering.  The caller reports the offending node set.
+    /// sorted order on success, or the set of unsorted nodes (nodes - sorted)
+    /// in `Err` when a cycle prevents a full ordering.
     ///
     /// Parallel index-aligned `Vec`s stand in for the `HashMap`s a std
     /// implementation would use, since Soroban's `Vec` exposes only indexed
     /// get/set access.
-    fn kahn_topological_sort(env: &Env, nodes: &Vec<Bytes>) -> Result<Vec<Bytes>, ()> {
+    fn kahn_topological_sort(env: &Env, nodes: &Vec<Bytes>) -> Result<Vec<Bytes>, Vec<Bytes>> {
         let node_count = nodes.len();
 
         // in_degree[i] corresponds to nodes.get(i).
@@ -1168,8 +1255,18 @@ impl TimelockContract {
         }
 
         // If not every node was processed, a cycle exists.
+        // Compute the set of unsorted nodes (nodes - sorted).
         if sorted.len() != node_count {
-            return Err(());
+            let mut unsorted: Vec<Bytes> = Vec::new(env);
+            let mut j = 0u32;
+            while j < node_count {
+                let node = nodes.get(j).unwrap();
+                if Self::index_of(&sorted, node).is_none() {
+                    unsorted.push_back(node.clone());
+                }
+                j += 1;
+            }
+            return Err(unsorted);
         }
 
         Ok(sorted)
