@@ -1,15 +1,15 @@
 import {
   parseConfigUpdatedEvent,
-  parseDelegationDepthLimitUpdatedEvent,
-  parseDelegationRegisteredEvent,
-  parseDelegationRevokedEvent,
+  parseDelegatedBySigEvent,
   parseGovernorUpgradedEvent,
   parsePauseEvent,
+  parsePermitsInvalidatedEvent,
   parseProposalCancelledEvent,
   parseProposalCreatedEvent,
   parseProposalExecutedEvent,
   parseProposalExpiredEvent,
   parseProposalQueuedEvent,
+  parseRelayerWhitelistUpdatedEvent,
   parseUnpauseEvent,
   parseVoteCastEvent,
   SorobanEvent,
@@ -264,78 +264,93 @@ describe("event parsers", () => {
     expect(parseUnpauseEvent(event)).toBeNull();
   });
 
-  it("parses DelegationRegistered", () => {
+  it("parses DelegatedBySig", () => {
     const event: SorobanEvent = {
       ledger: 11,
       contractId: "C123",
-      topic: ["DelegationRegistered", "GDELEGATOR"],
-      value: ["GDELEGATEE", "1000", 2],
+      topic: ["DelegatedBySig", "GDELEGATOR"],
+      value: {
+        delegator: "GDELEGATOR",
+        delegatee: "GDELEGATEE",
+        relayer: "GRELAYER",
+        nonce: "5",
+      },
     };
 
-    expect(parseDelegationRegisteredEvent(event)).toEqual({
+    expect(parseDelegatedBySigEvent(event)).toEqual({
       delegator: "GDELEGATOR",
       delegatee: "GDELEGATEE",
-      power: 1000n,
-      chainDepth: 2,
+      relayer: "GRELAYER",
+      nonce: 5n,
     });
   });
 
-  it("parseDelegationRegisteredEvent returns null for wrong topic", () => {
+  it("parseDelegatedBySigEvent returns null for wrong topic", () => {
     const event: SorobanEvent = {
       ledger: 11,
       contractId: "C123",
       topic: ["SomethingElse", "GDELEGATOR"],
-      value: ["GDELEGATEE", "1000", 2],
+      value: {
+        delegator: "GDELEGATOR",
+        delegatee: "GDELEGATEE",
+        relayer: "GRELAYER",
+        nonce: "5",
+      },
     };
-    expect(parseDelegationRegisteredEvent(event)).toBeNull();
+    expect(parseDelegatedBySigEvent(event)).toBeNull();
   });
 
-  it("parses DelegationRevoked", () => {
+  it("parses PermitsInvalidated", () => {
     const event: SorobanEvent = {
       ledger: 12,
       contractId: "C123",
-      topic: ["DelegationRevoked", "GDELEGATOR"],
-      value: ["GDELEGATEE", 12],
+      topic: ["PermitsInvalidated", "GDELEGATOR"],
+      value: {
+        delegator: "GDELEGATOR",
+        new_nonce: "6",
+      },
     };
 
-    expect(parseDelegationRevokedEvent(event)).toEqual({
+    expect(parsePermitsInvalidatedEvent(event)).toEqual({
       delegator: "GDELEGATOR",
-      previousDelegatee: "GDELEGATEE",
-      atLedger: 12,
+      newNonce: 6n,
     });
   });
 
-  it("parseDelegationRevokedEvent returns null for wrong topic", () => {
+  it("parsePermitsInvalidatedEvent returns null for wrong topic", () => {
     const event: SorobanEvent = {
       ledger: 12,
       contractId: "C123",
       topic: ["SomethingElse", "GDELEGATOR"],
-      value: ["GDELEGATEE", 12],
+      value: { delegator: "GDELEGATOR", new_nonce: "6" },
     };
-    expect(parseDelegationRevokedEvent(event)).toBeNull();
+    expect(parsePermitsInvalidatedEvent(event)).toBeNull();
   });
 
-  it("parses DelegationDepthLimitUpdated", () => {
+  it("parses RelayerWhitelistUpdated", () => {
     const event: SorobanEvent = {
       ledger: 13,
       contractId: "C123",
-      topic: ["DelegationDepthLimitUpdated"],
-      value: [1, 3],
+      topic: ["RelayerWhitelistUpdated", "GRELAYER"],
+      value: {
+        relayer: "GRELAYER",
+        whitelisted: true,
+      },
     };
 
-    expect(parseDelegationDepthLimitUpdatedEvent(event)).toEqual({
-      oldLimit: 1,
-      newLimit: 3,
+    expect(parseRelayerWhitelistUpdatedEvent(event)).toEqual({
+      relayer: "GRELAYER",
+      whitelisted: true,
     });
   });
 
-  it("parseDelegationDepthLimitUpdatedEvent returns null for wrong topic", () => {
+  it("parseRelayerWhitelistUpdatedEvent returns null for wrong topic", () => {
     const event: SorobanEvent = {
       ledger: 13,
       contractId: "C123",
-      topic: ["SomethingElse"],
-      value: [1, 3],
+      topic: ["SomethingElse", "GRELAYER"],
+      value: { relayer: "GRELAYER", whitelisted: true },
     };
-    expect(parseDelegationDepthLimitUpdatedEvent(event)).toBeNull();
+    expect(parseRelayerWhitelistUpdatedEvent(event)).toBeNull();
   });
 });

@@ -874,130 +874,117 @@ export function subscribeToDraftExpired(
   return createTopicSubscription(coSponsorshipAddress, COSPONSOR_TOPICS.draftExpired, callback, opts);
 }
 
-// ── Token-votes delegation registry events (#912) ───────────────────────────
+// ── Token-votes signed ("gasless") delegation events (#913) ────────────────
+//
+// Struct-encoded events published by contracts/token-votes/src/events.rs's
+// emit_delegated_by_sig / emit_permits_invalidated /
+// emit_relayer_whitelist_updated, backing DelegationSigClient's
+// delegate_by_sig / delegate_batch_by_sig flow.
 
-const DELEGATION_REGISTRY_TOPICS = {
-  delegationRegistered: "DelegationRegistered",
-  delegationRevoked: "DelegationRevoked",
-  delegationDepthLimitUpdated: "DelegationDepthLimitUpdated",
+const DELEGATION_SIG_TOPICS = {
+  delegatedBySig: "DelegatedBySig",
+  permitsInvalidated: "PermitsInvalidated",
+  relayerWhitelistUpdated: "RelayerWhitelistUpdated",
 } as const;
 
-export interface DelegationRegisteredEventData {
+export interface DelegatedBySigEventData {
   delegator: string;
   delegatee: string;
-  power: bigint;
-  chainDepth: number;
+  relayer: string;
+  nonce: bigint;
 }
 
-export function parseDelegationRegisteredEvent(
+export function parseDelegatedBySigEvent(
   event: SorobanEvent
-): DelegationRegisteredEventData | null {
-  if (
-    event.topic[0] !== DELEGATION_REGISTRY_TOPICS.delegationRegistered ||
-    !Array.isArray(event.value) ||
-    event.value.length < 3
-  ) {
+): DelegatedBySigEventData | null {
+  if (event.topic[0] !== DELEGATION_SIG_TOPICS.delegatedBySig || !isRecord(event.value)) {
     return null;
   }
 
-  const power = toBigInt(event.value[1]);
-  const chainDepth = toNumber(event.value[2]);
-
-  if (power === null || chainDepth === null) return null;
+  const nonce = toBigInt(event.value.nonce);
+  if (nonce === null) return null;
 
   return {
-    delegator: String(event.topic[1] ?? ""),
-    delegatee: String(event.value[0] ?? ""),
-    power,
-    chainDepth,
+    delegator: String(event.value.delegator ?? event.topic[1] ?? ""),
+    delegatee: String(event.value.delegatee ?? ""),
+    relayer: String(event.value.relayer ?? ""),
+    nonce,
   };
 }
 
-export interface DelegationRevokedEventData {
+export interface PermitsInvalidatedEventData {
   delegator: string;
-  previousDelegatee: string;
-  atLedger: number;
+  newNonce: bigint;
 }
 
-export function parseDelegationRevokedEvent(
+export function parsePermitsInvalidatedEvent(
   event: SorobanEvent
-): DelegationRevokedEventData | null {
-  if (
-    event.topic[0] !== DELEGATION_REGISTRY_TOPICS.delegationRevoked ||
-    !Array.isArray(event.value) ||
-    event.value.length < 2
-  ) {
+): PermitsInvalidatedEventData | null {
+  if (event.topic[0] !== DELEGATION_SIG_TOPICS.permitsInvalidated || !isRecord(event.value)) {
     return null;
   }
 
-  const atLedger = toNumber(event.value[1]);
-  if (atLedger === null) return null;
+  const newNonce = toBigInt(event.value.new_nonce);
+  if (newNonce === null) return null;
 
   return {
-    delegator: String(event.topic[1] ?? ""),
-    previousDelegatee: String(event.value[0] ?? ""),
-    atLedger,
+    delegator: String(event.value.delegator ?? event.topic[1] ?? ""),
+    newNonce,
   };
 }
 
-export interface DelegationDepthLimitUpdatedEventData {
-  oldLimit: number;
-  newLimit: number;
+export interface RelayerWhitelistUpdatedEventData {
+  relayer: string;
+  whitelisted: boolean;
 }
 
-export function parseDelegationDepthLimitUpdatedEvent(
+export function parseRelayerWhitelistUpdatedEvent(
   event: SorobanEvent
-): DelegationDepthLimitUpdatedEventData | null {
-  if (
-    event.topic[0] !== DELEGATION_REGISTRY_TOPICS.delegationDepthLimitUpdated ||
-    !Array.isArray(event.value) ||
-    event.value.length < 2
-  ) {
+): RelayerWhitelistUpdatedEventData | null {
+  if (event.topic[0] !== DELEGATION_SIG_TOPICS.relayerWhitelistUpdated || !isRecord(event.value)) {
     return null;
   }
 
-  const oldLimit = toNumber(event.value[0]);
-  const newLimit = toNumber(event.value[1]);
-
-  if (oldLimit === null || newLimit === null) return null;
-
-  return { oldLimit, newLimit };
+  return {
+    relayer: String(event.value.relayer ?? event.topic[1] ?? ""),
+    whitelisted: Boolean(event.value.whitelisted),
+  };
 }
 
-export function subscribeToDelegationRegistered(
+export function subscribeToDelegatedBySig(
   tokenVotesAddress: string,
   callback: (event: SorobanEvent) => void,
   opts: SubscriptionOptions
 ): () => void {
   return createTopicSubscription(
     tokenVotesAddress,
-    DELEGATION_REGISTRY_TOPICS.delegationRegistered,
+    DELEGATION_SIG_TOPICS.delegatedBySig,
     callback,
     opts
   );
 }
 
-export function subscribeToDelegationRevoked(
+export function subscribeToPermitsInvalidated(
   tokenVotesAddress: string,
   callback: (event: SorobanEvent) => void,
   opts: SubscriptionOptions
 ): () => void {
   return createTopicSubscription(
     tokenVotesAddress,
-    DELEGATION_REGISTRY_TOPICS.delegationRevoked,
+    DELEGATION_SIG_TOPICS.permitsInvalidated,
     callback,
     opts
   );
 }
 
-export function subscribeToDelegationDepthLimitUpdated(
+export function subscribeToRelayerWhitelistUpdated(
   tokenVotesAddress: string,
   callback: (event: SorobanEvent) => void,
   opts: SubscriptionOptions
 ): () => void {
   return createTopicSubscription(
     tokenVotesAddress,
-    DELEGATION_REGISTRY_TOPICS.delegationDepthLimitUpdated,
+    DELEGATION_SIG_TOPICS.relayerWhitelistUpdated,
     callback,
     opts
   );
