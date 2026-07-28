@@ -1,5 +1,8 @@
 import {
   parseConfigUpdatedEvent,
+  parseDelegationDepthLimitUpdatedEvent,
+  parseDelegationRegisteredEvent,
+  parseDelegationRevokedEvent,
   parseGovernorUpgradedEvent,
   parsePauseEvent,
   parseProposalCancelledEvent,
@@ -259,5 +262,80 @@ describe("event parsers", () => {
       value: { ledger: 10 },
     };
     expect(parseUnpauseEvent(event)).toBeNull();
+  });
+
+  it("parses DelegationRegistered", () => {
+    const event: SorobanEvent = {
+      ledger: 11,
+      contractId: "C123",
+      topic: ["DelegationRegistered", "GDELEGATOR"],
+      value: ["GDELEGATEE", "1000", 2],
+    };
+
+    expect(parseDelegationRegisteredEvent(event)).toEqual({
+      delegator: "GDELEGATOR",
+      delegatee: "GDELEGATEE",
+      power: 1000n,
+      chainDepth: 2,
+    });
+  });
+
+  it("parseDelegationRegisteredEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 11,
+      contractId: "C123",
+      topic: ["SomethingElse", "GDELEGATOR"],
+      value: ["GDELEGATEE", "1000", 2],
+    };
+    expect(parseDelegationRegisteredEvent(event)).toBeNull();
+  });
+
+  it("parses DelegationRevoked", () => {
+    const event: SorobanEvent = {
+      ledger: 12,
+      contractId: "C123",
+      topic: ["DelegationRevoked", "GDELEGATOR"],
+      value: ["GDELEGATEE", 12],
+    };
+
+    expect(parseDelegationRevokedEvent(event)).toEqual({
+      delegator: "GDELEGATOR",
+      previousDelegatee: "GDELEGATEE",
+      atLedger: 12,
+    });
+  });
+
+  it("parseDelegationRevokedEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 12,
+      contractId: "C123",
+      topic: ["SomethingElse", "GDELEGATOR"],
+      value: ["GDELEGATEE", 12],
+    };
+    expect(parseDelegationRevokedEvent(event)).toBeNull();
+  });
+
+  it("parses DelegationDepthLimitUpdated", () => {
+    const event: SorobanEvent = {
+      ledger: 13,
+      contractId: "C123",
+      topic: ["DelegationDepthLimitUpdated"],
+      value: [1, 3],
+    };
+
+    expect(parseDelegationDepthLimitUpdatedEvent(event)).toEqual({
+      oldLimit: 1,
+      newLimit: 3,
+    });
+  });
+
+  it("parseDelegationDepthLimitUpdatedEvent returns null for wrong topic", () => {
+    const event: SorobanEvent = {
+      ledger: 13,
+      contractId: "C123",
+      topic: ["SomethingElse"],
+      value: [1, 3],
+    };
+    expect(parseDelegationDepthLimitUpdatedEvent(event)).toBeNull();
   });
 });
