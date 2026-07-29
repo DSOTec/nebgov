@@ -388,7 +388,7 @@ impl TimelockContract {
         caller.require_auth();
         Self::require_governor(&env, &caller);
 
-        let batch: BatchOperation = env
+        let mut batch: BatchOperation = env
             .storage()
             .persistent()
             .get(&DataKey::BatchOperation(batch_op_id.clone()))
@@ -457,6 +457,15 @@ impl TimelockContract {
                     emit_partial_op_failed(&env, &batch_op_id, &op_id);
                 }
             }
+        }
+
+        // Mark the batch as executed if all operations completed successfully
+        // This matches execute_batch's semantics and prevents replay attacks
+        if failed_ops.is_empty() {
+            batch.executed = true;
+            env.storage()
+                .persistent()
+                .set(&DataKey::BatchOperation(batch_op_id.clone()), &batch);
         }
 
         let recovery_deadline = env.ledger().sequence() + 100_000;
@@ -1261,7 +1270,7 @@ impl TimelockContract {
             let mut j = 0u32;
             while j < node_count {
                 let node = nodes.get(j).unwrap();
-                if Self::index_of(&sorted, node).is_none() {
+                if Self::index_of(&sorted, &node).is_none() {
                     unsorted.push_back(node.clone());
                 }
                 j += 1;
