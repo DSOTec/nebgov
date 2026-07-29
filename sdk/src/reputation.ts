@@ -9,7 +9,13 @@ import {
   scValToNative,
   xdr,
 } from "@stellar/stellar-sdk";
-import { GovernorConfig, Network, ProposerReputation } from "./types";
+import {
+  GovernorConfig,
+  Network,
+  ProposerReputation,
+  ReputationScoreEntry,
+  ProposerLeaderboardEntry,
+} from "./types";
 import { GovernorError, GovernorErrorCode, parseGovernorError } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
 
@@ -216,6 +222,58 @@ export class ReputationClient {
       nativeToScVal(proposer, { type: "address" }),
     );
     return hash;
+  }
+
+  private async indexerRequest<T>(path: string): Promise<T> {
+    if (!this.config.indexerUrl) {
+      throw new GovernorError(
+        GovernorErrorCode.SimulationFailed,
+        `ReputationClient requires config.indexerUrl to be set for indexer-backed methods`,
+      );
+    }
+    return this.retry(async () => {
+      const resp = await fetch(`${this.config.indexerUrl}${path}`);
+      if (!resp.ok) {
+        throw new GovernorError(
+          GovernorErrorCode.SimulationFailed,
+          `Indexer request failed: ${resp.status}`,
+        );
+      }
+      return resp.json() as Promise<T>;
+    });
+  }
+
+  /**
+   * Score history for `proposer`, sourced from the indexer's mirror of
+   * `ReputationUpdated` events (`GET /reputation/:address/history`).
+   * Requires `config.indexerUrl`.
+   */
+  async getScoreHistory(proposer: string): Promise<ReputationScoreEntry[]> {
+    const { history } = await this.indexerRequest<{ history: any[] }>(
+      `/reputation/${proposer}/history`,
+    );
+    return (history ?? []).map((r) => ({
+      ledger: Number(r.ledger),
+      score: Number(r.score),
+      change: Number(r.change),
+      reason: String(r.reason),
+    }));
+  }
+
+  /**
+   * Top-proposer leaderboard, sourced from the indexer's
+   * `GET /reputation/leaderboard` endpoint. Requires `config.indexerUrl`.
+   */
+  async getLeaderboard(limit = 50): Promise<ProposerLeaderboardEntry[]> {
+    const { leaderboard } = await this.indexerRequest<{ leaderboard: any[] }>(
+      `/reputation/leaderboard?limit=${limit}`,
+    );
+    return (leaderboard ?? []).map((r) => ({
+      rank: Number(r.rank),
+      proposer: r.proposer ?? r.address,
+      reputationScore: Number(r.reputation_score),
+      lastUpdatedLedger: r.last_updated_ledger != null ? Number(r.last_updated_ledger) : null,
+    }));
   }
 
   /** Wallet-signing variant of {@link applyDecay}. */
