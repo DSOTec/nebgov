@@ -5,7 +5,7 @@
 
 use crate::{TokenVotesContract, TokenVotesContractClient};
 use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{token, Address, Env};
+use soroban_sdk::{token, Address, Env, Vec};
 
 fn setup(env: &Env, admin: &Address) -> (Address, Address) {
     let sac = env.register_stellar_asset_contract_v2(admin.clone());
@@ -411,7 +411,7 @@ fn test_chain_depth_limit_above_max_chain_walk() {
     // Create a chain of exactly 64 hops: A0 -> A1 -> A2 -> ... -> A64
     // This is at the MAX_CHAIN_WALK boundary
     let mut addresses: Vec<Address> = Vec::new(&env);
-    for i in 0..=64 {
+    for _ in 0..=64 {
         addresses.push_back(Address::generate(&env));
     }
 
@@ -420,7 +420,7 @@ fn test_chain_depth_limit_above_max_chain_walk() {
         let current = addresses.get(i).unwrap();
         let next = addresses.get(i + 1).unwrap();
         set_ledger(&env, i as u32);
-        client.delegate(current, next);
+        client.delegate(&current, &next);
     }
 
     // Set the depth limit to 65 (above MAX_CHAIN_WALK)
