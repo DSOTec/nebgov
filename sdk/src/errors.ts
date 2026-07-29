@@ -142,6 +142,12 @@ export enum TimelockErrorCode {
   PredecessorNotDone = 1,
   PredecessorNotFound = 2,
   OperationExpired = 3,
+  DependencyCycleDetected = 10,
+  PredecessorNotComplete = 11,
+  BatchInRecoveryMode = 12,
+  BatchRecoveryExpired = 13,
+  OperationAlreadyInBatch = 14,
+  InvalidPredecessorList = 15,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -157,6 +163,18 @@ const TIMELOCK_MESSAGES: Record<TimelockErrorCode, string> = {
     "Cannot schedule: the specified predecessor operation does not exist",
   [TimelockErrorCode.OperationExpired]:
     "Operation has expired and can no longer be executed",
+  [TimelockErrorCode.DependencyCycleDetected]:
+    "The dependency graph contains a cycle and cannot be scheduled",
+  [TimelockErrorCode.PredecessorNotComplete]:
+    "A predecessor operation in the batch has not completed yet",
+  [TimelockErrorCode.BatchInRecoveryMode]:
+    "Batch is in recovery mode and cannot accept this operation",
+  [TimelockErrorCode.BatchRecoveryExpired]:
+    "Batch recovery deadline has expired",
+  [TimelockErrorCode.OperationAlreadyInBatch]:
+    "Operation is already part of a batch",
+  [TimelockErrorCode.InvalidPredecessorList]:
+    "Invalid predecessor list provided",
   [TimelockErrorCode.SimulationFailed]: "Simulation failed",
   [TimelockErrorCode.TransactionFailed]: "Transaction failed",
   [TimelockErrorCode.TransactionTimeout]: "Transaction timed out",
