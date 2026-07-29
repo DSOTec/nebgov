@@ -160,16 +160,22 @@ function permitToScVal(permit: PermitInput): xdr.ScVal {
 
 /**
  * Off-chain structural check: does this parse as a well-formed
- * `SorobanAuthorizationEntry` with address credentials? This catches
+ * `SorobanAuthorizationEntry` with address credentials, and does the
+ * signing address match the permit's delegator? This catches
  * garbage/malformed input before we spend an RPC round-trip on it. Full
  * cryptographic + business-rule validation (expiry, nonce, chain/contract
  * ID, and the signature itself) happens when the relayer simulates the
  * transaction, immediately before submission.
  */
-function isWellFormedAuthEntry(base64Xdr: string): boolean {
+function isWellFormedAuthEntry(base64Xdr: string, delegator: string): boolean {
   try {
     const entry = xdr.SorobanAuthorizationEntry.fromXDR(base64Xdr, "base64");
-    return entry.credentials().switch().name === "sorobanCredentialsAddress";
+    if (entry.credentials().switch().name !== "sorobanCredentialsAddress") {
+      return false;
+    }
+    // Extract the signing address from credentials and verify it matches the delegator
+    const credAddress = entry.credentials().address().address().toString();
+    return credAddress === delegator;
   } catch {
     return false;
   }
@@ -257,8 +263,8 @@ async function submitInvocation(
 router.post("/delegate", validate({ body: delegateSchema }), async (req, res) => {
   const { permit, signature } = req.body as z.infer<typeof delegateSchema>;
 
-  if (!isWellFormedAuthEntry(signature)) {
-    return res.status(400).json({ error: "Malformed authorization signature" });
+  if (!isWellFormedAuthEntry(signature, permit.delegator)) {
+    return res.status(400).json({ error: "Malformed authorization signature or delegator mismatch" });
   }
 
   // The daily-quota check and the eventual log write are held in the same
@@ -320,8 +326,8 @@ router.post(
         .json({ error: "permits and signatures must have the same length" });
     }
 
-    if (!signatures.every(isWellFormedAuthEntry)) {
-      return res.status(400).json({ error: "Malformed authorization signature" });
+    if (!signatures.every((sig, i) => isWellFormedAuthEntry(sig, permits[i].delegator))) {
+      return res.status(400).json({ error: "Malformed authorization signature or delegator mismatch" });
     }
 
     // Same per-delegator advisory lock as /delegate, but a batch can contain
