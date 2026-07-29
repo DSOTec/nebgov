@@ -517,6 +517,8 @@ export enum CoSponsorshipErrorCode {
   NoTargets = 12,
   CalldataTooLarge = 13,
   TooManyCalldataEntries = 14,
+  /** Contract method was called before initialize() ran (on-chain error #15). */
+  NotInitialized = 15,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -543,6 +545,7 @@ const CO_SPONSORSHIP_MESSAGES: Record<CoSponsorshipErrorCode, string> = {
   [CoSponsorshipErrorCode.NoTargets]: "At least one target is required",
   [CoSponsorshipErrorCode.CalldataTooLarge]: "Calldata exceeds the maximum allowed size",
   [CoSponsorshipErrorCode.TooManyCalldataEntries]: "Too many calldata entries",
+  [CoSponsorshipErrorCode.NotInitialized]: "Contract has not been initialized yet",
   [CoSponsorshipErrorCode.SimulationFailed]: "Simulation failed",
   [CoSponsorshipErrorCode.TransactionFailed]: "Transaction failed",
   [CoSponsorshipErrorCode.TransactionTimeout]: "Transaction timed out",

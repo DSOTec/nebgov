@@ -513,4 +513,138 @@ export class CoSponsorshipClient {
       `Transaction not confirmed after ${retries} retries`,
     );
   }
+
+  // ─── Indexer-backed query methods (#862) ─────────────────────────────────────
+
+  /**
+   * Internal helper — mirrors the pattern used by AnalyticsClient.indexerRequest.
+   * Requires `config.indexerUrl` to be set; throws CoSponsorshipError otherwise.
+   */
+  private async indexerRequest<T>(path: string): Promise<T> {
+    if (!this.config.indexerUrl) {
+      throw new CoSponsorshipError(
+        CoSponsorshipErrorCode.SimulationFailed,
+        `CoSponsorshipClient.${path} requires config.indexerUrl to be set`,
+      );
+    }
+    return this.retry(async () => {
+      const resp = await fetch(`${this.config.indexerUrl}${path}`);
+      if (!resp.ok) {
+        throw new CoSponsorshipError(
+          CoSponsorshipErrorCode.TransactionFailed,
+          `Indexer request failed: ${resp.status} ${resp.statusText}`,
+        );
+      }
+      return resp.json() as Promise<T>;
+    });
+  }
+
+  /**
+   * List drafts from the indexer with optional status filtering and pagination.
+   *
+   * Unlike the on-chain `get_active_drafts` (which scans the full list each
+   * call), this method delegates filtering and pagination to the indexer and
+   * is O(1) in terms of on-chain resources.
+   *
+   * @param options.status  Filter to "active" | "finalized" | "cancelled" | "expired".
+   *                        Omit to return drafts of all statuses.
+   * @param options.page    1-based page number (default: 1).
+   * @param options.limit   Drafts per page (default: 20, max: 100).
+   */
+  async listDrafts(options: {
+    status?: "active" | "finalized" | "cancelled" | "expired";
+    page?: number;
+    limit?: number;
+  } = {}): Promise<{ data: ProposalDraft[]; pagination: { page: number; limit: number; hasMore: boolean } }> {
+    const params = new URLSearchParams();
+    if (options.status) params.set("status", options.status);
+    if (options.page) params.set("page", String(options.page));
+    if (options.limit) params.set("limit", String(options.limit));
+
+    const query = params.toString() ? `?${params.toString()}` : "";
+    const raw = await this.indexerRequest<{
+      data: any[];
+      pagination: { page: number; limit: number; has_more: boolean };
+    }>(`/co-sponsorship/drafts${query}`);
+
+    return {
+      data: raw.data.map(mapDraftFromIndexer),
+      pagination: {
+        page: raw.pagination.page,
+        limit: raw.pagination.limit,
+        hasMore: raw.pagination.has_more,
+      },
+    };
+  }
+
+  /**
+   * Return all drafts created by a specific address, most-recent first.
+   *
+   * Uses the indexer's creator-index rather than scanning all on-chain
+   * draft IDs, making it suitable for use in profile views without
+   * incurring ledger scanning costs.
+   *
+   * @param address  Stellar address (G… or C…) of the draft creator.
+   */
+  async getDraftsByCreator(address: string): Promise<ProposalDraft[]> {
+    const raw = await this.indexerRequest<{ data: any[] }>(
+      `/co-sponsorship/drafts?creator=${address}`,
+    );
+    return raw.data.map(mapDraftFromIndexer);
+  }
+
+  /**
+   * Return the full co-sponsorship history for a single draft: every address
+   * that has pledged power, the amount pledged, and the ledger at which they
+   * pledged (or withdrew).
+   *
+   * @param draftId  The numeric draft ID returned by `createDraft`.
+   */
+  async getDraftCoSponsorHistory(draftId: bigint): Promise<
+    Array<{ sponsorAddress: string; pledgedPower: bigint; pledgedAtLedger: number }>
+  > {
+    const raw = await this.indexerRequest<{ data: any[] }>(
+      `/co-sponsorship/drafts/${draftId}/co-sponsors`,
+    );
+    return raw.data.map((entry) => ({
+      sponsorAddress: entry.sponsor_address as string,
+      pledgedPower: BigInt(entry.pledged_power ?? 0),
+      pledgedAtLedger: Number(entry.pledged_at_ledger),
+    }));
+  }
 }
+
+/**
+ * Map a raw snake_case indexer draft record to the camelCase ProposalDraft
+ * interface used throughout the SDK.
+ */
+function mapDraftFromIndexer(raw: any): ProposalDraft {
+  const rawDescriptionHash = raw.description_hash;
+  const descriptionHash =
+    typeof rawDescriptionHash === "string"
+      ? rawDescriptionHash
+      : rawDescriptionHash
+      ? Buffer.from(rawDescriptionHash as Uint8Array).toString("hex")
+      : "";
+
+  return {
+    id: BigInt(raw.id ?? raw.draft_id ?? 0),
+    creator: String(raw.creator),
+    description: String(raw.description ?? ""),
+    descriptionHash,
+    metadataUri: String(raw.metadata_uri ?? ""),
+    targets: (raw.targets as string[]) ?? [],
+    fnNames: (raw.fn_names as string[]) ?? [],
+    calldatas: (raw.calldatas as (Buffer | Uint8Array)[]) ?? [],
+    createdLedger: Number(raw.created_ledger ?? 0),
+    expiryLedger: Number(raw.expiry_ledger ?? 0),
+    coSponsors: (raw.co_sponsors as string[]) ?? [],
+    coSponsorPower: ((raw.co_sponsor_power as (bigint | number | string)[]) ?? []).map(
+      (power) => BigInt(power),
+    ),
+    totalPower: BigInt(raw.total_power ?? 0),
+    finalized: Boolean(raw.finalized),
+    cancelled: Boolean(raw.cancelled),
+  };
+}
+
