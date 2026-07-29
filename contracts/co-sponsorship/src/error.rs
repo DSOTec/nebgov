@@ -18,4 +18,5 @@ pub enum CoSponsorshipError {
     NoTargets = 12,
     CalldataTooLarge = 13,
     TooManyCalldataEntries = 14,
+    NotInitialized = 15,
 }

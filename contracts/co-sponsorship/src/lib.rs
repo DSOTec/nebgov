@@ -294,7 +294,11 @@ impl CoSponsorshipContract {
             env.panic_with_error(CoSponsorshipError::CoSponsorLimitReached);
         }
 
-        let votes_token: Address = env.storage().instance().get(&DataKey::VotesToken).unwrap();
+        let votes_token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotesToken)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
         let power = VotesClient::new(&env, &votes_token).get_votes(&sponsor);
         if power <= 0 {
             env.panic_with_error(CoSponsorshipError::ZeroVotingPower);
@@ -373,7 +377,11 @@ impl CoSponsorshipContract {
             env.panic_with_error(CoSponsorshipError::DraftExpired);
         }
 
-        let governor: Address = env.storage().instance().get(&DataKey::Governor).unwrap();
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
         let governor_client = GovernorClient::new(&env, &governor);
 
         // `draft.total_power` is the sum of each co-sponsor's power *at the
@@ -383,7 +391,11 @@ impl CoSponsorshipContract {
         // finalize on support that still actually exists, mirroring how
         // governor's own `queue()` independently re-verifies quorum/threshold
         // against live state rather than trusting cached tallies.
-        let votes_token: Address = env.storage().instance().get(&DataKey::VotesToken).unwrap();
+        let votes_token: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::VotesToken)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
         let (current_powers, current_power) =
             Self::compute_current_co_sponsor_power(&env, &votes_token, &draft.co_sponsors);
 
@@ -438,7 +450,11 @@ impl CoSponsorshipContract {
         let mut draft = Self::must_get_draft(&env, draft_id);
         Self::require_draft_open(&env, &draft);
 
-        let admin: Address = env.storage().instance().get(&DataKey::Admin).unwrap();
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
         if caller != draft.creator && caller != admin {
             env.panic_with_error(CoSponsorshipError::UnauthorizedDraftCreator);
         }
@@ -503,9 +519,65 @@ impl CoSponsorshipContract {
     /// governor's current proposal threshold.
     pub fn draft_threshold_met(env: Env, draft_id: u64) -> bool {
         let draft = Self::must_get_draft(&env, draft_id);
-        let governor: Address = env.storage().instance().get(&DataKey::Governor).unwrap();
+        let governor: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Governor)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
         let threshold = GovernorClient::new(&env, &governor).proposal_threshold();
         draft.total_power >= threshold
+    }
+
+    /// Public method to explicitly trigger NotInitialized error when contract is not initialized.
+    pub fn check_not_initialized(env: Env) {
+        if !env.storage().instance().has(&DataKey::Admin) {
+            env.panic_with_error(CoSponsorshipError::NotInitialized);
+        }
+    }
+
+
+    pub fn set_governor(env: Env, governor: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Governor, &governor);
+    }
+
+    pub fn set_votes_token(env: Env, votes_token: Address) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::VotesToken, &votes_token);
+    }
+
+    pub fn set_draft_expiry_ledgers(env: Env, draft_expiry_ledgers: u32) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::DraftExpiryLedgers, &draft_expiry_ledgers);
+    }
+
+    pub fn set_max_co_sponsors(env: Env, max_co_sponsors: u32) {
+        let admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(CoSponsorshipError::NotInitialized));
+        admin.require_auth();
+        env.storage()
+            .instance()
+            .set(&DataKey::MaxCoSponsors, &max_co_sponsors);
     }
 }
 
