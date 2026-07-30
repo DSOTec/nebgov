@@ -13,10 +13,17 @@ jest.mock(
   "@stellar/stellar-sdk",
   () => {
     class FakeAuthEntry {
-      static fromXDR() {
+      static fromXDR(base64Xdr: string) {
+        // Return the delegator based on the signature (sig1 -> DELEGATOR, sig2 -> DELEGATOR, sig3 -> OTHER_DELEGATOR)
+        const address = base64Xdr === "sig3" ? OTHER_DELEGATOR : DELEGATOR;
         return {
           credentials: () => ({
             switch: () => ({ name: "sorobanCredentialsAddress" }),
+            address: () => ({
+              address: () => ({
+                toString: () => address,
+              }),
+            }),
           }),
         };
       }

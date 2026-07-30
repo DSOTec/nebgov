@@ -350,6 +350,14 @@ fn test_partial_batch_marks_succeeded_ops_complete() {
     assert_eq!(state.batch_op_id, batch_op_id);
     assert_eq!(state.total_ops, 2);
     assert!(!state.recovery_mode);
+
+    // Verify that batch.executed is set to true when all operations succeed
+    // This prevents replay attacks and allows predecessor checks to work correctly
+    assert!(client.is_batch_done(&batch_op_id), "batch should be marked as executed after successful partial execution");
+
+    // Double-execution should fail because batch.executed is now true
+    let result = client.try_execute_batch_partial(&governor, &batch_op_id);
+    assert!(result.is_err(), "second execute_batch_partial should fail after batch is marked executed");
 }
 
 #[test]

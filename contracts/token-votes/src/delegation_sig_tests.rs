@@ -538,3 +538,36 @@ fn test_used_nonce_storage_key_round_trips() {
     });
     assert!(used);
 }
+
+/// Self-delegation via delegate_by_sig: delegator == delegatee should grant
+/// voting power correctly without creating a registry entry (issue #819).
+#[test]
+fn test_delegate_by_sig_self_delegation() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let delegator = Address::generate(&env);
+    let relayer = Address::generate(&env);
+
+    let (contract_id, token_addr) = setup(&env, &admin);
+    let client = TokenVotesContractClient::new(&env, &contract_id);
+    let sac_client = token::StellarAssetClient::new(&env, &token_addr);
+    sac_client.mint(&delegator, &2000i128);
+
+    env.ledger().with_mut(|l| l.sequence_number = 100);
+    // Self-delegation: delegator == delegatee
+    let permit = make_permit(&env, &contract_id, &delegator, &delegator, 0, 1000);
+    client.delegate_by_sig(&relayer, &permit);
+
+    // Voting power should be granted to the delegator themselves
+    assert_eq!(client.get_votes(&delegator), 2000);
+    assert_eq!(client.delegates(&delegator), Some(delegator.clone()));
+    assert_eq!(client.nonce(&delegator), 1);
+
+    // Self-delegation should not create a delegation registry entry
+    // (will_register = false in apply_delegation when delegatee == delegator)
+    // Check that the delegator is not in the received-delegations list
+    let received_delegations = client.get_delegators(&delegator, &0u32, &10u32);
+    assert!(received_delegations.is_empty(), "self-delegation should not create a registry entry");
+}
