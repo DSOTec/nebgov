@@ -14,7 +14,12 @@ import {
   Network,
   ProposerReputation,
   ReputationScoreEntry,
+  ReputationScoreHistoryPage,
   ProposerLeaderboardEntry,
+  ReputationLeaderboardPage,
+  ReputationSummary,
+  ThresholdHistoryEntry,
+  ThresholdHistoryPage,
 } from "./types";
 import { GovernorError, GovernorErrorCode, parseGovernorError } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
@@ -50,6 +55,32 @@ function mapProposerReputation(raw: any): ProposerReputation {
   };
 }
 
+function mapScoreEntry(r: any): ReputationScoreEntry {
+  return {
+    ledger: Number(r.ledger),
+    score: Number(r.score),
+    change: Number(r.change),
+    reason: String(r.reason),
+  };
+}
+
+function mapLeaderboardEntry(r: any, fallbackRank: number): ProposerLeaderboardEntry {
+  return {
+    rank: r.rank != null ? Number(r.rank) : fallbackRank,
+    proposer: r.proposer ?? r.address,
+    reputationScore: Number(r.reputation_score),
+    lastUpdatedLedger: r.last_updated_ledger != null ? Number(r.last_updated_ledger) : null,
+  };
+}
+
+function mapThresholdEntry(r: any): ThresholdHistoryEntry {
+  return {
+    ledger: Number(r.ledger),
+    oldThreshold: BigInt(r.old_threshold ?? 0),
+    newThreshold: BigInt(r.new_threshold ?? 0),
+  };
+}
+
 /**
  * ReputationClient — interact with the Proposer Reputation System (Issue
  * #771) exposed on a deployed NebGov governor contract.
@@ -58,22 +89,50 @@ function mapProposerReputation(raw: any): ProposerReputation {
  * separate deployment), so this client targets `config.governorAddress`
  * just like {@link GovernorClient}.
  *
- * Scoring parameters are fixed compile-time constants (not governance-
- * tunable) and the proposer leaderboard is not exposed as an on-chain read
- * function — both kept off the contract to stay under Soroban's WASM size
- * budget. The indexer mirrors the leaderboard from the `ReputationUpdated`
- * event stream at `GET /reputation/leaderboard`.
+ * ## On-chain methods
+ * These simulate or submit transactions against the governor contract:
+ * - {@link getProposerReputation} — full on-chain reputation record
+ * - {@link getEffectiveThreshold} — reputation-adjusted proposal threshold
+ * - {@link applyDecay} — permissionless decay step (Keypair signing)
+ * - {@link applyDecayWithSign} — same, for wallet-extension signing flows
+ *
+ * ## Indexer-backed methods
+ * These require `config.indexerUrl` and hit the indexer's REST API, which
+ * mirrors `ReputationUpdated` / `EffectiveThresholdChanged` events off-chain
+ * (scoring parameters are fixed compile-time constants kept off the contract
+ * to stay under Soroban's WASM size budget):
+ * - {@link getScore} — fast cached summary for a single proposer
+ * - {@link getScoreHistory} — paginated score-change timeline
+ * - {@link getScoreHistoryPage} — single page with pagination metadata
+ * - {@link getLeaderboard} — top-N proposers by score
+ * - {@link getLeaderboardPage} — single page with offset + pagination metadata
+ * - {@link getThresholdHistory} — paginated effective-threshold change log
+ * - {@link getThresholdHistoryPage} — single page with pagination metadata
+ *
+ * All indexer methods follow the exact `AnalyticsClient` / `TreasuryClient`
+ * pattern: throw {@link GovernorError} with `SimulationFailed` if
+ * `config.indexerUrl` is unset, and on non-2xx responses.
  *
  * @example
+ * ```ts
  * const client = new ReputationClient({
  *   governorAddress: "CABC...",
  *   timelockAddress: "CDEF...",
  *   votesAddress: "CGHI...",
  *   network: "testnet",
+ *   indexerUrl: "https://indexer.example.com",
  * });
  *
- * const rep = await client.getProposerReputation(address);
+ * // On-chain reads
+ * const rep       = await client.getProposerReputation(address);
  * const threshold = await client.getEffectiveThreshold(address);
+ *
+ * // Indexer reads
+ * const summary   = await client.getScore(address);
+ * const history   = await client.getScoreHistory(address);
+ * const board     = await client.getLeaderboard(50);
+ * const thHistory = await client.getThresholdHistory(address);
+ * ```
  */
 export class ReputationClient {
   private readonly config: GovernorConfig;
@@ -89,6 +148,8 @@ export class ReputationClient {
     this.networkPassphrase = NETWORK_PASSPHRASES[config.network];
   }
 
+  // ── Private helpers ────────────────────────────────────────────────────────
+
   private async retry<T>(fn: () => Promise<T>): Promise<T> {
     return withRetry(fn, {
       maxAttempts: this.config.maxAttempts,
@@ -101,6 +162,11 @@ export class ReputationClient {
     return this.config.simulationAccount ?? this.config.governorAddress;
   }
 
+  /**
+   * Execute a read-only simulation against the governor contract and return
+   * the native-decoded return value. Throws {@link GovernorError} on
+   * simulation failure or missing return value.
+   */
   private async simulate(fnName: string, ...args: xdr.ScVal[]): Promise<unknown> {
     return this.retry(async () => {
       const result = await this.server.simulateTransaction(
@@ -129,6 +195,10 @@ export class ReputationClient {
     });
   }
 
+  /**
+   * Build, sign, and submit a transaction using a {@link Keypair}. Polls
+   * until confirmed or timed out.
+   */
   private async submit(
     signer: Keypair,
     fnName: string,
@@ -156,7 +226,11 @@ export class ReputationClient {
     });
   }
 
-  /** Same as {@link submit}, but for wallet-extension signing flows. */
+  /**
+   * Same as {@link submit}, but accepts a wallet-extension signing callback
+   * instead of a raw {@link Keypair}. Used by browser-based dApps where the
+   * private key is never exposed to the SDK.
+   */
   private async submitWithSign(
     signerPublicKey: string,
     signUnsignedXdr: (xdr: string) => Promise<string>,
@@ -186,44 +260,16 @@ export class ReputationClient {
     });
   }
 
-  /** Get a proposer's full reputation record (zero-valued defaults if they have no history). */
-  async getProposerReputation(proposer: string): Promise<ProposerReputation> {
-    const raw = await this.simulate(
-      "get_proposer_reputation",
-      nativeToScVal(proposer, { type: "address" }),
-    );
-    return mapProposerReputation(raw);
-  }
-
   /**
-   * Reputation-adjusted effective proposal threshold for `proposer` — what
-   * they would actually need to meet, as used by `propose()`. Falls back to
-   * the flat `proposal_threshold` when reputation is disabled or the address
-   * has no history yet.
+   * Shared indexer fetch helper — mirrors `AnalyticsClient.indexerRequest`.
+   *
+   * Throws {@link GovernorError} with `SimulationFailed` when:
+   * - `config.indexerUrl` is not set
+   * - the indexer responds with a non-2xx status
+   *
+   * Retries on transient network errors using the same `withRetry` policy
+   * as the on-chain methods.
    */
-  async getEffectiveThreshold(proposer: string): Promise<bigint> {
-    const raw = await this.simulate(
-      "get_effective_threshold",
-      nativeToScVal(proposer, { type: "address" }),
-    );
-    return BigInt(raw as string | number | bigint);
-  }
-
-  /**
-   * Permissionless: decay `proposer`'s score a step back toward zero based
-   * on ledgers elapsed since it was last touched. `signer` only pays the
-   * transaction fee — the contract does not check their identity. Returns
-   * the tx hash.
-   */
-  async applyDecay(signer: Keypair, proposer: string): Promise<string> {
-    const { hash } = await this.submit(
-      signer,
-      "apply_reputation_decay",
-      nativeToScVal(proposer, { type: "address" }),
-    );
-    return hash;
-  }
-
   private async indexerRequest<T>(path: string): Promise<T> {
     if (!this.config.indexerUrl) {
       throw new GovernorError(
@@ -243,40 +289,75 @@ export class ReputationClient {
     });
   }
 
+  // ── On-chain read methods ──────────────────────────────────────────────────
+
   /**
-   * Score history for `proposer`, sourced from the indexer's mirror of
-   * `ReputationUpdated` events (`GET /reputation/:address/history`).
-   * Requires `config.indexerUrl`.
+   * Get a proposer's full on-chain reputation record.
+   *
+   * Returns zero-valued defaults for every field when the address has no
+   * proposal history yet (the contract never throws for unknown addresses).
+   *
+   * @param proposer - Stellar strkey address of the proposer
    */
-  async getScoreHistory(proposer: string): Promise<ReputationScoreEntry[]> {
-    const { history } = await this.indexerRequest<{ history: any[] }>(
-      `/reputation/${proposer}/history`,
+  async getProposerReputation(proposer: string): Promise<ProposerReputation> {
+    const raw = await this.simulate(
+      "get_proposer_reputation",
+      nativeToScVal(proposer, { type: "address" }),
     );
-    return (history ?? []).map((r) => ({
-      ledger: Number(r.ledger),
-      score: Number(r.score),
-      change: Number(r.change),
-      reason: String(r.reason),
-    }));
+    return mapProposerReputation(raw);
   }
 
   /**
-   * Top-proposer leaderboard, sourced from the indexer's
-   * `GET /reputation/leaderboard` endpoint. Requires `config.indexerUrl`.
+   * Reputation-adjusted effective proposal threshold for `proposer`.
+   *
+   * This is the value `propose()` actually checks — it equals
+   * `proposal_threshold × threshold_multiplier_bps / 10000`. Falls back to
+   * the flat `proposal_threshold` when reputation is disabled or the address
+   * has no history yet.
+   *
+   * @param proposer - Stellar strkey address of the proposer
    */
-  async getLeaderboard(limit = 50): Promise<ProposerLeaderboardEntry[]> {
-    const { leaderboard } = await this.indexerRequest<{ leaderboard: any[] }>(
-      `/reputation/leaderboard?limit=${limit}`,
+  async getEffectiveThreshold(proposer: string): Promise<bigint> {
+    const raw = await this.simulate(
+      "get_effective_threshold",
+      nativeToScVal(proposer, { type: "address" }),
     );
-    return (leaderboard ?? []).map((r) => ({
-      rank: Number(r.rank),
-      proposer: r.proposer ?? r.address,
-      reputationScore: Number(r.reputation_score),
-      lastUpdatedLedger: r.last_updated_ledger != null ? Number(r.last_updated_ledger) : null,
-    }));
+    return BigInt(raw as string | number | bigint);
   }
 
-  /** Wallet-signing variant of {@link applyDecay}. */
+  // ── On-chain write methods ─────────────────────────────────────────────────
+
+  /**
+   * Permissionless: decay `proposer`'s reputation score one step back toward
+   * zero based on ledgers elapsed since it was last touched.
+   *
+   * `signer` only pays the transaction fee — the contract does not check
+   * their identity. Anyone can call this on behalf of any address.
+   *
+   * @param signer   - Keypair that will sign and pay for the transaction
+   * @param proposer - Stellar strkey address whose score should be decayed
+   * @returns Transaction hash of the confirmed decay transaction
+   */
+  async applyDecay(signer: Keypair, proposer: string): Promise<string> {
+    const { hash } = await this.submit(
+      signer,
+      "apply_reputation_decay",
+      nativeToScVal(proposer, { type: "address" }),
+    );
+    return hash;
+  }
+
+  /**
+   * Wallet-extension signing variant of {@link applyDecay}.
+   *
+   * Use this in browser-based dApps where the private key is managed by a
+   * wallet extension (e.g. Freighter) and never exposed to the SDK.
+   *
+   * @param signerPublicKey  - Stellar strkey public key of the signing account
+   * @param proposer         - Stellar strkey address whose score should be decayed
+   * @param signUnsignedXdr  - Callback that signs the prepared XDR and returns the signed XDR
+   * @returns Transaction hash of the confirmed decay transaction
+   */
   async applyDecayWithSign(
     signerPublicKey: string,
     proposer: string,
@@ -290,6 +371,228 @@ export class ReputationClient {
     );
     return hash;
   }
+
+  // ── Indexer-backed read methods ────────────────────────────────────────────
+
+  /**
+   * Fetch the indexer's cached reputation summary for a single proposer.
+   *
+   * Hits `GET /reputation/:address`. Faster than an on-chain simulation for
+   * display-only use cases (e.g. profile pages, proposal cards). The
+   * authoritative source for threshold calculations is always the on-chain
+   * contract via {@link getProposerReputation} / {@link getEffectiveThreshold}.
+   *
+   * Requires `config.indexerUrl`.
+   *
+   * @param proposer - Stellar strkey address of the proposer
+   */
+  async getScore(proposer: string): Promise<ReputationSummary> {
+    const raw = await this.indexerRequest<any>(`/reputation/${proposer}`);
+    return {
+      address: raw.address ?? proposer,
+      reputationScore: Number(raw.reputation_score ?? 0),
+      lastUpdatedLedger: raw.last_updated_ledger != null
+        ? Number(raw.last_updated_ledger)
+        : null,
+    };
+  }
+
+  /**
+   * Fetch the full score-change history for a proposer as a flat array.
+   *
+   * Hits `GET /reputation/:address/history` and auto-collects all entries
+   * up to `limit` (default 50, max 200 per the indexer). For cursor-based
+   * pagination with `offset` control, use {@link getScoreHistoryPage} instead.
+   *
+   * Requires `config.indexerUrl`.
+   *
+   * @param proposer - Stellar strkey address of the proposer
+   * @param limit    - Maximum number of entries to return (default 50, max 200)
+   * @param offset   - Number of entries to skip for pagination (default 0)
+   */
+  async getScoreHistory(
+    proposer: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ReputationScoreEntry[]> {
+    const clampedLimit = Math.min(Math.max(limit, 1), 200);
+    const params = new URLSearchParams({
+      limit: String(clampedLimit),
+      offset: String(Math.max(offset, 0)),
+    });
+    const { history } = await this.indexerRequest<{ history: any[] }>(
+      `/reputation/${proposer}/history?${params}`,
+    );
+    return (history ?? []).map(mapScoreEntry);
+  }
+
+  /**
+   * Fetch a single page of score history with full pagination metadata.
+   *
+   * Use this when you need to implement paginated UI (e.g. "load more"
+   * buttons) and need to know whether more pages exist. For simple
+   * all-at-once fetches, use {@link getScoreHistory} instead.
+   *
+   * Requires `config.indexerUrl`.
+   *
+   * @param proposer - Stellar strkey address of the proposer
+   * @param limit    - Page size (default 50, max 200)
+   * @param offset   - Page offset (default 0)
+   */
+  async getScoreHistoryPage(
+    proposer: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ReputationScoreHistoryPage> {
+    const clampedLimit = Math.min(Math.max(limit, 1), 200);
+    const safeOffset = Math.max(offset, 0);
+    const params = new URLSearchParams({
+      limit: String(clampedLimit),
+      offset: String(safeOffset),
+    });
+    const raw = await this.indexerRequest<{
+      history: any[];
+      pagination: { limit: number; offset: number; hasMore: boolean };
+    }>(`/reputation/${proposer}/history?${params}`);
+
+    return {
+      history: (raw.history ?? []).map(mapScoreEntry),
+      pagination: {
+        limit: raw.pagination?.limit ?? clampedLimit,
+        offset: raw.pagination?.offset ?? safeOffset,
+        hasMore: raw.pagination?.hasMore ?? false,
+      },
+    };
+  }
+
+  /**
+   * Fetch the top-N proposers by reputation score as a flat array.
+   *
+   * Hits `GET /reputation/leaderboard?limit=N&offset=O`. The leaderboard is
+   * computed off-chain by the indexer from `ReputationUpdated` events — it
+   * is not an on-chain read function (kept off the contract to stay under
+   * Soroban's WASM size budget).
+   *
+   * For paginated access with offset control and pagination metadata, use
+   * {@link getLeaderboardPage} instead.
+   *
+   * Requires `config.indexerUrl`.
+   *
+   * @param limit  - Number of entries to return (default 50, max 200)
+   * @param offset - Number of entries to skip (default 0)
+   */
+  async getLeaderboard(limit = 50, offset = 0): Promise<ProposerLeaderboardEntry[]> {
+    const clampedLimit = Math.min(Math.max(limit, 1), 200);
+    const params = new URLSearchParams({
+      limit: String(clampedLimit),
+      offset: String(Math.max(offset, 0)),
+    });
+    const { leaderboard } = await this.indexerRequest<{ leaderboard: any[] }>(
+      `/reputation/leaderboard?${params}`,
+    );
+    return (leaderboard ?? []).map((r, i) => mapLeaderboardEntry(r, offset + i + 1));
+  }
+
+  /**
+   * Fetch a single page of the leaderboard with pagination metadata.
+   *
+   * Use this when building paginated leaderboard UIs. The `pagination.offset`
+   * in the response can be incremented by `pagination.limit` to fetch the
+   * next page.
+   *
+   * Requires `config.indexerUrl`.
+   *
+   * @param limit  - Page size (default 50, max 200)
+   * @param offset - Page offset (default 0)
+   */
+  async getLeaderboardPage(limit = 50, offset = 0): Promise<ReputationLeaderboardPage> {
+    const clampedLimit = Math.min(Math.max(limit, 1), 200);
+    const safeOffset = Math.max(offset, 0);
+    const params = new URLSearchParams({
+      limit: String(clampedLimit),
+      offset: String(safeOffset),
+    });
+    const raw = await this.indexerRequest<{ leaderboard: any[] }>(
+      `/reputation/leaderboard?${params}`,
+    );
+    return {
+      leaderboard: (raw.leaderboard ?? []).map((r, i) =>
+        mapLeaderboardEntry(r, safeOffset + i + 1),
+      ),
+      pagination: {
+        limit: clampedLimit,
+        offset: safeOffset,
+      },
+    };
+  }
+
+  /**
+   * Fetch the effective-threshold change history for a proposer as a flat array.
+   *
+   * Hits `GET /reputation/:address/threshold-history`. Built from
+   * `EffectiveThresholdChanged` events indexed off-chain. Returned in
+   * descending ledger order (most recent first).
+   *
+   * For paginated access with metadata, use {@link getThresholdHistoryPage}.
+   *
+   * Requires `config.indexerUrl`.
+   *
+   * @param proposer - Stellar strkey address of the proposer
+   * @param limit    - Maximum number of entries to return (default 50, max 200)
+   * @param offset   - Number of entries to skip (default 0)
+   */
+  async getThresholdHistory(
+    proposer: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ThresholdHistoryEntry[]> {
+    const clampedLimit = Math.min(Math.max(limit, 1), 200);
+    const params = new URLSearchParams({
+      limit: String(clampedLimit),
+      offset: String(Math.max(offset, 0)),
+    });
+    const { history } = await this.indexerRequest<{ history: any[] }>(
+      `/reputation/${proposer}/threshold-history?${params}`,
+    );
+    return (history ?? []).map(mapThresholdEntry);
+  }
+
+  /**
+   * Fetch a single page of threshold history with pagination metadata.
+   *
+   * Requires `config.indexerUrl`.
+   *
+   * @param proposer - Stellar strkey address of the proposer
+   * @param limit    - Page size (default 50, max 200)
+   * @param offset   - Page offset (default 0)
+   */
+  async getThresholdHistoryPage(
+    proposer: string,
+    limit = 50,
+    offset = 0,
+  ): Promise<ThresholdHistoryPage> {
+    const clampedLimit = Math.min(Math.max(limit, 1), 200);
+    const safeOffset = Math.max(offset, 0);
+    const params = new URLSearchParams({
+      limit: String(clampedLimit),
+      offset: String(safeOffset),
+    });
+    const raw = await this.indexerRequest<{
+      history: any[];
+      pagination: { limit: number; offset: number; hasMore: boolean };
+    }>(`/reputation/${proposer}/threshold-history?${params}`);
+
+    return {
+      history: (raw.history ?? []).map(mapThresholdEntry),
+      pagination: {
+        limit: raw.pagination?.limit ?? clampedLimit,
+        offset: raw.pagination?.offset ?? safeOffset,
+        hasMore: raw.pagination?.hasMore ?? false,
+      },
+    };
+  }
+
+  // ── Private: transaction polling ──────────────────────────────────────────
 
   private async pollForConfirmation(
     hash: string,
