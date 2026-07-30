@@ -2,7 +2,7 @@ use crate::{CoSponsorshipContract, CoSponsorshipContractClient};
 use soroban_sdk::{
     contract, contractimpl, contracttype,
     testutils::{Address as _, Ledger as _},
-    Address, Bytes, BytesN, Env, String, Symbol, Vec,
+    Address, Bytes, BytesN, Env, IntoVal, String, Symbol, Vec,
 };
 
 /// Mock votes contract whose voting power is configurable per-address via
@@ -51,6 +51,13 @@ impl MockGovernorContract {
     }
 
     pub fn proposal_threshold(env: Env) -> i128 {
+        env.storage()
+            .instance()
+            .get(&MockGovKey::Threshold)
+            .unwrap_or(0)
+    }
+
+    pub fn get_effective_threshold(env: Env, _proposer: Address) -> i128 {
         env.storage()
             .instance()
             .get(&MockGovKey::Threshold)
@@ -572,3 +579,89 @@ fn test_finalize_draft_success_with_changed_sponsor_power() {
     assert_eq!(client.get_co_sponsor_power(&draft_id, &sponsor_b), 500,
         "get_co_sponsor_power should return the latest live power");
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #15)")]
+fn test_uninitialized_calls_revert() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register(CoSponsorshipContract, ());
+    let client = CoSponsorshipContractClient::new(&env, &contract_id);
+    // Directly invoke the helper that checks for initialization
+    client.check_not_initialized();
+}
+
+#[test]
+fn test_admin_setters_succeed() {
+    let (env, client, _votes, _admin) = setup(1_000);
+
+    let new_gov = Address::generate(&env);
+    let new_votes = Address::generate(&env);
+
+    client.set_governor(&new_gov);
+    client.set_votes_token(&new_votes);
+    client.set_draft_expiry_ledgers(&10_000u32);
+    client.set_max_co_sponsors(&50u32);
+
+    let creator = Address::generate(&env);
+    let draft_id = create_draft(&env, &client, &creator);
+    let draft = client.get_draft(&draft_id);
+    assert_eq!(draft.expiry_ledger, env.ledger().sequence() + 10_000);
+}
+
+#[test]
+#[should_panic]
+fn test_admin_setters_reject_non_admin() {
+    let env = Env::default();
+    let admin = Address::generate(&env);
+    let non_admin = Address::generate(&env);
+    let votes_id = env.register(MockVotesContract, ());
+    let gov_id = env.register(MockGovernorContract, ());
+    let contract_id = env.register(CoSponsorshipContract, ());
+    let client = CoSponsorshipContractClient::new(&env, &contract_id);
+
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "initialize",
+            args: (&admin, &gov_id, &votes_id, &7200u32, &20u32).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.initialize(&admin, &gov_id, &votes_id, &7200u32, &20u32);
+
+    let new_gov = Address::generate(&env);
+    env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+        address: &non_admin,
+        invoke: &soroban_sdk::testutils::MockAuthInvoke {
+            contract: &contract_id,
+            fn_name: "set_governor",
+            args: (&new_gov,).into_val(&env),
+            sub_invokes: &[],
+        },
+    }]);
+    client.set_governor(&new_gov);
+}
+
+#[test]
+fn test_withdraw_co_sponsorship_succeeds_after_expiry() {
+    let (env, client, votes, _admin) = setup_with_expiry(1_000, 5);
+    let creator = Address::generate(&env);
+    let sponsor = Address::generate(&env);
+    votes.set_power(&sponsor, &500);
+
+    let draft_id = create_draft(&env, &client, &creator);
+    client.co_sponsor(&sponsor, &draft_id);
+
+    let draft_before = client.get_draft(&draft_id);
+    env.ledger()
+        .set_sequence_number(draft_before.expiry_ledger + 10);
+
+    client.withdraw_co_sponsorship(&sponsor, &draft_id);
+
+    let draft_after = client.get_draft(&draft_id);
+    assert_eq!(draft_after.total_power, 0);
+    assert_eq!(client.get_co_sponsor_power(&draft_id, &sponsor), 0);
+}
+
