@@ -797,3 +797,67 @@ export interface ProposerLeaderboardEntry {
   reputationScore: number;
   lastUpdatedLedger: number | null;
 }
+
+/**
+ * Indexer-cached summary for a single proposer address, as returned by
+ * `GET /reputation/:address`. Faster than an on-chain simulation for
+ * display-only use cases (e.g. profile pages). The authoritative source
+ * for threshold calculations is always the on-chain contract.
+ */
+export interface ReputationSummary {
+  /** Stellar strkey address of the proposer. */
+  address: string;
+  /** Most-recent reputation score mirrored from `ReputationUpdated` events. */
+  reputationScore: number;
+  /** Ledger at which the indexer last updated this record, or null if never seen. */
+  lastUpdatedLedger: number | null;
+}
+
+/**
+ * Paginated page of reputation score history entries, as returned by
+ * `GET /reputation/:address/history`.
+ */
+export interface ReputationScoreHistoryPage {
+  history: ReputationScoreEntry[];
+  pagination: {
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  };
+}
+
+/**
+ * Paginated page of the proposer leaderboard, as returned by
+ * `GET /reputation/leaderboard`.
+ */
+export interface ReputationLeaderboardPage {
+  leaderboard: ProposerLeaderboardEntry[];
+  pagination: {
+    limit: number;
+    offset: number;
+  };
+}
+
+/**
+ * A single entry in a proposer's effective-threshold history, as returned
+ * by the indexer's `GET /reputation/:address/threshold-history` (built from
+ * `EffectiveThresholdChanged` events).
+ */
+export interface ThresholdHistoryEntry {
+  ledger: number;
+  oldThreshold: bigint;
+  newThreshold: bigint;
+}
+
+/**
+ * Paginated page of threshold history entries, as returned by
+ * `GET /reputation/:address/threshold-history`.
+ */
+export interface ThresholdHistoryPage {
+  history: ThresholdHistoryEntry[];
+  pagination: {
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  };
+}
