@@ -1306,6 +1306,11 @@ impl GovernorContract {
         // Single-action proposals use the existing schedule() path.
         let mut op_ids: Vec<Bytes> = Vec::new(&env);
         let empty_bytes = Bytes::new(&env);
+        // Salted with proposal_id so two proposals scheduling the exact same
+        // target/calldata/fn_name (e.g. two identical "noop" actions) never
+        // collide on the same timelock op_id — the timelock only hashes
+        // target+data+predecessor+salt, with no notion of "proposal" at all.
+        let salt = Bytes::from_slice(&env, &proposal_id.to_be_bytes());
 
         if proposal.targets.len() > 1 {
             let batch_op_id = timelock.schedule_batch(
@@ -1315,7 +1320,7 @@ impl GovernorContract {
                 &proposal.fn_names,
                 &delay,
                 &empty_bytes,
-                &empty_bytes,
+                &salt,
             );
             op_ids.push_back(batch_op_id);
         } else {
@@ -1329,7 +1334,7 @@ impl GovernorContract {
                 &fn_name,
                 &delay,
                 &empty_bytes,
-                &empty_bytes,
+                &salt,
             );
             op_ids.push_back(op_id);
         }

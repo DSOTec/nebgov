@@ -1,5 +1,6 @@
 import {
   parseConfigUpdatedEvent,
+  parseDelegatedBySigEvent,
   parseEffectiveThresholdChangedEvent,
   parseGovernorUpgradedEvent,
   parsePauseEvent,
@@ -9,6 +10,7 @@ import {
   parseProposalExecutedEvent,
   parseProposalExpiredEvent,
   parseProposalQueuedEvent,
+  parseRelayerWhitelistUpdatedEvent,
   parseReputationUpdatedEvent,
   parseUnpauseEvent,
   parseVoteCastEvent,

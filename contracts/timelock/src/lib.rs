@@ -1144,40 +1144,39 @@ impl TimelockContract {
     /// both endpoints are present in the input set. If a predecessor is omitted,
     /// cycles involving that predecessor will not be detected.
     fn has_full_predecessor_closure(env: &Env, op_ids: &Vec<Bytes>) -> bool {
-        // Collect all transitive predecessors using a worklist approach
+        // Collect all transitive predecessors using a worklist approach.
+        // `seen` tracks every node ever discovered (the roots, plus every
+        // predecessor found so far, internal or external) so each node is
+        // enqueued at most once. Without this, a cycle entirely contained
+        // within `op_ids` (e.g. A's predecessor is B and B's predecessor is
+        // A) has no external predecessor to terminate on and previously
+        // reprocessed the same nodes forever.
         let mut external_preds: Vec<Bytes> = Vec::new(env);
         let mut worklist: Vec<Bytes> = op_ids.clone();
-        
+        let mut seen: Vec<Bytes> = op_ids.clone();
+
         while !worklist.is_empty() {
             let node = worklist.get(0).unwrap();
             worklist.remove(0);
-            
+
             let pred_key = DataKey::OperationPredecessors(node.clone());
             if let Some(preds) = env.storage().persistent().get::<_, Vec<Bytes>>(&pred_key) {
                 let pred_len = preds.len();
                 let mut p = 0u32;
                 while p < pred_len {
                     let pred = preds.get(p).unwrap();
-                    // Only track predecessors that are NOT in the original op_ids set
-                    if Self::index_of(op_ids, &pred).is_none() {
-                        // Check if this external predecessor is already tracked
-                        if Self::index_of(&external_preds, &pred).is_none() {
+                    if Self::index_of(&seen, &pred).is_none() {
+                        seen.push_back(pred.clone());
+                        worklist.push_back(pred.clone());
+                        if Self::index_of(op_ids, &pred).is_none() {
                             external_preds.push_back(pred.clone());
-                            // Add to worklist to process its predecessors too
-                            worklist.push_back(pred.clone());
-                        }
-                    } else {
-                        // Predecessor is in op_ids, but we still need to check its predecessors
-                        // to ensure we don't miss external predecessors deeper in the chain
-                        if Self::index_of(&worklist, &pred).is_none() && Self::index_of(&external_preds, &pred).is_none() {
-                            worklist.push_back(pred.clone());
                         }
                     }
                     p += 1;
                 }
             }
         }
-        
+
         // If we found any external predecessors, the closure is incomplete
         external_preds.is_empty()
     }
