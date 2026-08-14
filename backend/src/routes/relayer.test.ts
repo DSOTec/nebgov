@@ -1,10 +1,13 @@
 import request from "supertest";
 import express, { Express } from "express";
 
-// --- @stellar/stellar-sdk is not installed in every environment this repo
-// runs in (and even where it is, we don't want real network calls in a unit
-// test), so it's fully virtual-mocked. Only the surface relayer.ts actually
-// touches is implemented.
+// --- We don't want real network calls in a unit test, so
+// @stellar/stellar-sdk is fully mocked. Only the surface relayer.ts actually
+// touches is implemented. (Not `{ virtual: true }`: the package is a real
+// dependency here, and virtual-mocking a resolvable module is order-dependent
+// on which test file requires the real thing first within the same Jest run
+// — `../index` pulls in the real SDK via `security-monitor.ts`, which made
+// this mock silently no-op whenever a suite importing `../index` ran first.)
 const mockGetAccount = jest.fn();
 const mockPrepareTransaction = jest.fn();
 const mockSendTransaction = jest.fn();
@@ -75,7 +78,6 @@ jest.mock(
       xdr: { SorobanAuthorizationEntry: FakeAuthEntry },
     };
   },
-  { virtual: true },
 );
 
 const mockConnect = jest.fn();

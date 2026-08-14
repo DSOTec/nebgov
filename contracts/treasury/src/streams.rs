@@ -4,7 +4,7 @@
 //! independent spending authority, cooldowns, and utilization tracking.
 
 use crate::{DataKey, SpendingCap, StreamDataKey, TreasuryError};
-use soroban_sdk::{contracttype, token, Address, Env, IntoVal, String, Symbol, TryFromVal, Vec};
+use soroban_sdk::{contracttype, token, Address, Env, String, Symbol, Vec};
 
 /// A budget stream allocated to a department owner.
 #[contracttype]
@@ -122,11 +122,6 @@ pub fn emit_stream_topped_up(env: &Env, stream_id: u64, additional: i128, new_to
 pub fn emit_stream_exhausted(env: &Env, stream_id: u64) {
     env.events()
         .publish((Symbol::new(env, "stream_exhausted"),), stream_id);
-}
-
-pub fn emit_stream_expired(env: &Env, stream_id: u64, unspent: i128) {
-    env.events()
-        .publish((Symbol::new(env, "stream_expired"),), (stream_id, unspent));
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────
@@ -285,22 +280,6 @@ fn save_stream(env: &Env, stream: &BudgetStream) {
         STREAM_TTL_LEDGERS,
         STREAM_TTL_LEDGERS,
     );
-}
-
-fn paginate<T: Clone + TryFromVal<Env, soroban_sdk::Val> + IntoVal<Env, soroban_sdk::Val>>(
-    env: &Env,
-    list: Vec<T>,
-    offset: u64,
-    limit: u64,
-) -> Vec<T> {
-    let mut result = Vec::new(env);
-    let len = list.len() as u64;
-    let start = offset.min(len);
-    let end = (start + limit).min(len);
-    for i in start..end {
-        result.push_back(list.get(i as u32).unwrap());
-    }
-    result
 }
 
 // ── Spending-cap helpers ────────────────────────────────────────────────────

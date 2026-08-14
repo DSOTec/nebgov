@@ -697,21 +697,14 @@ impl GovernorContract {
 
         Self::validate_action(&env, &targets, &fn_names, &calldatas);
 
-        // Apply the same reputation-adjusted threshold check as propose()
-        // (#849). Without this, a proposer whose effective_threshold exceeds
-        // the flat proposal_threshold can bypass the anti-spam system by
-        // creating a draft and having co-sponsors pool exactly the flat
-        // threshold's worth of power.
-        let proposer_votes = Self::compute_proposer_votes(&env, &proposer);
-        let threshold: i128 = env
-            .storage()
-            .instance()
-            .get(&DataKey::ProposalThreshold)
-            .unwrap_or(0);
-        let effective_threshold = reputation::get_effective_threshold(&env, &proposer, threshold);
-        if proposer_votes < effective_threshold {
-            env.panic_with_error(GovernorError::ProposalThresholdNotMet);
-        }
+        // No individual-proposer threshold check here, by design: the
+        // configured registry (co-sponsorship contract) already verifies
+        // pooled co-sponsor power against the reputation-adjusted
+        // `get_effective_threshold` before calling this (#849) — that's the
+        // entire point of the registry bypass, letting an individually
+        // under-powered proposer through on pooled co-sponsor support.
+        // Re-checking `proposer`'s own votes here would defeat that purpose
+        // entirely, since it's exactly the case this path exists to allow.
 
         Self::create_proposal_internal(
             &env,

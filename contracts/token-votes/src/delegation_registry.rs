@@ -75,15 +75,20 @@ fn resolve_chain(env: &Env, start: Address) -> Vec<Address> {
     let mut current = start;
     let mut hops = 0u32;
     loop {
-        if hops >= MAX_CHAIN_WALK {
-            env.panic_with_error(TokenVotesError::ChainDepthExceeded);
-        }
         let next: Option<Address> = env
             .storage()
             .persistent()
             .get(&DataKey::Delegate(current.clone()));
         match next {
             Some(n) if n != current => {
+                // Checked here, not before the lookup: a `current` with no
+                // further delegate is a legal terminal node even exactly at
+                // MAX_CHAIN_WALK hops, and must be allowed to resolve as one.
+                // Checking eagerly rejected a fully legitimate MAX_CHAIN_WALK-
+                // hop chain before ever confirming it terminates.
+                if hops >= MAX_CHAIN_WALK {
+                    env.panic_with_error(TokenVotesError::ChainDepthExceeded);
+                }
                 current = n.clone();
                 chain.push_back(n);
                 hops += 1;

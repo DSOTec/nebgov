@@ -47,6 +47,7 @@ function mapFailedOp(raw: any): FailedOperation {
     opId: Buffer.from(raw.op_id).toString("hex"),
     target: String(raw.target),
     fnName: String(raw.fn_name),
+    data: Buffer.from(raw.data).toString("hex"),
     failureReason: String(raw.failure_reason),
     failedAtLedger: Number(raw.failed_at_ledger),
     retryCount: Number(raw.retry_count),
