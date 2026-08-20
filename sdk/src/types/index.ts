@@ -198,6 +198,8 @@ export interface GovernorConfig {
   simulationAccount?: string;
   /** Indexer base URL for off-chain queries (e.g. getVotingHistory) */
   indexerUrl?: string;
+  /** Backend REST API base URL, for clients that talk to backend/src rather than the indexer or Soroban RPC (e.g. GovernanceTuningClient) */
+  backendUrl?: string;
   /** Maximum number of retry attempts for RPC calls (default: 3) */
   maxAttempts?: number;
   /** Base delay in milliseconds for exponential backoff (default: 1000) */
@@ -860,4 +862,65 @@ export interface ThresholdHistoryPage {
     offset: number;
     hasMore: boolean;
   };
+}
+
+/**
+ * Explanation for one dimension of a governance tuning recommendation, as
+ * returned by the backend's `GET /governance-tuning/recommendations/*`
+ * (issue #998).
+ */
+export interface TuningRationaleEntry {
+  direction: "up" | "down" | "unchanged";
+  reason: string;
+}
+
+/** Full rationale attached to a {@link TuningRecommendation}. */
+export interface TuningRationale {
+  quorumNumerator: TuningRationaleEntry;
+  proposalThreshold: TuningRationaleEntry;
+  votingPeriod: TuningRationaleEntry;
+  /** Raw analytics inputs the recommendation was derived from, for auditability. */
+  inputs: Record<string, unknown>;
+}
+
+/**
+ * One computed governance-tuning recommendation, backend-sourced (never
+ * on-chain) — see the `governance_tuning_recommendations` table.
+ */
+export interface TuningRecommendation {
+  id: number;
+  computedAt: string;
+  currentQuorumNumerator: number;
+  recommendedQuorumNumerator: number;
+  currentProposalThreshold: bigint;
+  recommendedProposalThreshold: bigint;
+  rationale: TuningRationale;
+  /** Whether this recommendation was automatically submitted as an on-chain proposal. */
+  autoProposed: boolean;
+  /** The on-chain proposal id, once/if the indexer observes a matching `ProposalCreated` event. */
+  proposalId: bigint | null;
+}
+
+/** Paginated page of recommendations, as returned by `GET /governance-tuning/recommendations`. */
+export interface TuningRecommendationPage {
+  recommendations: TuningRecommendation[];
+  pagination: {
+    limit: number;
+    offset: number;
+    hasMore: boolean;
+  };
+}
+
+/** The tunable bands/caps for the recommender, as returned by `GET /governance-tuning/config`. */
+export interface TuningConfig {
+  minQuorumNumerator: number;
+  maxQuorumNumerator: number;
+  maxQuorumDeltaBps: number;
+  minProposalThreshold: bigint;
+  maxProposalThreshold: bigint | null;
+  maxThresholdDeltaBps: number;
+  trailingWindow: number;
+  intervalMs: number;
+  autoPropose: boolean;
+  updatedAt: string;
 }

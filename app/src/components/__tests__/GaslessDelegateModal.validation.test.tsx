@@ -10,6 +10,7 @@ const VALID_ADDRESS = "GDOOXICJPSOZDQRCEHZPR6MAX5PUZXVWGJ3QPVEU4DADIZQ4YBQOJNIB"
 const VALID_ADDRESS_2 = "GD6HLZWRE5FHK3SDLZB3FH56R3H3ECAAYCPWWU7O7EK4FCNT2Z7S6D5I";
 const mockDelegateGasless = jest.fn();
 const mockPreflightDelegatee = jest.fn();
+const mockInvalidateAllPermits = jest.fn();
 
 jest.mock("../../lib/wallet-context", () => ({
   useWallet: () => ({
@@ -28,6 +29,7 @@ jest.mock("../../hooks/useGaslessDelegation", () => ({
   useGaslessDelegation: () => ({
     delegateGasless: mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" }),
     preflightDelegatee: mockPreflightDelegatee.mockResolvedValue(undefined),
+    invalidateAllPermits: mockInvalidateAllPermits.mockResolvedValue({ txHash: "invalidate-txhash" }),
     submitting: false,
   }),
   EXPIRY_PRESET_LABELS: {
@@ -49,8 +51,10 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
     jest.clearAllMocks();
     mockDelegateGasless.mockReset();
     mockPreflightDelegatee.mockReset();
+    mockInvalidateAllPermits.mockReset();
     mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" });
     mockPreflightDelegatee.mockResolvedValue(undefined);
+    mockInvalidateAllPermits.mockResolvedValue({ txHash: "invalidate-txhash" });
   });
 
   describe("rendering", () => {

@@ -143,6 +143,9 @@ importers:
       '@asteasolutions/zod-to-openapi':
         specifier: ^8.5.0
         version: 8.5.0(zod@4.3.6)
+      '@nebgov/sdk':
+        specifier: workspace:*
+        version: link:../sdk
       '@stellar/stellar-sdk':
         specifier: ^15.0.1
         version: 15.0.1
