@@ -62,6 +62,7 @@ export interface IndexerConfig {
   treasuryAddress?: string;
   liquidityAddress?: string;
   coSponsorshipAddress?: string;
+  proposalBondsAddress?: string;
   tokenVotesAddress?: string;
   timelockAddress?: string;
   treasuryStateReader?: TreasuryStateReader;
@@ -94,6 +95,7 @@ export async function processEvents(
     if (config.treasuryAddress) contractIds.push(config.treasuryAddress);
     if (config.liquidityAddress) contractIds.push(config.liquidityAddress);
     if (config.coSponsorshipAddress) contractIds.push(config.coSponsorshipAddress);
+    if (config.proposalBondsAddress) contractIds.push(config.proposalBondsAddress);
     if (config.tokenVotesAddress) contractIds.push(config.tokenVotesAddress);
     if (config.timelockAddress) contractIds.push(config.timelockAddress);
 
@@ -135,6 +137,11 @@ export async function processEvents(
         contractId &&
         config.coSponsorshipAddress &&
         contractId === config.coSponsorshipAddress
+      );
+      const isProposalBonds = !!(
+        contractId &&
+        config.proposalBondsAddress &&
+        contractId === config.proposalBondsAddress
       );
       const isTokenVotes = !!(
         contractId &&
@@ -229,6 +236,20 @@ export async function processEvents(
               break;
             case "DraftExpired":
               await handleDraftExpired(event);
+              break;
+            default:
+              break;
+          }
+        } else if (isProposalBonds) {
+          switch (eventType) {
+            case "BondLocked":
+              await handleBondLocked(event, topics);
+              break;
+            case "BondRefunded":
+              await handleBondRefunded(event, topics);
+              break;
+            case "BondSlashed":
+              await handleBondSlashed(event, topics);
               break;
             default:
               break;
@@ -438,6 +459,7 @@ async function handleProposalCreated(
   let id: bigint;
   let proposer: string;
   let description: string;
+  let descriptionHash: string | null;
   let startLedger: number;
   let endLedger: number;
 
@@ -446,6 +468,7 @@ async function handleProposalCreated(
     id = raw[0] as bigint;
     proposer = topics[1] as string;
     description = String(raw[1] ?? "");
+    descriptionHash = null;
     startLedger = raw[5] as number;
     endLedger = raw[6] as number;
   } else {
@@ -454,16 +477,20 @@ async function handleProposalCreated(
     id = data.proposal_id as bigint;
     proposer = String(data.proposer ?? "");
     description = String(data.description ?? "");
+    const descriptionHashRaw = data.description_hash as Uint8Array | undefined;
+    descriptionHash = descriptionHashRaw
+      ? Buffer.from(descriptionHashRaw).toString("hex")
+      : null;
     startLedger = Number(data.start_ledger);
     endLedger = Number(data.end_ledger);
   }
 
   invalidatePattern("proposals:");
   await pool.query(
-    `INSERT INTO proposals (id, proposer, description, start_ledger, end_ledger)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO proposals (id, proposer, description, description_hash, start_ledger, end_ledger)
+     VALUES ($1, $2, $3, $4, $5, $6)
      ON CONFLICT (id) DO NOTHING`,
-    [String(id), proposer, description, startLedger, endLedger],
+    [String(id), proposer, description, descriptionHash, startLedger, endLedger],
   );
   invalidate(`profile:${proposer}`);
   broadcast({
@@ -1127,6 +1154,69 @@ async function handleDraftExpired(
   broadcast({
     type: "draft_expired",
     data: { draft_id: draftId, ledger: event.ledger },
+  });
+}
+
+async function handleBondLocked(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const descriptionHash = Buffer.from(data[0] as Uint8Array).toString("hex");
+  const amount = String(data[1] as bigint);
+
+  await pool.query(
+    `INSERT INTO proposal_bonds (description_hash, proposer_address, amount, state, locked_ledger)
+     VALUES ($1, $2, $3, 'locked', $4)
+     ON CONFLICT (description_hash) DO NOTHING`,
+    [descriptionHash, proposer, amount, event.ledger],
+  );
+  invalidatePattern("proposal-bonds:");
+  broadcast({
+    type: "bond_locked",
+    data: { description_hash: descriptionHash, proposer, amount, ledger: event.ledger },
+  });
+}
+
+async function handleBondRefunded(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const descriptionHash = Buffer.from(data[0] as Uint8Array).toString("hex");
+  const amount = String(data[1] as bigint);
+
+  await pool.query(
+    `UPDATE proposal_bonds SET state = 'refunded', refunded_ledger = $1 WHERE description_hash = $2`,
+    [event.ledger, descriptionHash],
+  );
+  invalidatePattern("proposal-bonds:");
+  broadcast({
+    type: "bond_refunded",
+    data: { description_hash: descriptionHash, proposer, amount, ledger: event.ledger },
+  });
+}
+
+async function handleBondSlashed(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const proposer = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const descriptionHash = Buffer.from(data[0] as Uint8Array).toString("hex");
+  const amount = String(data[1] as bigint);
+  const recipient = data[2] as string;
+
+  await pool.query(
+    `UPDATE proposal_bonds SET state = 'slashed', slashed_ledger = $1, slash_recipient = $2 WHERE description_hash = $3`,
+    [event.ledger, recipient, descriptionHash],
+  );
+  invalidatePattern("proposal-bonds:");
+  broadcast({
+    type: "bond_slashed",
+    data: { description_hash: descriptionHash, proposer, amount, recipient, ledger: event.ledger },
   });
 }
 

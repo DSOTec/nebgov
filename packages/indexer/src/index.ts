@@ -20,6 +20,7 @@ const WRAPPER_ADDRESS = process.env.WRAPPER_ADDRESS ?? "";
 const TREASURY_ADDRESS = process.env.TREASURY_ADDRESS ?? "";
 const LIQUIDITY_ADDRESS = process.env.LIQUIDITY_ADDRESS ?? "";
 const CO_SPONSORSHIP_ADDRESS = process.env.CO_SPONSORSHIP_ADDRESS ?? "";
+const PROPOSAL_BONDS_ADDRESS = process.env.PROPOSAL_BONDS_ADDRESS ?? "";
 const TOKEN_VOTES_ADDRESS = process.env.TOKEN_VOTES_ADDRESS ?? "";
 const TIMELOCK_ADDRESS = process.env.TIMELOCK_ADDRESS ?? "";
 const TREASURY_SIMULATION_ACCOUNT =
@@ -83,6 +84,7 @@ async function runIndexer(): Promise<void> {
     treasuryAddress: TREASURY_ADDRESS,
     liquidityAddress: LIQUIDITY_ADDRESS,
     coSponsorshipAddress: CO_SPONSORSHIP_ADDRESS,
+    proposalBondsAddress: PROPOSAL_BONDS_ADDRESS,
     tokenVotesAddress: TOKEN_VOTES_ADDRESS,
     timelockAddress: TIMELOCK_ADDRESS,
     treasuryStateReader,

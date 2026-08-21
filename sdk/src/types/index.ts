@@ -127,6 +127,51 @@ export interface ProposalDraft {
   cancelled: boolean;
 }
 
+/** Lifecycle state of a proposer bond — see `ProposalBondsClient`. */
+export type BondState = "Locked" | "Refunded" | "Slashed";
+
+/**
+ * A refundable bond posted by a proposer alongside a governor proposal
+ * (correlated by shared `descriptionHash`), refunded once the proposal
+ * reaches a terminal state or slashed by a follow-up governance vote if
+ * judged spam, duplicated, or malicious.
+ */
+export interface ProposalBond {
+  /** Stellar address that posted the bond. */
+  proposer: string;
+  /** SHA-256 hash of the off-chain description content, shared with the correlated proposal. */
+  descriptionHash: string;
+  /** Bonded amount, in the configured bond token's smallest unit. */
+  amount: bigint;
+  /** Ledger sequence at which the bond was locked. */
+  lockedLedger: number;
+  /** Current lifecycle state. */
+  state: BondState;
+}
+
+/** Read-only configuration snapshot of a deployed ProposalBonds contract. */
+export interface ProposalBondSettings {
+  /** Token address bonds are denominated and paid in. */
+  bondToken: string;
+  /** Amount, in the bond token's smallest unit, `lock_bond` currently requires. */
+  bondAmount: bigint;
+  /** Governor contract address this bonds registry is attached to. */
+  governor: string;
+  /**
+   * Ledgers after a correlated proposal's `end_ledger` during which
+   * `refund_bond` is blocked, giving the community time to submit a
+   * `slash` governance proposal first.
+   */
+  refundGraceLedgers: number;
+  /**
+   * Ledgers after `lock_bond` after which `refund_bond` succeeds
+   * unconditionally — the escape hatch for a proposal stuck in `Queued`
+   * with no governor-reported terminal state (see the contract's
+   * `refund_bond` doc comment).
+   */
+  maxLockLedgers: number;
+}
+
 /** Aggregated vote tallies for a proposal. */
 export interface ProposalVotes {
   /** Total tokens cast in favour. */
@@ -190,6 +235,8 @@ export interface GovernorConfig {
   votesAddress: string;
   /** Contract address of the co-sponsorship registry, if deployed */
   coSponsorshipAddress?: string;
+  /** Contract address of the proposal-bonds registry, if deployed */
+  proposalBondsAddress?: string;
   /** Stellar network to connect to */
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */

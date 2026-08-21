@@ -25,6 +25,7 @@ import {
   GovernorClient,
   VotesClient,
   ReputationClient,
+  ProposalBondsClient,
   hashDescription,
   uploadProposalMetadata,
   type CanProposeResult,
@@ -122,6 +123,7 @@ function getClients() {
   const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
   const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
   const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
+  const proposalBondsAddress = process.env.NEXT_PUBLIC_PROPOSAL_BONDS_ADDRESS;
   const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as
     | "mainnet"
     | "testnet"
@@ -140,6 +142,12 @@ function getClients() {
     votes: new VotesClient(cfg),
     reputation: new ReputationClient(cfg),
     governorAddress,
+    // Bonding is optional — only constructed when a bonds contract is
+    // configured, so proposing continues to work for deployments that
+    // haven't opted into Issue #996's bonding layer.
+    proposalBonds: proposalBondsAddress
+      ? new ProposalBondsClient({ ...cfg, proposalBondsAddress })
+      : null,
   };
 }
 
@@ -620,6 +628,28 @@ function ProposeWizardInner() {
         </div>,
         { duration: 8000 },
       );
+
+      // Bonding (Issue #996) is a second, separate transaction correlated
+      // by the same description hash — best-effort: the proposal above has
+      // already succeeded on-chain, so a bond-lock failure is surfaced but
+      // must not block navigating to the success step.
+      if (clients.proposalBonds) {
+        try {
+          await clients.proposalBonds.lockBondWithSign(
+            publicKey,
+            draft.descriptionHash,
+            signTransaction,
+          );
+          toast.success("Proposal bond locked.");
+        } catch (bondError: unknown) {
+          toast.error(
+            `Proposal submitted, but locking the bond failed: ${
+              bondError instanceof Error ? bondError.message : String(bondError)
+            }`,
+          );
+        }
+      }
+
       sessionStorage.removeItem(STORAGE_KEY);
       localStorage.removeItem(STORAGE_KEY);
       setDraft({

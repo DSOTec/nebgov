@@ -54,7 +54,10 @@ export type WsEventType =
   | "stream_extended"
   | "stream_topped_up"
   | "stream_exhausted"
-  | "stream_expired";
+  | "stream_expired"
+  | "bond_locked"
+  | "bond_refunded"
+  | "bond_slashed";
 
 export interface WsEvent {
   type: WsEventType;

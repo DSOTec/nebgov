@@ -6,6 +6,7 @@ export function readGovernorConfig(): GovernorConfig | null {
   const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
   const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
   const coSponsorshipAddress = process.env.NEXT_PUBLIC_CO_SPONSORSHIP_ADDRESS;
+  const proposalBondsAddress = process.env.NEXT_PUBLIC_PROPOSAL_BONDS_ADDRESS;
   const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
   const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
@@ -18,6 +19,7 @@ export function readGovernorConfig(): GovernorConfig | null {
     network,
     ...(rpcUrl ? { rpcUrl } : {}),
     ...(coSponsorshipAddress ? { coSponsorshipAddress } : {}),
+    ...(proposalBondsAddress ? { proposalBondsAddress } : {}),
   };
 }
 

@@ -118,6 +118,7 @@ const TTL = {
   analytics: 30_000, // 30 seconds
   reputation: 30_000, // 30 seconds
   treasury: 30_000, // 30 seconds
+  proposalBonds: 30_000, // 30 seconds
 };
 
 function parsePagination(
@@ -545,6 +546,30 @@ export function createApp(server: SorobanRpc.Server): express.Application {
       res.status(500).json({ error: "Internal server error" });
     }
   });
+
+  // GET /proposals/by-description-hash/:hash — used by proposal-bonds
+  // refund flow to resolve the proposal_id a bond correlates with, since
+  // the bonds contract's refund_bond requires it (governor has no
+  // description_hash → id lookup on-chain, see contracts/proposal-bonds).
+  app.get(
+    "/proposals/by-description-hash/:hash",
+    async (req: Request, res: Response): Promise<void> => {
+      const { hash } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT * FROM proposals WHERE description_hash = $1`,
+          [hash],
+        );
+        if (!result.rows[0]) {
+          res.status(404).json({ error: "Proposal not found" });
+          return;
+        }
+        res.json(result.rows[0]);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
 
   // GET /proposals/:id/votes
   app.get(
@@ -1808,6 +1833,79 @@ export function createApp(server: SorobanRpc.Server): express.Application {
           [draftId],
         );
         res.json({ data: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // --- Proposal bonds endpoints (#996) ---
+
+  // GET /proposal-bonds?state=locked|refunded|slashed
+  app.get("/proposal-bonds", async (req: Request, res: Response): Promise<void> => {
+    const limit = Math.min(Number(req.query.limit ?? 20), 100);
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const state = req.query.state ? String(req.query.state).trim() : undefined;
+    const validStates = ["locked", "refunded", "slashed"];
+    if (state && !validStates.includes(state)) {
+      res.status(400).json({ error: "Invalid state filter" });
+      return;
+    }
+    const key = `proposal-bonds:list:${state ?? ""}:${page}:${limit}`;
+
+    try {
+      const whereClause = state ? "WHERE state = $3" : "";
+      const params = state
+        ? [limit, (page - 1) * limit, state]
+        : [limit, (page - 1) * limit];
+      const data = await cached(key, TTL.proposalBonds, async () => {
+        const result = await pool.query(
+          `SELECT * FROM proposal_bonds ${whereClause} ORDER BY id DESC LIMIT $1 OFFSET $2`,
+          params,
+        );
+        return {
+          data: result.rows,
+          pagination: { page, limit, hasMore: result.rows.length === limit },
+        };
+      });
+      res.json(data);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  // GET /proposal-bonds/by-proposer/:address
+  app.get(
+    "/proposal-bonds/by-proposer/:address",
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT * FROM proposal_bonds WHERE proposer_address = $1 ORDER BY id DESC`,
+          [address],
+        );
+        res.json({ data: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /proposal-bonds/:descriptionHash
+  app.get(
+    "/proposal-bonds/:descriptionHash",
+    async (req: Request, res: Response): Promise<void> => {
+      const { descriptionHash } = req.params;
+      try {
+        const result = await pool.query(
+          `SELECT * FROM proposal_bonds WHERE description_hash = $1`,
+          [descriptionHash],
+        );
+        if (!result.rows[0]) {
+          res.status(404).json({ error: "Bond not found" });
+          return;
+        }
+        res.json(result.rows[0]);
       } catch {
         res.status(500).json({ error: "Internal server error" });
       }

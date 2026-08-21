@@ -48,6 +48,7 @@ import {
 } from "../../../lib/frontend-error";
 import { ProposalDetailSkeleton } from "../../../components/ui/ProposalDetailSkeleton";
 import { CountdownTimer } from "../../../components/CountdownTimer";
+import { ProposalBondCard } from "../../../components/ProposalBondCard";
 
 interface Props {
   params: { id: string };
@@ -639,6 +640,13 @@ export default function ProposalDetailClient({ params }: Props) {
         )}
       </div>
       </ErrorBoundary>
+
+      {proposal.descriptionHash && (
+        <ProposalBondCard
+          descriptionHash={proposal.descriptionHash}
+          proposer={proposal.proposer}
+        />
+      )}
 
       {/* Delegation */}
       <ErrorBoundary

@@ -41,6 +41,10 @@ export interface GaslessPreflightResult {
   error?: string;
 }
 
+export interface InvalidatePermitsResult {
+  txHash: string;
+}
+
 function getDelegationSigClientFromEnv(): DelegationSigClient {
   const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
   const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
@@ -57,6 +61,13 @@ function getDelegationSigClientFromEnv(): DelegationSigClient {
   });
 }
 
+/**
+ * Cycle/depth-limit checks (`wouldCreateCycle`, `getDelegationDepthLimit`,
+ * `getChainDepth`) live on the token-votes contract, not the delegation-sig
+ * one — they're read through `VotesClient`, which needs the full governor
+ * config (governor + timelock + votes addresses), unlike
+ * `DelegationSigClient`.
+ */
 function getVotesClientFromEnv(): VotesClient {
   const config = readGovernorConfig();
   if (!config) {
@@ -73,7 +84,7 @@ function getVotesClientFromEnv(): VotesClient {
  * transaction itself, it only signs an authorization off-chain.
  */
 export function useGaslessDelegation() {
-  const { isConnected, publicKey, signAuthEntry, signTransaction } = useWallet();
+  const { isConnected, publicKey, signTransaction, signAuthEntry } = useWallet();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -92,15 +103,11 @@ export function useGaslessDelegation() {
       }
 
       try {
-        // Cycle/depth-limit checks are read directly off the token-votes
-        // contract's delegation registry — that's VotesClient, not
-        // DelegationSigClient (which only handles the signed-permit
-        // relayer flow used by delegateGasless below).
-        const votes = getVotesClientFromEnv();
+        const client = getVotesClientFromEnv();
         const [wouldCreateCycle, depthLimit, currentDepth] = await Promise.all([
-          votes.wouldCreateCycle(publicKey, delegatee.trim()),
-          votes.getDelegationDepthLimit(),
-          votes.getChainDepth(publicKey),
+          client.wouldCreateCycle(publicKey, delegatee.trim()),
+          client.getDelegationDepthLimit(),
+          client.getChainDepth(publicKey),
         ]);
 
         if (wouldCreateCycle) {
@@ -183,8 +190,8 @@ export function useGaslessDelegation() {
     [isConnected, publicKey, signAuthEntry],
   );
 
-  const invalidateAllPermits = useCallback(async (): Promise<GaslessDelegationResult> => {
-    if (!isConnected || !publicKey) {
+  const invalidateAllPermits = useCallback(async (): Promise<InvalidatePermitsResult> => {
+    if (!isConnected || !publicKey || !signTransaction) {
       throw new Error("Connect your wallet first.");
     }
 
@@ -192,8 +199,8 @@ export function useGaslessDelegation() {
     setError(null);
     try {
       const client = getDelegationSigClientFromEnv();
-      const { hash } = await client.invalidateAllPermitsWithSign(publicKey, signTransaction);
-      return { txHash: hash };
+      const result = await client.invalidateAllPermitsWithSign(publicKey, signTransaction);
+      return { txHash: result.hash };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -203,5 +210,11 @@ export function useGaslessDelegation() {
     }
   }, [isConnected, publicKey, signTransaction]);
 
-  return { delegateGasless, preflightDelegatee, invalidateAllPermits, submitting, error };
+  return {
+    delegateGasless,
+    preflightDelegatee,
+    invalidateAllPermits,
+    submitting,
+    error,
+  };
 }

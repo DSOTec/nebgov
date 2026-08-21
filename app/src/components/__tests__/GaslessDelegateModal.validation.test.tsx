@@ -29,7 +29,7 @@ jest.mock("../../hooks/useGaslessDelegation", () => ({
   useGaslessDelegation: () => ({
     delegateGasless: mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" }),
     preflightDelegatee: mockPreflightDelegatee.mockResolvedValue(undefined),
-    invalidateAllPermits: mockInvalidateAllPermits.mockResolvedValue({ txHash: "invalidate-txhash" }),
+    invalidateAllPermits: mockInvalidateAllPermits.mockResolvedValue({ txHash: "txhash999" }),
     submitting: false,
   }),
   EXPIRY_PRESET_LABELS: {
@@ -54,7 +54,7 @@ describe("GaslessDelegateModal — Stellar address validation", () => {
     mockInvalidateAllPermits.mockReset();
     mockDelegateGasless.mockResolvedValue({ txHash: "txhash789" });
     mockPreflightDelegatee.mockResolvedValue(undefined);
-    mockInvalidateAllPermits.mockResolvedValue({ txHash: "invalidate-txhash" });
+    mockInvalidateAllPermits.mockResolvedValue({ txHash: "txhash999" });
   });
 
   describe("rendering", () => {

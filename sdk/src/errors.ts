@@ -629,6 +629,95 @@ export function parseCoSponsorshipError(
   );
 }
 
+// ─── Proposal Bonds Errors ────────────────────────────────────────────────────
+
+/**
+ * Error codes for the ProposalBonds contract + SDK transport layer.
+ *
+ * Codes 1–99 mirror the on-chain ProposalBondsError enum values
+ * (contracts/proposal-bonds/src/error.rs).
+ */
+export enum ProposalBondsErrorCode {
+  AlreadyInitialized = 1,
+  NotInitialized = 2,
+  BondAlreadyLocked = 3,
+  BondNotFound = 4,
+  BondNotLocked = 5,
+  DescriptionHashMismatch = 6,
+  ProposalNotTerminal = 7,
+  RefundGraceNotElapsed = 8,
+  NotAuthorized = 9,
+
+  // SDK-level codes
+  SimulationFailed = 100,
+  TransactionFailed = 101,
+  TransactionTimeout = 102,
+  MissingReturnValue = 103,
+}
+
+const PROPOSAL_BONDS_MESSAGES: Record<ProposalBondsErrorCode, string> = {
+  [ProposalBondsErrorCode.AlreadyInitialized]: "Contract is already initialized",
+  [ProposalBondsErrorCode.NotInitialized]: "Contract has not been initialized yet",
+  [ProposalBondsErrorCode.BondAlreadyLocked]:
+    "A bond has already been locked for this description hash",
+  [ProposalBondsErrorCode.BondNotFound]: "Bond not found",
+  [ProposalBondsErrorCode.BondNotLocked]: "Bond is not in the Locked state",
+  [ProposalBondsErrorCode.DescriptionHashMismatch]:
+    "The proposal's description hash does not match this bond",
+  [ProposalBondsErrorCode.ProposalNotTerminal]:
+    "The correlated proposal has not reached a terminal state",
+  [ProposalBondsErrorCode.RefundGraceNotElapsed]:
+    "The post-terminal refund grace window has not elapsed yet",
+  [ProposalBondsErrorCode.NotAuthorized]: "Caller is not authorized to perform this action",
+  [ProposalBondsErrorCode.SimulationFailed]: "Simulation failed",
+  [ProposalBondsErrorCode.TransactionFailed]: "Transaction failed",
+  [ProposalBondsErrorCode.TransactionTimeout]: "Transaction timed out",
+  [ProposalBondsErrorCode.MissingReturnValue]: "No return value from contract",
+};
+
+export class ProposalBondsError extends Error {
+  readonly name = "ProposalBondsError";
+
+  constructor(
+    public readonly code: ProposalBondsErrorCode,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, ProposalBondsError.prototype);
+  }
+}
+
+/**
+ * Parse a raw Soroban RPC error into a typed {@link ProposalBondsError}.
+ */
+export function parseProposalBondsError(
+  raw: SorobanRpcError | string | null | undefined,
+  cause?: unknown,
+): ProposalBondsError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null) {
+    const code = contractCode as ProposalBondsErrorCode;
+    const message =
+      PROPOSAL_BONDS_MESSAGES[code] ?? `Proposal-bonds contract error #${contractCode}`;
+    return new ProposalBondsError(code, message, cause);
+  }
+
+  if (hasErrorStatus(raw)) {
+    return new ProposalBondsError(
+      ProposalBondsErrorCode.TransactionFailed,
+      `${PROPOSAL_BONDS_MESSAGES[ProposalBondsErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
+      cause,
+    );
+  }
+
+  return new ProposalBondsError(
+    ProposalBondsErrorCode.SimulationFailed,
+    `${PROPOSAL_BONDS_MESSAGES[ProposalBondsErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
+    cause,
+  );
+}
+
 /**
  * Parse a raw Soroban RPC error into a typed {@link VotesError}.
  */
