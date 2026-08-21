@@ -65,6 +65,7 @@ export interface IndexerConfig {
   proposalBondsAddress?: string;
   tokenVotesAddress?: string;
   timelockAddress?: string;
+  signalAnchorAddress?: string;
   treasuryStateReader?: TreasuryStateReader;
   pollIntervalMs: number;
 }
@@ -98,6 +99,7 @@ export async function processEvents(
     if (config.proposalBondsAddress) contractIds.push(config.proposalBondsAddress);
     if (config.tokenVotesAddress) contractIds.push(config.tokenVotesAddress);
     if (config.timelockAddress) contractIds.push(config.timelockAddress);
+    if (config.signalAnchorAddress) contractIds.push(config.signalAnchorAddress);
 
     const response = await server.getEvents({
       startLedger,
@@ -152,6 +154,11 @@ export async function processEvents(
         contractId &&
         config.timelockAddress &&
         contractId === config.timelockAddress
+      );
+      const isSignalAnchor = !!(
+        contractId &&
+        config.signalAnchorAddress &&
+        contractId === config.signalAnchorAddress
       );
 
       try {
@@ -329,6 +336,14 @@ export async function processEvents(
               break;
             case "BatchFullyComplete":
               await handleTimelockBatchFullyComplete(event, topics);
+              break;
+            default:
+              break;
+          }
+        } else if (isSignalAnchor) {
+          switch (eventType) {
+            case "ResultAnchored":
+              await handleResultAnchored(event, topics);
               break;
             default:
               break;
@@ -1080,6 +1095,35 @@ async function handleCoSponsored(
   broadcast({
     type: "co_sponsored",
     data: { draft_id: draftId, sponsor, power, total_power: totalPower, ledger: event.ledger },
+  });
+}
+
+/**
+ * Indexes a signal-anchor contract's ResultAnchored event so the anchor is
+ * independently queryable from the indexer even if the backend's own copy
+ * (backend/src/routes/signaling.ts's `anchored_tx_hash` column) is ever
+ * disputed.
+ */
+async function handleResultAnchored(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const anchorer = topics[1] as string;
+  const data = scValToNative(event.value) as unknown[];
+  const pollId = String(data[0] as bigint);
+  const resultHash = Buffer.from(data[1] as Uint8Array).toString("hex");
+  const anchoredLedger = Number(data[2] as number);
+
+  await pool.query(
+    `INSERT INTO signal_anchors (poll_id, result_hash, anchored_ledger, anchorer, tx_hash)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (poll_id) DO NOTHING`,
+    [pollId, resultHash, anchoredLedger, anchorer, event.txHash ?? null],
+  );
+  invalidatePattern("signal-anchors:");
+  broadcast({
+    type: "result_anchored",
+    data: { poll_id: pollId, result_hash: resultHash, anchored_ledger: anchoredLedger, anchorer },
   });
 }
 

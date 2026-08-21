@@ -1707,3 +1707,44 @@ export function subscribeToBatchFullyComplete(
 ): () => void {
   return createTopicSubscription(timelockAddress, TIMELOCK_TOPICS.batchFullyComplete, callback, opts);
 }
+
+const SIGNAL_ANCHOR_TOPICS = {
+  resultAnchored: "ResultAnchored",
+} as const;
+
+export interface ResultAnchoredEventData {
+  pollId: bigint;
+  resultHash: string;
+  anchoredLedger: number;
+  anchorer: string;
+}
+
+export function parseResultAnchoredEvent(event: SorobanEvent): ResultAnchoredEventData | null {
+  if (event.topic[0] !== SIGNAL_ANCHOR_TOPICS.resultAnchored || !Array.isArray(event.value) || event.value.length < 3) {
+    return null;
+  }
+
+  const pollId = toBigInt(event.value[0]);
+  const anchoredLedger = toNumber(event.value[2]);
+  if (pollId === null || anchoredLedger === null) return null;
+
+  const resultHashRaw = event.value[1];
+  const resultHash = Buffer.isBuffer(resultHashRaw)
+    ? resultHashRaw.toString("hex")
+    : String(resultHashRaw ?? "");
+
+  return {
+    pollId,
+    resultHash,
+    anchoredLedger,
+    anchorer: String(event.topic[1] ?? ""),
+  };
+}
+
+export function subscribeToResultAnchored(
+  signalAnchorAddress: string,
+  callback: (event: SorobanEvent) => void,
+  opts: SubscriptionOptions
+): () => void {
+  return createTopicSubscription(signalAnchorAddress, SIGNAL_ANCHOR_TOPICS.resultAnchored, callback, opts);
+}

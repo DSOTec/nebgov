@@ -1839,6 +1839,30 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
+  // --- Signaling endpoints (#999) ---
+
+  // GET /signal-anchors/:pollId — independently verify a finalized signaling
+  // poll's published result_hash against the indexed on-chain anchor.
+  app.get(
+    "/signal-anchors/:pollId",
+    async (req: Request, res: Response): Promise<void> => {
+      const pollId = req.params.pollId;
+      try {
+        const result = await pool.query(
+          `SELECT * FROM signal_anchors WHERE poll_id = $1`,
+          [pollId],
+        );
+        if (!result.rows[0]) {
+          res.status(404).json({ error: "Anchor not found" });
+          return;
+        }
+        res.json(result.rows[0]);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   // --- Proposal bonds endpoints (#996) ---
 
   // GET /proposal-bonds?state=locked|refunded|slashed

@@ -127,6 +127,45 @@ export interface ProposalDraft {
   cancelled: boolean;
 }
 
+/** A gasless off-chain signaling poll ("temperature check") — see SignalingClient. */
+export interface SignalingPoll {
+  id: number;
+  creatorAddress: string;
+  title: string;
+  description: string;
+  choices: string[];
+  /** Ledger at which voting power is snapshot-checkpointed for weighting votes. */
+  snapshotLedger: number;
+  startTime: string;
+  endTime: string;
+  finalized: boolean;
+  /** SHA-256 hex digest of the finalized tally, set once the poll closes. */
+  resultHash: string | null;
+  /** Transaction hash of the on-chain anchor submission, if anchoring was enabled. */
+  anchoredTxHash: string | null;
+  createdAt: string;
+}
+
+/** Weighted tally for a signaling poll — live before finalization, final after. */
+export interface SignalingPollResults {
+  finalized: boolean;
+  choices: string[];
+  /** Weighted voting power per choice, aligned by index with `choices`. */
+  totals: bigint[];
+  totalVotes: number;
+  totalWeight: bigint;
+  resultHash?: string | null;
+  anchoredTxHash?: string | null;
+}
+
+/** An immutable on-chain record anchoring a finalized signaling poll's result hash. */
+export interface SignalAnchorRecord {
+  pollId: bigint;
+  resultHash: string;
+  anchoredLedger: number;
+  anchorer: string;
+}
+
 /** Lifecycle state of a proposer bond — see `ProposalBondsClient`. */
 export type BondState = "Locked" | "Refunded" | "Slashed";
 
@@ -235,6 +274,8 @@ export interface GovernorConfig {
   votesAddress: string;
   /** Contract address of the co-sponsorship registry, if deployed */
   coSponsorshipAddress?: string;
+  /** Contract address of the gasless-signaling result anchor, if deployed */
+  signalAnchorAddress?: string;
   /** Contract address of the proposal-bonds registry, if deployed */
   proposalBondsAddress?: string;
   /** Stellar network to connect to */
@@ -245,7 +286,7 @@ export interface GovernorConfig {
   simulationAccount?: string;
   /** Indexer base URL for off-chain queries (e.g. getVotingHistory) */
   indexerUrl?: string;
-  /** Backend REST API base URL, for clients that talk to backend/src rather than the indexer or Soroban RPC (e.g. GovernanceTuningClient) */
+  /** Backend base URL for off-chain queries/mutations (e.g. SignalingClient's poll CRUD) */
   backendUrl?: string;
   /** Maximum number of retry attempts for RPC calls (default: 3) */
   maxAttempts?: number;

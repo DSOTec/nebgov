@@ -41,11 +41,7 @@ export interface GaslessPreflightResult {
   error?: string;
 }
 
-export interface InvalidatePermitsResult {
-  txHash: string;
-}
-
-function getDelegationSigClientFromEnv(): DelegationSigClient {
+function delegationEnvConfig() {
   const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
   const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
   const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
@@ -54,20 +50,17 @@ function getDelegationSigClientFromEnv(): DelegationSigClient {
     throw new Error("Missing NEXT_PUBLIC_VOTES_ADDRESS in .env.local");
   }
 
-  return new DelegationSigClient({
-    votesAddress,
-    network,
-    ...(rpcUrl && { rpcUrl }),
-  });
+  return { votesAddress, network, ...(rpcUrl && { rpcUrl }) };
 }
 
-/**
- * Cycle/depth-limit checks (`wouldCreateCycle`, `getDelegationDepthLimit`,
- * `getChainDepth`) live on the token-votes contract, not the delegation-sig
- * one — they're read through `VotesClient`, which needs the full governor
- * config (governor + timelock + votes addresses), unlike
- * `DelegationSigClient`.
- */
+function getDelegationSigClientFromEnv(): DelegationSigClient {
+  return new DelegationSigClient(delegationEnvConfig());
+}
+
+// Cycle/depth-limit checks read token-votes state directly and live on
+// VotesClient (see sdk/src/votes.ts's wouldCreateCycle/getChainDepth/
+// getDelegationDepthLimit) — DelegationSigClient only handles signing and
+// submitting delegate_by_sig permits, it never had these methods.
 function getVotesClientFromEnv(): VotesClient {
   const config = readGovernorConfig();
   if (!config) {
@@ -190,25 +183,34 @@ export function useGaslessDelegation() {
     [isConnected, publicKey, signAuthEntry],
   );
 
-  const invalidateAllPermits = useCallback(async (): Promise<InvalidatePermitsResult> => {
-    if (!isConnected || !publicKey || !signTransaction) {
-      throw new Error("Connect your wallet first.");
-    }
+  /**
+   * Invalidate all outstanding signed permits — unlike delegateGasless, this
+   * is a real transaction the connected wallet submits and pays for itself
+   * (invalidate_all_permits isn't relayed), so it signs the prepared
+   * transaction XDR via signTransaction rather than an auth-entry preimage.
+   */
+  const invalidateAllPermits = useCallback(
+    async (): Promise<GaslessDelegationResult> => {
+      if (!isConnected || !publicKey) {
+        throw new Error("Connect your wallet first.");
+      }
 
-    setSubmitting(true);
-    setError(null);
-    try {
-      const client = getDelegationSigClientFromEnv();
-      const result = await client.invalidateAllPermitsWithSign(publicKey, signTransaction);
-      return { txHash: result.hash };
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      throw err;
-    } finally {
-      setSubmitting(false);
-    }
-  }, [isConnected, publicKey, signTransaction]);
+      setSubmitting(true);
+      setError(null);
+      try {
+        const client = getDelegationSigClientFromEnv();
+        const { hash } = await client.invalidateAllPermitsWithSign(publicKey, signTransaction);
+        return { txHash: hash };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message);
+        throw err;
+      } finally {
+        setSubmitting(false);
+      }
+    },
+    [isConnected, publicKey, signTransaction],
+  );
 
   return {
     delegateGasless,

@@ -19,6 +19,7 @@ import {
   Moon,
   Bell,
   Settings,
+  Radio,
   SlidersHorizontal,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
@@ -41,6 +42,7 @@ const NAV_LINKS = [
   { name: "Proposals", href: "/", icon: LayoutDashboard },
   { name: "Governors", href: "/governors", icon: LayoutDashboard },
   { name: "Notifications", href: "/notifications", icon: Bell },
+  { name: "Signals", href: "/signals", icon: Radio },
   { name: "Delegates", href: "/delegates", icon: Users },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Treasury", href: "/treasury", icon: Wallet2 },

@@ -30,6 +30,7 @@ export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
 export { CoSponsorshipClient } from "./coSponsorship";
 export type { CoSponsorshipConfig } from "./coSponsorship";
+export { SignalingClient, canonicalSignalPayload, sep53Digest } from "./signaling";
 export { ProposalBondsClient } from "./proposalBonds";
 export type { ProposalBondsConfig } from "./proposalBonds";
 export {
@@ -43,6 +44,8 @@ export {
   TreasuryErrorCode,
   CoSponsorshipError,
   CoSponsorshipErrorCode,
+  SignalingError,
+  SignalingErrorCode,
   ProposalBondsError,
   ProposalBondsErrorCode,
   parseGovernorError,
@@ -50,6 +53,7 @@ export {
   parseVotesError,
   parseTreasuryError,
   parseCoSponsorshipError,
+  parseSignalingError,
   parseProposalBondsError,
   extractContractErrorCode,
 } from "./errors";
@@ -101,6 +105,7 @@ export {
   subscribeToFailedOpRetried,
   subscribeToFailedOpSkipped,
   subscribeToBatchFullyComplete,
+  subscribeToResultAnchored,
 } from "./events";
 export type {
   SorobanEvent,

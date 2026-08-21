@@ -629,6 +629,81 @@ export function parseCoSponsorshipError(
   );
 }
 
+// ─── Signaling (signal-anchor) Errors ────────────────────────────────────────
+
+/**
+ * Error codes for the signal-anchor contract + SDK transport layer.
+ *
+ * Codes 1–99 mirror the on-chain SignalAnchorError enum values
+ * (contracts/signal-anchor/src/error.rs).
+ */
+export enum SignalingErrorCode {
+  AlreadyInitialized = 1,
+  AlreadyAnchored = 2,
+  Unauthorized = 3,
+  /** Contract method was called before initialize() ran (on-chain error #4). */
+  NotInitialized = 4,
+
+  // SDK-level codes
+  SimulationFailed = 100,
+  TransactionFailed = 101,
+  TransactionTimeout = 102,
+  MissingReturnValue = 103,
+}
+
+const SIGNALING_MESSAGES: Record<SignalingErrorCode, string> = {
+  [SignalingErrorCode.AlreadyInitialized]: "Contract is already initialized",
+  [SignalingErrorCode.AlreadyAnchored]: "This poll's result has already been anchored",
+  [SignalingErrorCode.Unauthorized]: "Only the configured admin may anchor a result",
+  [SignalingErrorCode.NotInitialized]: "Contract has not been initialized yet",
+  [SignalingErrorCode.SimulationFailed]: "Simulation failed",
+  [SignalingErrorCode.TransactionFailed]: "Transaction failed",
+  [SignalingErrorCode.TransactionTimeout]: "Transaction timed out",
+  [SignalingErrorCode.MissingReturnValue]: "No return value from contract",
+};
+
+export class SignalingError extends Error {
+  readonly name = "SignalingError";
+
+  constructor(
+    public readonly code: SignalingErrorCode,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, SignalingError.prototype);
+  }
+}
+
+/**
+ * Parse a raw Soroban RPC error into a typed {@link SignalingError}.
+ */
+export function parseSignalingError(
+  raw: SorobanRpcError | string | null | undefined,
+  cause?: unknown,
+): SignalingError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null) {
+    const code = contractCode as SignalingErrorCode;
+    const message = SIGNALING_MESSAGES[code] ?? `Signal-anchor contract error #${contractCode}`;
+    return new SignalingError(code, message, cause);
+  }
+
+  if (hasErrorStatus(raw)) {
+    return new SignalingError(
+      SignalingErrorCode.TransactionFailed,
+      `${SIGNALING_MESSAGES[SignalingErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
+      cause,
+    );
+  }
+
+  return new SignalingError(
+    SignalingErrorCode.SimulationFailed,
+    `${SIGNALING_MESSAGES[SignalingErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
+    cause,
+  );
+}
+
 // ─── Proposal Bonds Errors ────────────────────────────────────────────────────
 
 /**

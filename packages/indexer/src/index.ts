@@ -23,6 +23,7 @@ const CO_SPONSORSHIP_ADDRESS = process.env.CO_SPONSORSHIP_ADDRESS ?? "";
 const PROPOSAL_BONDS_ADDRESS = process.env.PROPOSAL_BONDS_ADDRESS ?? "";
 const TOKEN_VOTES_ADDRESS = process.env.TOKEN_VOTES_ADDRESS ?? "";
 const TIMELOCK_ADDRESS = process.env.TIMELOCK_ADDRESS ?? "";
+const SIGNAL_ANCHOR_ADDRESS = process.env.SIGNAL_ANCHOR_ADDRESS ?? "";
 const TREASURY_SIMULATION_ACCOUNT =
   process.env.TREASURY_SIMULATION_ACCOUNT ?? "";
 const NETWORK_PASSPHRASE =
@@ -87,6 +88,7 @@ async function runIndexer(): Promise<void> {
     proposalBondsAddress: PROPOSAL_BONDS_ADDRESS,
     tokenVotesAddress: TOKEN_VOTES_ADDRESS,
     timelockAddress: TIMELOCK_ADDRESS,
+    signalAnchorAddress: SIGNAL_ANCHOR_ADDRESS,
     treasuryStateReader,
     pollIntervalMs: POLL_INTERVAL_MS,
   };

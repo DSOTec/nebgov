@@ -56,6 +56,13 @@ interface WalletContextValue {
    * a transaction itself.
    */
   signAuthEntry: (preimageXdr: string) => Promise<string>;
+  /**
+   * Sign an arbitrary string message per SEP-43's `signMessage`, returning
+   * a base64-encoded signature. Used for gasless signaling votes
+   * (`app/src/hooks/useSignalingPolls.ts`) where nothing is submitted
+   * on-chain, so there's no transaction or auth entry to sign.
+   */
+  signMessage: (message: string) => Promise<string>;
 }
 
 // Context
@@ -224,6 +231,21 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
     [publicKey],
   );
 
+  const signMessage = useCallback(
+    async (message: string) => {
+      const kit = kitRef.current;
+      if (!kit || !publicKey) {
+        throw new Error("Connect your wallet first.");
+      }
+      const { signedMessage } = await kit.signMessage(message, {
+        address: publicKey,
+        networkPassphrase: appNetworkPassphrase(),
+      });
+      return signedMessage;
+    },
+    [publicKey],
+  );
+
   return (
     <WalletContext.Provider
       value={{
@@ -236,6 +258,7 @@ export function WalletProvider({ children }: { children: React.ReactNode }) {
         disconnect,
         signTransaction,
         signAuthEntry,
+        signMessage,
       }}
     >
       {children}
