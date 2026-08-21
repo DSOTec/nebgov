@@ -46,6 +46,7 @@ jobs:
             -p sorogov-treasury \
             -p sorogov-liquidity \
             -p sorogov-co-sponsorship \
+            -p sorogov-conviction-voting \
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds
 
@@ -58,6 +59,7 @@ jobs:
             -p sorogov-governor-factory \
             -p sorogov-liquidity \
             -p sorogov-co-sponsorship \
+            -p sorogov-conviction-voting \
             -p sorogov-token-votes-wrapper \
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds
@@ -113,6 +115,7 @@ jobs:
             -p sorogov-treasury \
             -p sorogov-liquidity \
             -p sorogov-co-sponsorship \
+            -p sorogov-conviction-voting \
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds
 
@@ -125,6 +128,7 @@ jobs:
             -p sorogov-governor-factory \
             -p sorogov-liquidity \
             -p sorogov-co-sponsorship \
+            -p sorogov-conviction-voting \
             -p sorogov-token-votes-wrapper \
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds \
@@ -167,6 +171,7 @@ jobs:
             -p sorogov-treasury \
             -p sorogov-liquidity \
             -p sorogov-co-sponsorship \
+            -p sorogov-conviction-voting \
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds
 

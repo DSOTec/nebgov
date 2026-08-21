@@ -55,6 +55,11 @@ export type WsEventType =
   | "stream_topped_up"
   | "stream_exhausted"
   | "stream_expired"
+  | "conviction_proposal_created"
+  | "conviction_stake_updated"
+  | "conviction_conviction_updated"
+  | "conviction_proposal_executed"
+  | "conviction_proposal_cancelled"
   | "bond_locked"
   | "bond_refunded"
   | "bond_slashed";

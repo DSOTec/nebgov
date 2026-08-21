@@ -2041,5 +2041,78 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
+  app.get("/conviction/proposals", async (req: Request, res: Response): Promise<void> => {
+    const status = String(req.query.status ?? "active");
+    const predicates: Record<string, string> = {
+      active: "executed = FALSE AND cancelled = FALSE",
+      executed: "executed = TRUE",
+      cancelled: "cancelled = TRUE",
+    };
+    if (!predicates[status]) {
+      res.status(400).json({ error: "status must be active, executed, or cancelled" });
+      return;
+    }
+    try {
+      const result = await pool.query(
+        `SELECT * FROM conviction_proposals WHERE ${predicates[status]} ORDER BY proposal_id DESC`,
+      );
+      res.json({ data: result.rows });
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/conviction/proposals/:id", async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await pool.query(
+        "SELECT * FROM conviction_proposals WHERE proposal_id = $1",
+        [req.params.id],
+      );
+      if (!result.rows[0]) {
+        res.status(404).json({ error: "Conviction proposal not found" });
+        return;
+      }
+      res.json(result.rows[0]);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/conviction/proposals/:id/conviction-history", async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await pool.query(
+        "SELECT proposal_id, ledger, conviction FROM conviction_snapshots WHERE proposal_id = $1 ORDER BY ledger ASC",
+        [req.params.id],
+      );
+      res.json({ data: result.rows });
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/conviction/proposals/:id/stakes", async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await pool.query(
+        "SELECT * FROM conviction_stakes WHERE proposal_id = $1 ORDER BY amount DESC",
+        [req.params.id],
+      );
+      res.json({ data: result.rows });
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/conviction/stakers/:address", async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await pool.query(
+        "SELECT * FROM conviction_stakes WHERE staker = $1",
+        [req.params.address],
+      );
+      res.json(result.rows[0] ?? null);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
   return app;
 }

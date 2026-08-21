@@ -2,7 +2,7 @@ import { SorobanRpc, scValToNative } from "@stellar/stellar-sdk";
 import { createHash } from "crypto";
 import { pool } from "./db";
 import { invalidate, invalidatePattern } from "./cache";
-import { broadcast } from "./ws";
+import { broadcast, type WsEventType } from "./ws";
 import {
   getAllStreamSpends,
   type TreasuryStateReader,
@@ -65,6 +65,7 @@ export interface IndexerConfig {
   proposalBondsAddress?: string;
   tokenVotesAddress?: string;
   timelockAddress?: string;
+  convictionVotingAddress?: string;
   signalAnchorAddress?: string;
   treasuryStateReader?: TreasuryStateReader;
   pollIntervalMs: number;
@@ -99,6 +100,7 @@ export async function processEvents(
     if (config.proposalBondsAddress) contractIds.push(config.proposalBondsAddress);
     if (config.tokenVotesAddress) contractIds.push(config.tokenVotesAddress);
     if (config.timelockAddress) contractIds.push(config.timelockAddress);
+    if (config.convictionVotingAddress) contractIds.push(config.convictionVotingAddress);
     if (config.signalAnchorAddress) contractIds.push(config.signalAnchorAddress);
 
     const response = await server.getEvents({
@@ -155,6 +157,11 @@ export async function processEvents(
         config.timelockAddress &&
         contractId === config.timelockAddress
       );
+      const isConvictionVoting = !!(
+        contractId &&
+        config.convictionVotingAddress &&
+        contractId === config.convictionVotingAddress
+      );
       const isSignalAnchor = !!(
         contractId &&
         config.signalAnchorAddress &&
@@ -169,7 +176,9 @@ export async function processEvents(
       }
 
       try {
-        if (isTreasury) {
+        if (isConvictionVoting) {
+          await handleConvictionEvent(event, eventType, topics);
+        } else if (isTreasury) {
           switch (eventType) {
             case "bat_xfer":
               await handleTreasuryBatchTransfer(event, topics);
@@ -399,6 +408,87 @@ export async function processEvents(
   }
 
   return latestLedger;
+}
+
+async function handleConvictionEvent(
+  event: SorobanRpc.Api.EventResponse,
+  eventType: string,
+  topics: unknown[],
+): Promise<void> {
+  const proposalId = String(topics[1]);
+  const raw = scValToNative(event.value) as unknown;
+  const values = Array.isArray(raw) ? raw : [raw];
+
+  switch (eventType) {
+    case "ProposalCreated":
+      await pool.query(
+        `INSERT INTO conviction_proposals
+           (proposal_id, proposer, target, requested_amount, created_ledger, last_updated_ledger)
+         VALUES ($1, $2, $3, $4, $5, $5)
+         ON CONFLICT (proposal_id) DO NOTHING`,
+        [proposalId, String(values[0]), String(values[1]), String(values[2]), event.ledger],
+      );
+      break;
+    case "StakeUpdated": {
+      const staker = String(values[0]);
+      const amount = BigInt(String(values[1]));
+      if (amount === 0n) {
+        await pool.query(
+          "DELETE FROM conviction_stakes WHERE staker = $1 AND proposal_id = $2",
+          [staker, proposalId],
+        );
+      } else {
+        await pool.query(
+          `INSERT INTO conviction_stakes (staker, proposal_id, amount, updated_at_ledger)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (staker) DO UPDATE SET proposal_id = EXCLUDED.proposal_id,
+             amount = EXCLUDED.amount, updated_at_ledger = EXCLUDED.updated_at_ledger,
+             updated_at = NOW()`,
+          [staker, proposalId, amount.toString(), event.ledger],
+        );
+      }
+      break;
+    }
+    case "ConvictionUpdated":
+      await pool.query(
+        `UPDATE conviction_proposals SET conviction = $2, last_updated_ledger = $3,
+           updated_at = NOW() WHERE proposal_id = $1`,
+        [proposalId, String(values[0]), event.ledger],
+      );
+      await pool.query(
+        `INSERT INTO conviction_snapshots (proposal_id, ledger, conviction)
+         VALUES ($1, $2, $3) ON CONFLICT (proposal_id, ledger)
+         DO UPDATE SET conviction = EXCLUDED.conviction`,
+        [proposalId, event.ledger, String(values[0])],
+      );
+      break;
+    case "ProposalExecuted":
+      await pool.query(
+        "UPDATE conviction_proposals SET executed = TRUE, updated_at = NOW() WHERE proposal_id = $1",
+        [proposalId],
+      );
+      break;
+    case "ProposalCancelled":
+      await pool.query(
+        "UPDATE conviction_proposals SET cancelled = TRUE, updated_at = NOW() WHERE proposal_id = $1",
+        [proposalId],
+      );
+      break;
+    default:
+      return;
+  }
+  invalidatePattern("conviction:");
+  const wsTypes: Record<string, WsEventType> = {
+    ProposalCreated: "conviction_proposal_created",
+    StakeUpdated: "conviction_stake_updated",
+    ConvictionUpdated: "conviction_conviction_updated",
+    ProposalExecuted: "conviction_proposal_executed",
+    ProposalCancelled: "conviction_proposal_cancelled",
+  };
+  broadcast({
+    type: wsTypes[eventType],
+    data: { proposal_id: proposalId, ledger: event.ledger },
+  });
 }
 
 function indexerEventId(

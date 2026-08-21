@@ -8,6 +8,7 @@ members = [
     "contracts/liquidity",
     "contracts/token-votes-wrapper",
     "contracts/co-sponsorship",
+    "contracts/conviction-voting",
     "contracts/signal-anchor",
     "contracts/proposal-bonds",
 ]
