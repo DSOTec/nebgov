@@ -2173,6 +2173,65 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     }
   });
 
+  // --- Optimistic governance endpoints (#993) ---
+
+  app.get("/optimistic/proposals", async (req: Request, res: Response): Promise<void> => {
+    const status = req.query.status
+      ? String(req.query.status)
+      : undefined;
+    const validStates = ["challenge_window", "objected", "passed", "executed", "cancelled"];
+    if (status && !validStates.includes(status)) {
+      res.status(400).json({
+        error: `status must be one of: ${validStates.join(", ")}`,
+      });
+      return;
+    }
+    try {
+      const result = status
+        ? await pool.query(
+            "SELECT * FROM optimistic_proposals WHERE state = $1 ORDER BY proposal_id DESC",
+            [status],
+          )
+        : await pool.query(
+            "SELECT * FROM optimistic_proposals ORDER BY proposal_id DESC",
+          );
+      res.json({ data: result.rows });
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get("/optimistic/proposals/:id", async (req: Request, res: Response): Promise<void> => {
+    try {
+      const result = await pool.query(
+        "SELECT * FROM optimistic_proposals WHERE proposal_id = $1",
+        [req.params.id],
+      );
+      if (!result.rows[0]) {
+        res.status(404).json({ error: "Optimistic proposal not found" });
+        return;
+      }
+      res.json(result.rows[0]);
+    } catch {
+      res.status(500).json({ error: "Internal server error" });
+    }
+  });
+
+  app.get(
+    "/optimistic/proposals/:id/objections",
+    async (req: Request, res: Response): Promise<void> => {
+      try {
+        const result = await pool.query(
+          "SELECT * FROM optimistic_objections WHERE proposal_id = $1 ORDER BY ledger ASC",
+          [req.params.id],
+        );
+        res.json({ data: result.rows });
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   // --- Treasury strategies endpoints (#997) ---
 
   // GET /treasury-strategies?token=&active=&limit=&offset=

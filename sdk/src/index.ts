@@ -213,6 +213,7 @@ export {
 } from "./events";
 export * from "./types";
 export { ConvictionVotingClient } from "./convictionVoting";
+export { OptimisticGovernorClient } from "./optimisticGovernor";
 export { computeQuadraticWeight, hexToBytes32, encodeCalldata, decodeCalldata } from "./utils";
 export { streamEvents } from "./streamEvents";
 export type { IndexerEvent, WsEventType, StreamEventsOptions, UnsubscribeFn } from "./streamEvents";

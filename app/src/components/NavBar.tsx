@@ -23,6 +23,7 @@ import {
   Radio,
   SlidersHorizontal,
   TrendingUp,
+  FastForward,
 } from "lucide-react";
 import { useTheme } from "../hooks/useTheme";
 import { useTranslations } from "next-intl";
@@ -43,6 +44,7 @@ function formatGovernanceAmount(v: bigint): string {
 const NAV_LINKS = [
   { name: "Proposals", href: "/", icon: LayoutDashboard },
   { name: "Conviction", href: "/conviction", icon: Activity },
+  { name: "Optimistic", href: "/optimistic", icon: FastForward },
   { name: "Governors", href: "/governors", icon: LayoutDashboard },
   { name: "Notifications", href: "/notifications", icon: Bell },
   { name: "Signals", href: "/signals", icon: Radio },

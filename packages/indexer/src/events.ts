@@ -68,6 +68,7 @@ export interface IndexerConfig {
   convictionVotingAddress?: string;
   signalAnchorAddress?: string;
   treasuryStrategiesAddress?: string;
+  optimisticGovernorAddress?: string;
   treasuryStateReader?: TreasuryStateReader;
   pollIntervalMs: number;
 }
@@ -105,6 +106,8 @@ export async function processEvents(
     if (config.signalAnchorAddress) contractIds.push(config.signalAnchorAddress);
     if (config.treasuryStrategiesAddress)
       contractIds.push(config.treasuryStrategiesAddress);
+    if (config.optimisticGovernorAddress)
+      contractIds.push(config.optimisticGovernorAddress);
 
     const response = await server.getEvents({
       startLedger,
@@ -174,6 +177,11 @@ export async function processEvents(
         contractId &&
         config.treasuryStrategiesAddress &&
         contractId === config.treasuryStrategiesAddress
+      );
+      const isOptimisticGovernor = !!(
+        contractId &&
+        config.optimisticGovernorAddress &&
+        contractId === config.optimisticGovernorAddress
       );
 
       try {
@@ -391,6 +399,8 @@ export async function processEvents(
             default:
               break;
           }
+        } else if (isOptimisticGovernor) {
+          await handleOptimisticGovernorEvent(event, eventType, topics);
         } else {
           switch (eventType) {
             case "ProposalCreated":
@@ -518,6 +528,87 @@ async function handleConvictionEvent(
     ConvictionUpdated: "conviction_conviction_updated",
     ProposalExecuted: "conviction_proposal_executed",
     ProposalCancelled: "conviction_proposal_cancelled",
+  };
+  broadcast({
+    type: wsTypes[eventType],
+    data: { proposal_id: proposalId, ledger: event.ledger },
+  });
+}
+
+async function handleOptimisticGovernorEvent(
+  event: SorobanRpc.Api.EventResponse,
+  eventType: string,
+  topics: unknown[],
+): Promise<void> {
+  const proposalId = String(topics[1]);
+  const raw = scValToNative(event.value) as unknown;
+  const values = Array.isArray(raw) ? raw : [raw];
+
+  switch (eventType) {
+    case "ProposalCreated": {
+      const proposer = String(values[0]);
+      const challengeEndLedger = String(values[1]);
+      await pool.query(
+        `INSERT INTO optimistic_proposals
+           (proposal_id, proposer, created_ledger, challenge_end_ledger)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (proposal_id) DO NOTHING`,
+        [proposalId, proposer, event.ledger, challengeEndLedger],
+      );
+      break;
+    }
+    case "ObjectionCast": {
+      const objector = String(values[0]);
+      const weight = String(values[1]);
+      const runningTotal = String(values[2]);
+      await pool.query(
+        `INSERT INTO optimistic_objections (proposal_id, objector, weight, running_total, ledger)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (proposal_id, objector) DO NOTHING`,
+        [proposalId, objector, weight, runningTotal, event.ledger],
+      );
+      await pool.query(
+        `UPDATE optimistic_proposals SET objection_votes = $2, updated_at = NOW()
+         WHERE proposal_id = $1`,
+        [proposalId, runningTotal],
+      );
+      break;
+    }
+    case "ProposalObjected":
+      await pool.query(
+        "UPDATE optimistic_proposals SET state = 'objected', updated_at = NOW() WHERE proposal_id = $1",
+        [proposalId],
+      );
+      break;
+    case "ProposalPassed":
+      await pool.query(
+        "UPDATE optimistic_proposals SET state = 'passed', updated_at = NOW() WHERE proposal_id = $1",
+        [proposalId],
+      );
+      break;
+    case "ProposalExecuted":
+      await pool.query(
+        "UPDATE optimistic_proposals SET state = 'executed', updated_at = NOW() WHERE proposal_id = $1",
+        [proposalId],
+      );
+      break;
+    case "ProposalCancelled":
+      await pool.query(
+        "UPDATE optimistic_proposals SET state = 'cancelled', updated_at = NOW() WHERE proposal_id = $1",
+        [proposalId],
+      );
+      break;
+    default:
+      return;
+  }
+  invalidatePattern("optimistic:");
+  const wsTypes: Record<string, WsEventType> = {
+    ProposalCreated: "optimistic_proposal_created",
+    ObjectionCast: "optimistic_objection_cast",
+    ProposalObjected: "optimistic_proposal_objected",
+    ProposalPassed: "optimistic_proposal_passed",
+    ProposalExecuted: "optimistic_proposal_executed",
+    ProposalCancelled: "optimistic_proposal_cancelled",
   };
   broadcast({
     type: wsTypes[eventType],

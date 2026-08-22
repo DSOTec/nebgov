@@ -27,7 +27,13 @@ export type WsEventType =
   | "stream_extended"
   | "stream_topped_up"
   | "stream_exhausted"
-  | "stream_expired";
+  | "stream_expired"
+  | "optimistic_proposal_created"
+  | "optimistic_objection_cast"
+  | "optimistic_proposal_objected"
+  | "optimistic_proposal_passed"
+  | "optimistic_proposal_executed"
+  | "optimistic_proposal_cancelled";
 
 export interface IndexerEvent {
   type: WsEventType;

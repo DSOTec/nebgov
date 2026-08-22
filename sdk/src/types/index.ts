@@ -282,6 +282,8 @@ export interface GovernorConfig {
   proposalBondsAddress?: string;
   /** Contract address of the treasury yield-strategy allocator, if deployed */
   treasuryStrategiesAddress?: string;
+  /** Contract address of the optimistic-governance track, if deployed */
+  optimisticGovernorAddress?: string;
   /** Stellar network to connect to */
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
@@ -318,6 +320,43 @@ export interface ConvictionSnapshot {
   proposalId: bigint;
   ledger: number;
   conviction: bigint;
+}
+
+/** Lifecycle state of an optimistic-governance proposal (Issue #993). */
+export type OptimisticProposalState =
+  | "ChallengeWindow"
+  | "Objected"
+  | "Passed"
+  | "Executed"
+  | "Cancelled";
+
+export interface OptimisticProposal {
+  id: bigint;
+  proposer: string;
+  target: string;
+  fnName: string;
+  calldata: Buffer | Uint8Array;
+  descriptionHash: Buffer | Uint8Array;
+  createdLedger: number;
+  challengeEndLedger: number;
+  objectionVotes: bigint;
+  state: OptimisticProposalState;
+}
+
+export interface OptimisticObjection {
+  proposalId: bigint;
+  objector: string;
+  weight: bigint;
+  runningTotal: bigint;
+  ledger: number;
+}
+
+export interface OptimisticGovernorSettings {
+  votesToken: string;
+  challengeWindowLedgers: number;
+  objectionThresholdBps: number;
+  proposerBondAmount: bigint;
+  proposerBondToken: string;
 }
 
 /** On-chain configuration of a single registered yield strategy (Issue #997). */
