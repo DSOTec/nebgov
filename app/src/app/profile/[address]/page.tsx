@@ -24,6 +24,7 @@ import {
 import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 import { useDelegateProfile } from "@/hooks/useDelegateProfile";
 import { useProposerReputation } from "@/hooks/useProposerReputation";
+import { useSplitDelegation } from "@/hooks/useSplitDelegation";
 import { DelegationChain } from "@/components/DelegationChain";
 import { DelegatorList } from "@/components/DelegatorList";
 import { ReputationBadge } from "@/components/ReputationBadge";
@@ -82,6 +83,9 @@ function VoterProfilePageContent() {
 
   // Delegation registry (issue #769)
   const { profile: delegateProfile } = useDelegateProfile(address);
+
+  // Split delegation (issue #994)
+  const { splits: outboundSplits } = useSplitDelegation(address);
   const [registryTab, setRegistryTab] = useState<"history" | "received">("history");
   const [delegationChain, setDelegationChain] = useState<string[]>([]);
   const [delegationHistory, setDelegationHistory] = useState<DelegationHistoryEntry[]>([]);
@@ -433,7 +437,26 @@ function VoterProfilePageContent() {
           <p className="text-sm font-semibold text-gray-600 uppercase tracking-wide">
             Delegation
           </p>
-          {data.delegationInfo.delegatedTo ? (
+          {outboundSplits.length > 1 ? (
+            <div className="mt-2">
+              <p className="text-xs text-gray-500 mb-1">
+                Split across {outboundSplits.length} delegates
+              </p>
+              <div className="space-y-1">
+                {outboundSplits.map((s) => (
+                  <div key={s.delegatee} className="flex items-center justify-between text-sm">
+                    <Link
+                      href={`/profile/${s.delegatee}`}
+                      className="font-mono text-indigo-600 hover:text-indigo-700 truncate"
+                    >
+                      {s.delegatee.slice(0, 4)}...{s.delegatee.slice(-4)}
+                    </Link>
+                    <span className="text-gray-500 ml-2">{(s.weightBps / 100).toFixed(1)}%</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : data.delegationInfo.delegatedTo ? (
             <div className="mt-2">
               <p className="text-xs text-gray-500 mb-1">Delegated to</p>
               <Link

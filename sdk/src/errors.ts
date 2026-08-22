@@ -256,6 +256,11 @@ export enum VotesErrorCode {
   RelayerNotWhitelisted = 14,
   InvalidChainId = 15,
   InvalidContractId = 16,
+  ChainDepthExceeded = 17,
+  SplitTooManyTargets = 18,
+  SplitDuplicateDelegatee = 19,
+  SplitZeroWeight = 20,
+  SplitWeightsMustSum10000 = 21,
 
   // SDK-level codes
   SimulationFailed = 100,
@@ -280,6 +285,16 @@ const VOTES_MESSAGES: Record<VotesErrorCode, string> = {
     "Permit was signed for a different network",
   [VotesErrorCode.InvalidContractId]:
     "Permit was signed for a different contract",
+  [VotesErrorCode.ChainDepthExceeded]:
+    "Delegation would exceed the maximum chain depth",
+  [VotesErrorCode.SplitTooManyTargets]:
+    "Split delegation has more entries than the maximum allowed targets",
+  [VotesErrorCode.SplitDuplicateDelegatee]:
+    "Split delegation contains a duplicate delegatee",
+  [VotesErrorCode.SplitZeroWeight]:
+    "Split delegation entry must have a non-zero weight",
+  [VotesErrorCode.SplitWeightsMustSum10000]:
+    "Split delegation weights must sum to exactly 10000 (100%)",
 
   [VotesErrorCode.SimulationFailed]: "Simulation failed",
   [VotesErrorCode.TransactionFailed]: "Transaction failed",

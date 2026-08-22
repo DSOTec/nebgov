@@ -6,6 +6,7 @@ import { VotesClient, type TopDelegate, type Network } from "@nebgov/sdk";
 import { useWallet } from "../../lib/wallet-context";
 import { DelegateModal } from "../../components/DelegateModal";
 import { GaslessDelegateModal } from "../../components/GaslessDelegateModal";
+import { SplitDelegationEditor } from "../../components/SplitDelegationEditor";
 import { Skeleton } from "../../components/ui/Skeleton";
 import { useGovernorConfig } from "@/hooks/useGovernorConfig";
 
@@ -57,6 +58,7 @@ export default function DelegatesPage() {
   const [totalSupply, setTotalSupply] = useState(0n);
   const [modalOpen, setModalOpen] = useState(false);
   const [gaslessModalOpen, setGaslessModalOpen] = useState(false);
+  const [splitModalOpen, setSplitModalOpen] = useState(false);
   const [prefillAddress, setPrefillAddress] = useState<string>("");
   const [currentDelegatee, setCurrentDelegatee] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
@@ -347,6 +349,10 @@ export default function DelegatesPage() {
           setModalOpen(false);
           setGaslessModalOpen(true);
         }}
+        onOpenSplit={() => {
+          setModalOpen(false);
+          setSplitModalOpen(true);
+        }}
       />
 
       <GaslessDelegateModal
@@ -355,6 +361,13 @@ export default function DelegatesPage() {
         onDelegated={fetchDelegates}
         prefillAddress={prefillAddress}
         topDelegates={delegates}
+      />
+
+      <SplitDelegationEditor
+        open={splitModalOpen}
+        onClose={() => setSplitModalOpen(false)}
+        onDelegated={fetchDelegates}
+        prefillAddress={prefillAddress}
       />
     </div>
   );

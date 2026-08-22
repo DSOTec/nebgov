@@ -19,6 +19,8 @@ interface Props {
   currentDelegatee?: string | null;
   /** Shown as a secondary "delegate without paying gas" action, if provided. */
   onOpenGasless?: () => void;
+  /** Shown as a secondary "split my delegation instead" action, if provided. */
+  onOpenSplit?: () => void;
 }
 
 function getVotesClientFromEnv(): VotesClient {
@@ -57,6 +59,7 @@ export function DelegateModal({
   prefillAddress,
   currentDelegatee,
   onOpenGasless,
+  onOpenSplit,
 }: Props) {
   const [delegatee, setDelegatee] = useState(prefillAddress || "");
   const [delegateeError, setDelegateeError] = useState("");
@@ -258,6 +261,22 @@ export function DelegateModal({
               </button>
               <p className="text-xs text-gray-400 mt-1">
                 Sign off-chain, our relayer submits the transaction
+              </p>
+            </div>
+          )}
+
+          {onOpenSplit && (
+            <div className={onOpenGasless ? "pt-2" : "border-t border-gray-200 pt-4 mt-4"}>
+              <button
+                type="button"
+                onClick={onOpenSplit}
+                disabled={submitting}
+                className="w-full text-sm font-medium text-indigo-600 hover:text-indigo-700 disabled:opacity-50"
+              >
+                Split my delegation instead →
+              </button>
+              <p className="text-xs text-gray-400 mt-1 text-center">
+                Spread your voting power across multiple delegates by percentage
               </p>
             </div>
           )}

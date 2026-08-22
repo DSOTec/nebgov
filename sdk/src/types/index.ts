@@ -622,6 +622,17 @@ export interface DelegateProfile {
   firstDelegatedAtLedger: number | null;
 }
 
+/**
+ * One entry of a split delegation (issue #994): a fraction of the
+ * delegator's voting power, in basis points (10000 = 100%), directed to
+ * `delegatee`. Mirrors `SplitDelegation` in
+ * contracts/token-votes/src/split_delegation.rs.
+ */
+export interface SplitDelegation {
+  delegatee: string;
+  weightBps: number;
+}
+
 // ─── Treasury Types ───────────────────────────────────────────────────────────
 
 /** Configuration for {@link TreasuryClient}. */

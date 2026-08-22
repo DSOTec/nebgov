@@ -23,6 +23,9 @@ export function DelegatorList({ delegatee, pageSize = 10, className = "" }: Dele
   const [delegators, setDelegators] = useState<RegistryDelegatorInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // delegator address -> weight_bps, for delegators using split delegation
+  // (issue #994) — absent means a full (100%) legacy delegation.
+  const [splitWeights, setSplitWeights] = useState<Map<string, number>>(new Map());
 
   const fetchPage = useCallback(async () => {
     setLoading(true);
@@ -59,6 +62,34 @@ export function DelegatorList({ delegatee, pageSize = 10, className = "" }: Dele
     fetchPage();
   }, [fetchPage]);
 
+  useEffect(() => {
+    const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
+    if (!indexerUrl) return;
+
+    let cancelled = false;
+    fetch(`${indexerUrl}/delegates/${delegatee}/split-delegations?limit=200`, {
+      cache: "no-store",
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json) => {
+        if (cancelled || !json?.splitDelegations) return;
+        const weights = new Map<string, number>();
+        for (const row of json.splitDelegations as Array<{
+          delegator_address: string;
+          weight_bps: number;
+        }>) {
+          weights.set(row.delegator_address, Number(row.weight_bps));
+        }
+        setSplitWeights(weights);
+      })
+      .catch(() => {
+        // Split-delegation percentages are supplementary; fail silently.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [delegatee]);
+
   if (loading) {
     return (
       <div className={`space-y-2 ${className}`}>
@@ -92,6 +123,13 @@ export function DelegatorList({ delegatee, pageSize = 10, className = "" }: Dele
               <AddressDisplay address={d.address} />
             </Link>
             <div className="text-right text-gray-500 dark:text-gray-400">
+              {splitWeights.has(d.address) && splitWeights.get(d.address)! < 10000 && (
+                <>
+                  <span className="inline-block bg-indigo-100 dark:bg-indigo-900 text-indigo-700 dark:text-indigo-300 text-xs font-medium px-1.5 py-0.5 rounded mr-1">
+                    {(splitWeights.get(d.address)! / 100).toFixed(1)}%
+                  </span>
+                </>
+              )}
               <span>{formatVotingPower(d.delegatedPower)}</span>
               <span className="mx-1">·</span>
               <span>ledger #{d.delegatedAtLedger}</span>

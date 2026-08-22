@@ -24,4 +24,10 @@ pub enum TokenVotesError {
     InvalidChainId = 15,
     InvalidContractId = 16,
     ChainDepthExceeded = 17,
+
+    /// Split delegation (issue #994) errors.
+    SplitTooManyTargets = 18,
+    SplitDuplicateDelegatee = 19,
+    SplitZeroWeight = 20,
+    SplitWeightsMustSum10000 = 21,
 }

@@ -8,10 +8,12 @@ mod delegation_registry;
 mod delegation_sig;
 mod error;
 mod events;
+mod split_delegation;
 
 pub use delegation_registry::{DelegateProfile, DelegationEntry, DelegationHistoryEntry, DelegatorInfo};
 pub use delegation_sig::DelegationPermit;
 pub use error::TokenVotesError;
+pub use split_delegation::SplitDelegation;
 
 #[cfg(test)]
 mod delegation_sig_tests;
@@ -21,6 +23,9 @@ mod load_tests;
 
 #[cfg(test)]
 mod delegation_registry_tests;
+
+#[cfg(test)]
+mod split_delegation_tests;
 
 /// A voting power checkpoint at a specific ledger sequence.
 #[contracttype]
@@ -67,6 +72,10 @@ pub enum DataKey {
     TotalDelegatorsFor(Address),        // delegatee -> u32: count of current delegators
     DelegationChain(Address),           // delegator -> Vec<Address>: full chain from delegator to tip
     ChainDepth(Address),                // delegator -> u32: depth of delegation chain from this delegator
+
+    // --- Split delegation (issue #994) ---
+    SplitDelegations(Address), // delegator -> Vec<SplitDelegation>, empty/absent means "use legacy DataKey::Delegate instead"
+    MaxSplitTargets,           // u32 cap, governance-settable
 }
 
 #[contract]
@@ -496,6 +505,52 @@ impl TokenVotesContract {
         delegation_registry::get_delegation_snapshot(&env, delegatee, at_ledger, offset, limit)
     }
 
+    // --- Split delegation (issue #994) ---
+
+    /// Delegate arbitrary basis-point percentages of the caller's voting
+    /// power across multiple delegatees at once. Replaces (not merges with)
+    /// any prior split or legacy single delegation for `delegator`.
+    ///
+    /// `splits` must be non-empty, at most [`Self::get_max_split_targets`]
+    /// entries, contain no duplicate delegatees, have every `weight_bps > 0`,
+    /// and sum to exactly 10000 (100%).
+    pub fn delegate_split(env: Env, delegator: Address, splits: Vec<SplitDelegation>) {
+        delegator.require_auth();
+        split_delegation::delegate_split(&env, delegator, splits);
+    }
+
+    /// Get the delegator's current split delegations. Falls back to
+    /// reporting the legacy single delegation (if any) as a single 100%
+    /// entry, so callers don't need to know which path a delegator used.
+    pub fn get_split_delegations(env: Env, delegator: Address) -> Vec<SplitDelegation> {
+        split_delegation::get_split_delegations(&env, delegator)
+    }
+
+    /// Revoke split delegation and return full voting power to the
+    /// delegator across all previously-split entries. No-op if the
+    /// delegator has never delegated or is already self-delegated.
+    pub fn undelegate_split(env: Env, delegator: Address) {
+        delegator.require_auth();
+        split_delegation::undelegate_split(&env, delegator);
+    }
+
+    /// Admin function to update the maximum number of split delegation targets.
+    pub fn set_max_split_targets(env: Env, admin: Address, max_targets: u32) {
+        let stored_admin: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .expect("not initialized");
+        assert_eq!(admin, stored_admin, "unauthorized");
+        admin.require_auth();
+        split_delegation::set_max_split_targets(&env, max_targets);
+    }
+
+    /// Get the current maximum number of split delegation targets.
+    pub fn get_max_split_targets(env: Env) -> u32 {
+        split_delegation::get_max_split_targets(&env)
+    }
+
     /// Get voting power at a past ledger sequence (snapshot).
     pub fn get_past_votes(env: Env, account: Address, ledger: u32) -> i128 {
         let current_ledger = env.ledger().sequence();
@@ -607,7 +662,7 @@ impl TokenVotesContract {
     // --- Internal helpers ---
 
     /// Append or update the total supply checkpoint by `delta` at the current ledger.
-    fn update_total_supply_checkpoint(env: &Env, delta: i128, delta_weighted_sum: i128) {
+    pub(crate) fn update_total_supply_checkpoint(env: &Env, delta: i128, delta_weighted_sum: i128) {
         let mut checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()
@@ -649,7 +704,7 @@ impl TokenVotesContract {
 
     /// Update an account's voting power checkpoints by `delta`.
     /// Also registers the account in AccountList so it can be pruned later.
-    fn update_account_votes(env: &Env, account: Address, delta: i128, delta_weighted_sum: i128) {
+    pub(crate) fn update_account_votes(env: &Env, account: Address, delta: i128, delta_weighted_sum: i128) {
         let mut checkpoints: soroban_sdk::Vec<Checkpoint> = env
             .storage()
             .persistent()

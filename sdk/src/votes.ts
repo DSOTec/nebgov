@@ -22,6 +22,7 @@ import {
   DelegationHistoryEntry,
   RegistryDelegatorInfo,
   DelegateProfile,
+  SplitDelegation,
 } from "./types";
 import { VotesError, VotesErrorCode, parseVotesError } from "./errors";
 import { withRetry, isNetworkError } from "./utils";
@@ -278,6 +279,191 @@ export class VotesClient {
         throw parseVotesError(result);
       }
     }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Struct fields are serialized as a map sorted alphabetically by field
+   * name (`delegatee` then `weight_bps`) — soroban-sdk's `#[contracttype]`
+   * derive convention. Mirrors `permitToScVal` in delegation-sig.ts.
+   */
+  private splitDelegationToScVal(split: SplitDelegation): xdr.ScVal {
+    return nativeToScVal(
+      { delegatee: split.delegatee, weight_bps: split.weightBps },
+      { type: { delegatee: ["symbol", "address"], weight_bps: ["symbol", "u32"] } },
+    );
+  }
+
+  private parseSplitDelegation(native: Record<string, unknown>): SplitDelegation {
+    return {
+      delegatee: String(native.delegatee),
+      weightBps: Number(native.weight_bps),
+    };
+  }
+
+  /**
+   * Delegate arbitrary basis-point percentages of the caller's voting power
+   * across multiple delegatees at once (issue #994). `splits` must sum to
+   * exactly 10000 (100%); see `delegate_split` in the token-votes contract
+   * for the full validation rules. Replaces (not merges with) any prior
+   * split or legacy single delegation.
+   *
+   * @returns The Stellar transaction hash.
+   */
+  async delegateSplit(signer: Keypair, splits: SplitDelegation[]): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "delegate_split",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+            xdr.ScVal.scvVec(splits.map((s) => this.splitDelegationToScVal(s))),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Wallet-signing variant of {@link delegateSplit}: takes the signer's
+   * public key plus a callback that signs an unsigned XDR envelope instead
+   * of a raw Keypair. Mirrors {@link delegateWithSign}.
+   *
+   * @returns The Stellar transaction hash.
+   */
+  async delegateSplitWithSign(
+    signerPublicKey: string,
+    splits: SplitDelegation[],
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signerPublicKey);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "delegate_split",
+            nativeToScVal(signerPublicKey, { type: "address" }),
+            xdr.ScVal.scvVec(splits.map((s) => this.splitDelegationToScVal(s))),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      const signedXdr = await signUnsignedXdr(prepared.toXDR());
+      const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+
+      const result = await this.server.sendTransaction(signed);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Revoke split delegation and return full voting power to the caller
+   * across all previously-split entries (issue #994). No-op if the caller
+   * has never delegated or is already self-delegated.
+   *
+   * @returns The Stellar transaction hash.
+   */
+  async undelegateSplit(signer: Keypair): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signer.publicKey());
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "undelegate_split",
+            nativeToScVal(signer.publicKey(), { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      prepared.sign(signer);
+      const result = await this.server.sendTransaction(prepared);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Wallet-signing variant of {@link undelegateSplit}: takes the signer's
+   * public key plus a callback that signs an unsigned XDR envelope instead
+   * of a raw Keypair. Mirrors {@link undelegateWithSign}.
+   *
+   * @returns The Stellar transaction hash.
+   */
+  async undelegateSplitWithSign(
+    signerPublicKey: string,
+    signUnsignedXdr: (xdr: string) => Promise<string>,
+  ): Promise<string> {
+    return this.retry(async () => {
+      const account = await this.server.getAccount(signerPublicKey);
+
+      const tx = new TransactionBuilder(account, {
+        fee: BASE_FEE,
+        networkPassphrase: this.networkPassphrase,
+      })
+        .addOperation(
+          this.contract.call(
+            "undelegate_split",
+            nativeToScVal(signerPublicKey, { type: "address" }),
+          ),
+        )
+        .setTimeout(30)
+        .build();
+
+      const prepared = await this.server.prepareTransaction(tx);
+      const signedXdr = await signUnsignedXdr(prepared.toXDR());
+      const signed = TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
+
+      const result = await this.server.sendTransaction(signed);
+      if (result.status === "ERROR") {
+        throw parseVotesError(result);
+      }
+      return result.hash;
+    }, (e) => this.isRetryableSubmissionError(e));
+  }
+
+  /**
+   * Get a delegator's current split delegations (issue #994). Falls back to
+   * reporting a legacy single delegation (if any) as a single 100% entry, so
+   * callers don't need to know which path the delegator used.
+   */
+  async getSplitDelegations(delegator: string): Promise<SplitDelegation[]> {
+    return this.simulateRead(
+      "get_split_delegations",
+      [nativeToScVal(delegator, { type: "address" })],
+      (raw) =>
+        (scValToNative(raw) as Record<string, unknown>[]).map((e) => this.parseSplitDelegation(e)),
+      [],
+    );
   }
 
   /**

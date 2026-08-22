@@ -832,6 +832,65 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     },
   );
 
+  // --- Split delegation endpoints (issue #994) ---
+
+  // GET /delegates/:address/split-delegations — the delegatee's inbound
+  // split delegations, with per-delegator weight_bps.
+  app.get(
+    "/delegates/:address/split-delegations",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const offset = Math.max(Number(req.query.offset ?? 0), 0);
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 50), 1), 200);
+      const key = `split-delegations:delegatee:${address}:${offset}:${limit}`;
+      try {
+        const data = await cached(key, TTL.delegationRegistry, async () => {
+          const result = await pool.query(
+            `SELECT delegator_address, weight_bps, delegated_power, created_at
+             FROM split_delegations
+             WHERE delegatee_address = $1 AND active = TRUE
+             ORDER BY created_at ASC
+             OFFSET $2 LIMIT $3`,
+            [address, offset, limit],
+          );
+          return {
+            splitDelegations: result.rows,
+            pagination: { limit, offset, hasMore: result.rows.length === limit },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /delegators/:address/split-delegations — the delegator's outbound splits.
+  app.get(
+    "/delegators/:address/split-delegations",
+    strictLimiter,
+    async (req: Request, res: Response): Promise<void> => {
+      const { address } = req.params;
+      const key = `split-delegations:delegator:${address}`;
+      try {
+        const data = await cached(key, TTL.delegationRegistry, async () => {
+          const result = await pool.query(
+            `SELECT delegatee_address, weight_bps, delegated_power, created_at
+             FROM split_delegations
+             WHERE delegator_address = $1 AND active = TRUE
+             ORDER BY weight_bps DESC`,
+            [address],
+          );
+          return { splitDelegations: result.rows };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   // GET /delegation-graph?top=100 — top delegatees by active delegator count.
   app.get(
     "/delegation-graph",

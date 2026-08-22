@@ -301,6 +301,12 @@ export async function processEvents(
             case "RelayerWhitelistUpdated":
               await handleRelayerWhitelistUpdated(event, topics);
               break;
+            case "SplitDelegated":
+              await handleSplitDelegated(event, topics);
+              break;
+            case "SplitUndelegated":
+              await handleSplitUndelegated(event, topics);
+              break;
             default:
               break;
           }
@@ -793,6 +799,81 @@ async function handleDelegationDepthLimitUpdated(
   broadcast({
     type: "delegation_depth_limit_updated",
     data: { old_limit: oldLimit, new_limit: newLimit, ledger: event.ledger },
+  });
+}
+
+// --- Split delegation events (#994) ---
+//
+// `SplitDelegated` reports the delegator's full new set of (delegatee,
+// weight_bps) targets, replacing (not merging with) whatever this delegator
+// had on file. The contract emits per-entry `DelegationRegistered`/
+// `DelegationRevoked` events immediately before/after (same tx) via the same
+// delegation-registry bookkeeping the legacy single-delegate path uses, so
+// `delegation_entries` (and therefore `/delegates/:address/delegators`)
+// already reflects fractional split power with no extra handling here — we
+// just look those rows up to get each entry's absolute `delegated_power`
+// for the split-specific `split_delegations` table.
+
+async function handleSplitDelegated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+  const splits = scValToNative(event.value) as Array<{
+    delegatee: string;
+    weight_bps: number;
+  }>;
+
+  await pool.query(
+    `UPDATE split_delegations SET active = FALSE, revoked_at = NOW()
+     WHERE delegator_address = $1 AND active = TRUE`,
+    [delegator],
+  );
+
+  for (const entry of splits) {
+    const powerResult = await pool.query(
+      `SELECT power_at_delegation FROM delegation_entries
+       WHERE delegator_address = $1 AND delegatee_address = $2 AND active = TRUE
+       ORDER BY id DESC LIMIT 1`,
+      [delegator, entry.delegatee],
+    );
+    const delegatedPower = powerResult.rows[0]?.power_at_delegation ?? "0";
+
+    await pool.query(
+      `INSERT INTO split_delegations
+         (delegator_address, delegatee_address, weight_bps, delegated_power, active)
+       VALUES ($1, $2, $3, $4, TRUE)`,
+      [delegator, entry.delegatee, entry.weight_bps, delegatedPower],
+    );
+  }
+
+  invalidatePattern("delegates:");
+  invalidatePattern("split-delegations:");
+  invalidate(`profile:${delegator}`);
+  broadcast({
+    type: "split_delegated",
+    data: { delegator, splits, ledger: event.ledger },
+  });
+}
+
+async function handleSplitUndelegated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const delegator = topics[1] as string;
+
+  await pool.query(
+    `UPDATE split_delegations SET active = FALSE, revoked_at = NOW()
+     WHERE delegator_address = $1 AND active = TRUE`,
+    [delegator],
+  );
+
+  invalidatePattern("delegates:");
+  invalidatePattern("split-delegations:");
+  invalidate(`profile:${delegator}`);
+  broadcast({
+    type: "split_undelegated",
+    data: { delegator, ledger: event.ledger },
   });
 }
 
