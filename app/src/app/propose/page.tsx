@@ -39,6 +39,8 @@ import {
 } from "../../lib/treasury-calldata";
 import { useWallet } from "../../lib/wallet-context";
 import { CountdownTimer } from "../../components/CountdownTimer";
+import { ProposalImpactPreview } from "../../components/ProposalImpactPreview";
+import { useProposalSimulation } from "../../hooks/useProposalSimulation";
 
 // Wizard Constants
 const TITLE_MIN = 10;
@@ -252,6 +254,15 @@ function ProposeWizardInner() {
   const [settings, setSettings] = useState<GovernorSettings | null>(null);
   const [reviewLoading, setReviewLoading] = useState(false);
 
+  const {
+    results: impactResults,
+    loading: impactLoading,
+    error: impactError,
+    anyActionWouldRevert: impactAnyActionWouldRevert,
+    previewDraft: previewImpact,
+    reset: resetImpact,
+  } = useProposalSimulation();
+
   const reviewDataReady =
     votes !== null &&
     threshold !== null &&
@@ -464,6 +475,11 @@ function ProposeWizardInner() {
         draft.actions,
         clients.governorAddress,
       );
+      if (draft.actions.length > 0) {
+        void previewImpact(targets, fnNames, calldatas, draft.descriptionHash);
+      } else {
+        resetImpact();
+      }
       const est = await clients.governor.estimateProposeResources(
         publicKey,
         description,
@@ -1291,6 +1307,19 @@ function ProposeWizardInner() {
             )}
           </div>
 
+          {draft.actions.length > 0 && (
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
+              <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-4">
+                Preview Impact
+              </h2>
+              <ProposalImpactPreview
+                results={impactResults}
+                loading={impactLoading}
+                error={impactError}
+              />
+            </div>
+          )}
+
           <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-6">
             <h2 className="text-sm font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wide mb-6">
               Submission check
@@ -1557,7 +1586,9 @@ function ProposeWizardInner() {
                   (!reviewDataReady ||
                     (votes !== null &&
                       threshold !== null &&
-                      votes < (effectiveThreshold ?? threshold))))
+                      votes < (effectiveThreshold ?? threshold)) ||
+                    (draft.actions.length > 0 &&
+                      (impactLoading || impactAnyActionWouldRevert))))
               }
               className="bg-indigo-600 text-white px-8 py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors min-w-[120px]"
             >

@@ -848,6 +848,14 @@ export function buildUpdateConfigProposal(
   return {
     target: client.config.governorAddress,
     fnName: "update_config",
-    calldata: settingsScVal.toXDR(),
+    // `update_config(new_settings: GovernorSettings)` takes exactly one arg.
+    // The timelock/governor's calldata decoder always parses calldata bytes
+    // as `Vec<Val>::from_xdr` (see contracts/timelock/src/lib.rs's
+    // `decode_invocation_args` and governor's `decode_calldata_args`), so
+    // the settings map must be wrapped as the single element of that vec —
+    // encoding the bare map directly (as this used to do) fails that parse
+    // and silently falls back to zero args on-chain, making every
+    // update_config proposal revert at execution.
+    calldata: xdr.ScVal.scvVec([settingsScVal]).toXDR(),
   };
 }

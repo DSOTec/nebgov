@@ -26,6 +26,7 @@ export { LiquidityClient } from "./liquidity";
 export { AnalyticsClient } from "./analytics";
 export { ReputationClient } from "./reputation";
 export { GovernanceTuningClient } from "./governanceTuning";
+export { ProposalSimulationClient } from "./proposalSimulation";
 export { WrapperClient } from "./wrapper";
 export type { WrapperConfig } from "./wrapper";
 export { CoSponsorshipClient } from "./coSponsorship";

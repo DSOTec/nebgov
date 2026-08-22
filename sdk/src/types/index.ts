@@ -1034,3 +1034,29 @@ export interface TuningConfig {
   autoPropose: boolean;
   updatedAt: string;
 }
+
+// ─── Proposal Calldata Simulation (issue #1000) ────────────────────────────
+
+/** Result of dry-running one proposal action's calldata against current chain state. */
+export interface SimulationResult {
+  target: string;
+  fnName: string;
+  success: boolean;
+  /** Best-effort human-readable description of what this action would do. */
+  decodedSummary: string;
+  returnValue?: unknown;
+  revertReason?: string;
+  treasuryImpact?: {
+    token: string;
+    capRemainingBefore: bigint | null;
+    capRemainingAfter: bigint | null;
+  };
+}
+
+/** One historical simulation run for a proposal, as returned by `GET /proposal-simulation/:id/history`. */
+export interface SimulationHistoryEntry {
+  simulatedAt: string;
+  simulatedAtLedger: number;
+  results: SimulationResult[];
+  anyActionWouldRevert: boolean;
+}

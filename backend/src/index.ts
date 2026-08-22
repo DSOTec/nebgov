@@ -11,6 +11,7 @@ import securityRouter from "./routes/security";
 import relayerRouter from "./routes/relayer";
 import signalingRouter from "./routes/signaling";
 import governanceTuningRouter from "./routes/governance-tuning";
+import proposalSimulationRouter from "./routes/proposal-simulation";
 import { securityMonitor } from "./services/security-monitor";
 import { notificationProcessor } from "./jobs/notification-processor";
 import { deliveryRetry } from "./jobs/delivery-retry";
@@ -115,6 +116,7 @@ app.use("/relayer", relayerLimiter);
 app.use("/relayer", relayerRouter);
 app.use("/signaling", signalingRouter);
 app.use("/governance-tuning", governanceTuningRouter);
+app.use("/proposal-simulation", proposalSimulationRouter);
 
 // Error handling
 app.use(
