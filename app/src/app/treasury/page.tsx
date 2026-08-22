@@ -13,6 +13,7 @@ import {
   type TreasuryTx,
 } from "../../lib/treasury-client";
 import { TreasuryBalanceSkeleton } from "../../components/ui/TreasuryBalanceSkeleton";
+import { buildTreasuryStrategiesClient } from "../../hooks/useTreasuryStrategies";
 import {
   type CalldataArgKind,
   type CalldataArgRow,
@@ -79,6 +80,7 @@ export default function TreasuryPage() {
     null,
   );
   const [spentThisPeriod, setSpentThisPeriod] = useState<bigint>(0n);
+  const [deployedValue, setDeployedValue] = useState<bigint | null>(null);
   const [loading, setLoading] = useState(true);
   const [approving, setApproving] = useState<Record<string, boolean>>({});
   const [submitting, setSubmitting] = useState(false);
@@ -114,6 +116,30 @@ export default function TreasuryPage() {
   }, [network, rpcUrl, treasuryContractAddress]);
 
   const readViewer = publicKey ?? treasuryAccountId;
+
+  useEffect(() => {
+    if (!treasuryTokenAddress) {
+      setDeployedValue(null);
+      return;
+    }
+    const strategiesClient = buildTreasuryStrategiesClient();
+    if (!strategiesClient) {
+      setDeployedValue(null);
+      return;
+    }
+    let cancelled = false;
+    strategiesClient
+      .getTotalValue(treasuryTokenAddress)
+      .then((value) => {
+        if (!cancelled) setDeployedValue(value);
+      })
+      .catch(() => {
+        if (!cancelled) setDeployedValue(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [treasuryTokenAddress]);
 
   const canWrite = Boolean(
     isConnected &&
@@ -406,15 +432,36 @@ export default function TreasuryPage() {
       {loading ? (
         <TreasuryBalanceSkeleton />
       ) : (
-        <div className="grid grid-cols-2 gap-4 mb-8">
+        <div className="grid grid-cols-2 gap-4 mb-4">
           <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <p className="text-sm text-gray-500">USDC Balance</p>
+            <p className="text-sm text-gray-500">USDC Balance (idle)</p>
             <p className="text-2xl font-bold mt-1">{`${usdcBalance} USDC`}</p>
           </div>
           <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <p className="text-sm text-gray-500">XLM Balance</p>
+            <p className="text-sm text-gray-500">XLM Balance (idle)</p>
             <p className="text-2xl font-bold mt-1">{`${xlmBalance} XLM`}</p>
           </div>
+        </div>
+      )}
+
+      {deployedValue !== null && (
+        <div className="mb-8 bg-white border border-gray-200 rounded-xl p-6 flex items-center justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-sm text-gray-500">Deployed to yield strategies</p>
+            <p className="text-2xl font-bold mt-1">
+              {deployedValue.toString()} units
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              Live on-chain value (principal plus accrued yield or loss) — kept
+              separate from the idle/spendable balances above.
+            </p>
+          </div>
+          <a
+            href="/treasury/strategies"
+            className="text-sm text-indigo-600 hover:text-indigo-700 hover:underline shrink-0"
+          >
+            View strategies →
+          </a>
         </div>
       )}
 

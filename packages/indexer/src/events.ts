@@ -67,6 +67,7 @@ export interface IndexerConfig {
   timelockAddress?: string;
   convictionVotingAddress?: string;
   signalAnchorAddress?: string;
+  treasuryStrategiesAddress?: string;
   treasuryStateReader?: TreasuryStateReader;
   pollIntervalMs: number;
 }
@@ -102,6 +103,8 @@ export async function processEvents(
     if (config.timelockAddress) contractIds.push(config.timelockAddress);
     if (config.convictionVotingAddress) contractIds.push(config.convictionVotingAddress);
     if (config.signalAnchorAddress) contractIds.push(config.signalAnchorAddress);
+    if (config.treasuryStrategiesAddress)
+      contractIds.push(config.treasuryStrategiesAddress);
 
     const response = await server.getEvents({
       startLedger,
@@ -166,6 +169,11 @@ export async function processEvents(
         contractId &&
         config.signalAnchorAddress &&
         contractId === config.signalAnchorAddress
+      );
+      const isTreasuryStrategies = !!(
+        contractId &&
+        config.treasuryStrategiesAddress &&
+        contractId === config.treasuryStrategiesAddress
       );
 
       try {
@@ -353,6 +361,26 @@ export async function processEvents(
           switch (eventType) {
             case "ResultAnchored":
               await handleResultAnchored(event, topics);
+              break;
+            default:
+              break;
+          }
+        } else if (isTreasuryStrategies) {
+          switch (eventType) {
+            case "StratReg":
+              await handleStrategyRegistered(event, topics);
+              break;
+            case "StratDeact":
+              await handleStrategyDeactivated(event, topics);
+              break;
+            case "Deposited":
+              await handleStrategyDeposited(event, topics);
+              break;
+            case "WdrawReq":
+              await handleStrategyWithdrawalRequested(event, topics);
+              break;
+            case "WdrawClaim":
+              await handleStrategyWithdrawalClaimed(event, topics);
               break;
             default:
               break;
@@ -1214,6 +1242,122 @@ async function handleResultAnchored(
   broadcast({
     type: "result_anchored",
     data: { poll_id: pollId, result_hash: resultHash, anchored_ledger: anchoredLedger, anchorer },
+  });
+}
+
+async function handleStrategyRegistered(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const strategyId = String(topics[1] as bigint);
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const adapter = data.adapter as string;
+  const token = data.token as string;
+  await pool.query(
+    `INSERT INTO treasury_strategies (strategy_id, adapter, token, active, registered_ledger)
+     VALUES ($1, $2, $3, TRUE, $4)
+     ON CONFLICT (strategy_id) DO NOTHING`,
+    [strategyId, adapter, token, event.ledger],
+  );
+  invalidatePattern("treasury-strategies:");
+  broadcast({
+    type: "strategy_registered",
+    data: { strategy_id: strategyId, adapter, token, ledger: event.ledger },
+  });
+}
+
+async function handleStrategyDeactivated(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const strategyId = String(topics[1] as bigint);
+  await pool.query(
+    `UPDATE treasury_strategies SET active = FALSE WHERE strategy_id = $1`,
+    [strategyId],
+  );
+  invalidatePattern("treasury-strategies:");
+  broadcast({
+    type: "strategy_deactivated",
+    data: { strategy_id: strategyId, ledger: event.ledger },
+  });
+}
+
+async function handleStrategyDeposited(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const strategyId = String(topics[1] as bigint);
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const amount = String(data.amount as bigint);
+  await pool.query(
+    `INSERT INTO strategy_allocations (strategy_id, amount, ledger) VALUES ($1, $2, $3)`,
+    [strategyId, amount, event.ledger],
+  );
+  await pool.query(
+    `UPDATE treasury_strategies SET current_allocation = current_allocation + $2 WHERE strategy_id = $1`,
+    [strategyId, amount],
+  );
+  invalidatePattern("treasury-strategies:");
+  broadcast({
+    type: "strategy_deposited",
+    data: { strategy_id: strategyId, amount, ledger: event.ledger },
+  });
+}
+
+/**
+ * `current_allocation` is decremented here (at request time) rather than at
+ * claim time, mirroring the on-chain contract's own accounting: the
+ * requested amount is reserved out of `Allocation.amount` as soon as
+ * `request_withdrawal` succeeds, so a second concurrent request against the
+ * same strategy sees the already-reduced balance.
+ */
+async function handleStrategyWithdrawalRequested(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const withdrawalId = String(topics[1] as bigint);
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const strategyId = String(data.strategy_id as bigint);
+  const amount = String(data.amount as bigint);
+  const claimableLedger = Number(data.claimable_ledger as number);
+  await pool.query(
+    `INSERT INTO strategy_withdrawals
+       (withdrawal_id, strategy_id, amount, requested_ledger, claimable_ledger)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (withdrawal_id) DO NOTHING`,
+    [withdrawalId, strategyId, amount, event.ledger, claimableLedger],
+  );
+  await pool.query(
+    `UPDATE treasury_strategies SET current_allocation = current_allocation - $2 WHERE strategy_id = $1`,
+    [strategyId, amount],
+  );
+  invalidatePattern("treasury-strategies:");
+  broadcast({
+    type: "strategy_withdrawal_requested",
+    data: {
+      withdrawal_id: withdrawalId,
+      strategy_id: strategyId,
+      amount,
+      claimable_ledger: claimableLedger,
+    },
+  });
+}
+
+async function handleStrategyWithdrawalClaimed(
+  event: SorobanRpc.Api.EventResponse,
+  topics: unknown[],
+): Promise<void> {
+  const withdrawalId = String(topics[1] as bigint);
+  const data = scValToNative(event.value) as Record<string, unknown>;
+  const actualAmount = String(data.actual_amount as bigint);
+  await pool.query(
+    `UPDATE strategy_withdrawals SET actual_amount = $2, claimed_ledger = $3 WHERE withdrawal_id = $1`,
+    [withdrawalId, actualAmount, event.ledger],
+  );
+  invalidatePattern("treasury-strategies:");
+  broadcast({
+    type: "strategy_withdrawal_claimed",
+    data: { withdrawal_id: withdrawalId, actual_amount: actualAmount, ledger: event.ledger },
   });
 }
 

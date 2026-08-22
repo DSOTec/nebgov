@@ -280,6 +280,8 @@ export interface GovernorConfig {
   signalAnchorAddress?: string;
   /** Contract address of the proposal-bonds registry, if deployed */
   proposalBondsAddress?: string;
+  /** Contract address of the treasury yield-strategy allocator, if deployed */
+  treasuryStrategiesAddress?: string;
   /** Stellar network to connect to */
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
@@ -316,6 +318,44 @@ export interface ConvictionSnapshot {
   proposalId: bigint;
   ledger: number;
   conviction: bigint;
+}
+
+/** On-chain configuration of a single registered yield strategy (Issue #997). */
+export interface Strategy {
+  adapter: string;
+  token: string;
+  maxAllocationBps: number;
+  withdrawalCooldownLedgers: number;
+  active: boolean;
+}
+
+/** A strategy's current on-chain allocation. */
+export interface Allocation {
+  strategyId: number;
+  amount: bigint;
+  depositedLedger: number;
+}
+
+/** A single point in a strategy's indexer-backed principal-deposited history. */
+export interface StrategyPerformancePoint {
+  amount: bigint;
+  ledger: number;
+  createdAt: string;
+}
+
+/**
+ * A strategy row as tracked by the indexer — includes the `strategyId` and
+ * running `currentAllocation` that the on-chain {@link Strategy} read alone
+ * doesn't carry (querying every id individually isn't practical for a list
+ * view).
+ */
+export interface IndexedStrategy {
+  strategyId: number;
+  adapter: string;
+  token: string;
+  active: boolean;
+  currentAllocation: bigint;
+  registeredLedger: number;
 }
 
 export interface TimelockOperation {

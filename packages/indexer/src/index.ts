@@ -25,6 +25,8 @@ const TOKEN_VOTES_ADDRESS = process.env.TOKEN_VOTES_ADDRESS ?? "";
 const TIMELOCK_ADDRESS = process.env.TIMELOCK_ADDRESS ?? "";
 const CONVICTION_VOTING_ADDRESS = process.env.CONVICTION_VOTING_ADDRESS ?? "";
 const SIGNAL_ANCHOR_ADDRESS = process.env.SIGNAL_ANCHOR_ADDRESS ?? "";
+const TREASURY_STRATEGIES_ADDRESS =
+  process.env.TREASURY_STRATEGIES_ADDRESS ?? "";
 const TREASURY_SIMULATION_ACCOUNT =
   process.env.TREASURY_SIMULATION_ACCOUNT ?? "";
 const NETWORK_PASSPHRASE =
@@ -91,6 +93,7 @@ async function runIndexer(): Promise<void> {
     timelockAddress: TIMELOCK_ADDRESS,
     convictionVotingAddress: CONVICTION_VOTING_ADDRESS,
     signalAnchorAddress: SIGNAL_ANCHOR_ADDRESS,
+    treasuryStrategiesAddress: TREASURY_STRATEGIES_ADDRESS,
     treasuryStateReader,
     pollIntervalMs: POLL_INTERVAL_MS,
   };

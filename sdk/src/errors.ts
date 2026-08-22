@@ -821,3 +821,97 @@ export function parseVotesError(
     cause,
   );
 }
+
+// ─── Treasury Strategies Errors ───────────────────────────────────────────────
+
+/**
+ * Error codes for the treasury-strategies contract + SDK transport layer.
+ *
+ * Codes 1–99 mirror the on-chain TreasuryStrategiesError enum values
+ * (contracts/treasury-strategies/src/lib.rs).
+ */
+export enum TreasuryStrategiesErrorCode {
+  AlreadyInitialized = 1,
+  NotAdmin = 2,
+  NotTreasury = 3,
+  StrategyNotFound = 4,
+  NoActiveStrategy = 5,
+  AllocationCapExceeded = 6,
+  InsufficientAllocation = 7,
+  WithdrawalNotFound = 8,
+  WithdrawalAlreadyClaimed = 9,
+  WithdrawalNotYetClaimable = 10,
+  InvalidAmount = 11,
+  InvalidBps = 12,
+
+  // SDK-level codes
+  SimulationFailed = 100,
+  TransactionFailed = 101,
+  TransactionTimeout = 102,
+  MissingReturnValue = 103,
+}
+
+const TREASURY_STRATEGIES_MESSAGES: Record<TreasuryStrategiesErrorCode, string> = {
+  [TreasuryStrategiesErrorCode.AlreadyInitialized]: "Contract is already initialized",
+  [TreasuryStrategiesErrorCode.NotAdmin]: "Only the configured admin may perform this action",
+  [TreasuryStrategiesErrorCode.NotTreasury]: "Only the configured treasury may perform this action",
+  [TreasuryStrategiesErrorCode.StrategyNotFound]: "Strategy not found",
+  [TreasuryStrategiesErrorCode.NoActiveStrategy]: "No active strategy is registered for this token",
+  [TreasuryStrategiesErrorCode.AllocationCapExceeded]:
+    "Deposit would exceed the strategy's max_allocation_bps cap",
+  [TreasuryStrategiesErrorCode.InsufficientAllocation]:
+    "Withdrawal amount exceeds the strategy's current allocation",
+  [TreasuryStrategiesErrorCode.WithdrawalNotFound]: "Withdrawal request not found",
+  [TreasuryStrategiesErrorCode.WithdrawalAlreadyClaimed]: "Withdrawal has already been claimed",
+  [TreasuryStrategiesErrorCode.WithdrawalNotYetClaimable]:
+    "Withdrawal cooldown has not elapsed yet",
+  [TreasuryStrategiesErrorCode.InvalidAmount]: "Amount must be greater than zero",
+  [TreasuryStrategiesErrorCode.InvalidBps]: "max_allocation_bps must not exceed 10000",
+  [TreasuryStrategiesErrorCode.SimulationFailed]: "Simulation failed",
+  [TreasuryStrategiesErrorCode.TransactionFailed]: "Transaction failed",
+  [TreasuryStrategiesErrorCode.TransactionTimeout]: "Transaction timed out",
+  [TreasuryStrategiesErrorCode.MissingReturnValue]: "No return value from contract",
+};
+
+export class TreasuryStrategiesError extends Error {
+  readonly name = "TreasuryStrategiesError";
+
+  constructor(
+    public readonly code: TreasuryStrategiesErrorCode,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, TreasuryStrategiesError.prototype);
+  }
+}
+
+/**
+ * Parse a raw Soroban RPC error into a typed {@link TreasuryStrategiesError}.
+ */
+export function parseTreasuryStrategiesError(
+  raw: SorobanRpcError | string | null | undefined,
+  cause?: unknown,
+): TreasuryStrategiesError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null) {
+    const code = contractCode as TreasuryStrategiesErrorCode;
+    const message =
+      TREASURY_STRATEGIES_MESSAGES[code] ?? `Treasury-strategies contract error #${contractCode}`;
+    return new TreasuryStrategiesError(code, message, cause);
+  }
+
+  if (hasErrorStatus(raw)) {
+    return new TreasuryStrategiesError(
+      TreasuryStrategiesErrorCode.TransactionFailed,
+      `${TREASURY_STRATEGIES_MESSAGES[TreasuryStrategiesErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
+      cause,
+    );
+  }
+
+  return new TreasuryStrategiesError(
+    TreasuryStrategiesErrorCode.SimulationFailed,
+    `${TREASURY_STRATEGIES_MESSAGES[TreasuryStrategiesErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
+    cause,
+  );
+}

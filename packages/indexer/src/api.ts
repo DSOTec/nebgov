@@ -2114,5 +2114,234 @@ export function createApp(server: SorobanRpc.Server): express.Application {
     }
   });
 
+  // --- Treasury strategies endpoints (#997) ---
+
+  // GET /treasury-strategies?token=&active=&limit=&offset=
+  app.get(
+    "/treasury-strategies",
+    async (req: Request, res: Response): Promise<void> => {
+      const pagination = parsePagination(
+        req.query.limit,
+        req.query.offset,
+        20,
+        100,
+      );
+      if (!pagination) {
+        res.status(400).json({ error: "Invalid pagination parameters" });
+        return;
+      }
+      const { limit, offset } = pagination;
+      const token =
+        typeof req.query.token === "string" && req.query.token.length > 0
+          ? req.query.token
+          : undefined;
+      const active =
+        typeof req.query.active === "string"
+          ? req.query.active === "true"
+          : undefined;
+      const key = `treasury-strategies:${token ?? "all"}:${active ?? "all"}:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.treasury, async () => {
+          const params: unknown[] = [];
+          const conditions: string[] = [];
+          if (token) {
+            params.push(token);
+            conditions.push(`token = $${params.length}`);
+          }
+          if (active !== undefined) {
+            params.push(active);
+            conditions.push(`active = $${params.length}`);
+          }
+          const where = conditions.length
+            ? `WHERE ${conditions.join(" AND ")}`
+            : "";
+          params.push(limit, offset);
+          const result = await pool.query(
+            `SELECT * FROM treasury_strategies
+             ${where}
+             ORDER BY strategy_id ASC
+             LIMIT $${params.length - 1} OFFSET $${params.length}`,
+            params,
+          );
+          return {
+            strategies: result.rows,
+            pagination: { limit, offset, hasMore: result.rows.length === limit },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /treasury-strategies/withdrawals?status=pending|claimable|claimed&strategy_id=&limit=&offset=
+  // "claimable" is derived (pending + claimable_ledger reached) against the
+  // indexer's own last-indexed ledger, the same defense-in-depth pattern
+  // used for draft expiry.
+  app.get(
+    "/treasury-strategies/withdrawals",
+    async (req: Request, res: Response): Promise<void> => {
+      const pagination = parsePagination(
+        req.query.limit,
+        req.query.offset,
+        20,
+        100,
+      );
+      if (!pagination) {
+        res.status(400).json({ error: "Invalid pagination parameters" });
+        return;
+      }
+      const { limit, offset } = pagination;
+      const status =
+        typeof req.query.status === "string" ? req.query.status : undefined;
+      if (status && !["pending", "claimable", "claimed"].includes(status)) {
+        res.status(400).json({ error: "Invalid status filter" });
+        return;
+      }
+      const strategyId =
+        typeof req.query.strategy_id === "string"
+          ? req.query.strategy_id
+          : undefined;
+      const key = `treasury-strategies:withdrawals:${status ?? "all"}:${strategyId ?? "all"}:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.treasury, async () => {
+          const lastLedgerResult = await pool.query(
+            "SELECT last_ledger FROM indexer_state WHERE id = 1",
+          );
+          const lastLedger = lastLedgerResult.rows[0]?.last_ledger ?? 0;
+
+          const params: unknown[] = [];
+          const conditions: string[] = [];
+          if (strategyId) {
+            params.push(strategyId);
+            conditions.push(`strategy_id = $${params.length}`);
+          }
+          if (status === "claimed") {
+            conditions.push("claimed_ledger IS NOT NULL");
+          } else if (status === "pending") {
+            params.push(lastLedger);
+            conditions.push(
+              `claimed_ledger IS NULL AND claimable_ledger > $${params.length}`,
+            );
+          } else if (status === "claimable") {
+            params.push(lastLedger);
+            conditions.push(
+              `claimed_ledger IS NULL AND claimable_ledger <= $${params.length}`,
+            );
+          }
+          const where = conditions.length
+            ? `WHERE ${conditions.join(" AND ")}`
+            : "";
+          const statusLedgerParamIndex = params.length + 1;
+          params.push(lastLedger, limit, offset);
+          const result = await pool.query(
+            `SELECT *,
+               CASE
+                 WHEN claimed_ledger IS NOT NULL THEN 'claimed'
+                 WHEN claimable_ledger <= $${statusLedgerParamIndex} THEN 'claimable'
+                 ELSE 'pending'
+               END AS status
+             FROM strategy_withdrawals
+             ${where}
+             ORDER BY withdrawal_id ASC
+             LIMIT $${params.length - 1} OFFSET $${params.length}`,
+            params,
+          );
+          return {
+            withdrawals: result.rows,
+            pagination: { limit, offset, hasMore: result.rows.length === limit },
+          };
+        });
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /treasury-strategies/:id
+  app.get(
+    "/treasury-strategies/:id",
+    async (req: Request, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const key = `treasury-strategies:detail:${id}`;
+      try {
+        const data = await cached(key, TTL.treasury, async () => {
+          const result = await pool.query(
+            `SELECT * FROM treasury_strategies WHERE strategy_id = $1`,
+            [id],
+          );
+          return result.rows[0] ?? null;
+        });
+        if (!data) {
+          res.status(404).json({ error: "Strategy not found" });
+          return;
+        }
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
+  // GET /treasury-strategies/:id/performance?limit=&offset=
+  // Returns the indexed principal-deposited time series for this strategy.
+  // Current *value* (principal plus/minus accrued yield or loss) is a live
+  // on-chain read (StrategyAdapterTrait::adapter_balance via
+  // get_total_value) rather than an indexed event, so it isn't reflected
+  // here — callers wanting a live value should pair this history with the
+  // SDK's TreasuryStrategiesClient.getTotalValue(token) call, the same
+  // documented indexer/live-read split used by the analytics and reputation
+  // modules elsewhere in this API.
+  app.get(
+    "/treasury-strategies/:id/performance",
+    async (req: Request, res: Response): Promise<void> => {
+      const { id } = req.params;
+      const pagination = parsePagination(
+        req.query.limit,
+        req.query.offset,
+        50,
+        200,
+      );
+      if (!pagination) {
+        res.status(400).json({ error: "Invalid pagination parameters" });
+        return;
+      }
+      const { limit, offset } = pagination;
+      const key = `treasury-strategies:performance:${id}:${limit}:${offset}`;
+      try {
+        const data = await cached(key, TTL.treasury, async () => {
+          const strategyResult = await pool.query(
+            `SELECT strategy_id FROM treasury_strategies WHERE strategy_id = $1`,
+            [id],
+          );
+          if (!strategyResult.rows[0]) {
+            return null;
+          }
+          const result = await pool.query(
+            `SELECT amount, ledger, created_at
+             FROM strategy_allocations
+             WHERE strategy_id = $1
+             ORDER BY ledger ASC
+             OFFSET $2 LIMIT $3`,
+            [id, offset, limit],
+          );
+          return {
+            principal_history: result.rows,
+            pagination: { limit, offset, hasMore: result.rows.length === limit },
+          };
+        });
+        if (!data) {
+          res.status(404).json({ error: "Strategy not found" });
+          return;
+        }
+        res.json(data);
+      } catch {
+        res.status(500).json({ error: "Internal server error" });
+      }
+    },
+  );
+
   return app;
 }

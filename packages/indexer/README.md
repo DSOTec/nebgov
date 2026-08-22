@@ -228,6 +228,7 @@ docker run --env-file packages/indexer/.env \
 | `TREASURY_SIMULATION_ACCOUNT` | When treasury is set | - | Funded Stellar account used to simulate treasury read calls for stream hydration |
 | `LIQUIDITY_ADDRESS` | No | - | Stellar contract address of the liquidity pool |
 | `SIGNAL_ANCHOR_ADDRESS` | No | - | Stellar contract address of the gasless-signaling result anchor |
+| `TREASURY_STRATEGIES_ADDRESS` | No | - | Stellar contract address of the treasury yield-strategy allocator |
 | `STELLAR_NETWORK_PASSPHRASE` | No | Testnet passphrase | Network passphrase used for treasury read simulations |
 | `POLL_INTERVAL_MS` | No | `5000` | Milliseconds between event polling cycles |
 | `PORT` | No | `3001` | HTTP server port |
@@ -250,6 +251,7 @@ TOKEN_VOTES_ADDRESS=CBTOKENVOTESZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 TREASURY_ADDRESS=CB3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 LIQUIDITY_ADDRESS=CC3D5KRYM6CB7OQ4O5K3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 SIGNAL_ANCHOR_ADDRESS=CDSIGNALANCHORZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
+TREASURY_STRATEGIES_ADDRESS=CETREASURYSTRATEGIESZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3
 
 # Indexer Configuration
 POLL_INTERVAL_MS=5000
