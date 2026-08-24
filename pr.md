@@ -1,23 +1,89 @@
+# fix(treasury,deployment,optimistic-governor): add deactivate UI, verify-deployment coverage, drop unused execute() param
+
 ## Summary
 
-- Makefile's `test-contracts` and `build-wasm` targets ran cargo with no package list at all, so they silently diverged from `.github/workflows/rust.yml`. Governor-factory's tests need prebuilt contract WASM (via `contractimport!`), which the old targets never produced, so `make test-contracts` failed outright. Both targets now use the same explicit `-p sorogov-*` package list as CI — including `proposal-bonds`, `conviction-voting`, and `signal-anchor` — and `test-contracts` depends on `build-wasm` so the WASM artifacts exist before tests run, matching CI's step ordering. Fixes #1096, #1098, #1100.
-- Added an admin-only "Register new strategy" form to `app/src/app/treasury/strategies/page.tsx` for the `register_strategy` contract function, which previously had no UI anywhere. Fixes #1106.
+- Added an admin-only "Deactivate" action to each strategy card in
+  `app/src/app/treasury/strategies/page.tsx`, submitting a treasury
+  multisig transaction that calls `treasury-strategies::deactivate_strategy`
+  — the same submit/approve flow the existing "Register new strategy" form
+  uses. Fixes #1107.
+- Added post-deploy validation for `contracts/conviction-voting` and
+  `contracts/treasury-strategies` to `scripts/verify-deployment.sh`, so a
+  broken or missing deployment of either contract now fails verification
+  instead of passing silently. Fixes #1103, #1104.
+- Dropped the unused `caller` parameter from
+  `optimistic-governor::execute()` so its signature is permissionless like
+  `finalize()`, one step earlier in the same lifecycle. Fixes #1108.
 
 ## Details
 
-### Makefile (#1096, #1098, #1100)
+### #1107 — Deactivate strategy UI
 
-`register_strategy`'s admin argument must equal the treasury contract's own address in production (per `TreasuryStrategiesClient`'s docstring), not a signable wallet — so it can't be called directly. The new form instead builds the `register_strategy` calldata (adapter, token, max allocation bps, withdrawal cooldown) and submits it through the treasury multisig's existing `submit`/`approve` flow (`TreasuryClient.submit`), the same mechanism `app/src/app/treasury/page.tsx` already uses for admin actions. The form is gated on wallet connection the same way `app/src/app/settings` gates its admin controls; on-chain authorization is still enforced by the treasury contract's own `require_owner` check in `submit()`.
+`treasury-strategies::deactivate_strategy(admin, strategy_id)` is
+admin-gated the same way `register_strategy` is — the contract's `admin` is
+the treasury multisig, not a signable wallet — so the new "Deactivate"
+button reuses `TreasuryClient.submit(...)` with a new
+`encodeDeactivateStrategyCalldata` helper (`app/src/lib/treasury-calldata.ts`)
+instead of calling the contract directly. The button only renders for
+active strategies, is gated behind the same `canRegister` admin-availability
+check as the registration form, and confirms before submitting since it's a
+state-changing multisig action.
+
+While in this file, also fixed a duplicate `const treasuryAddress`
+declaration (two conflicting definitions had landed from parallel PRs) that
+would fail to compile.
+
+### #1103 / #1104 — verify-deployment.sh coverage gaps
+
+- `conviction-voting` has no dedicated `get_config`/`get_settings` getter;
+  `get_required_threshold` is the only read-only entrypoint that panics
+  with `NotInitialized` until `initialize()` succeeds, so it's called with
+  `requested_amount=0` to double as the deployed+initialized check.
+- `treasury-strategies` had no read-only entrypoint at all that depended on
+  initialization state. Added a minimal `get_treasury()` getter (mirroring
+  `TokenVotes::admin()` / `Liquidity::governor()`) and wired the script to
+  both confirm it's deployed+initialized and that it's wired to the same
+  `TREASURY_ADDRESS` used elsewhere in the env file.
+- `query()` now accepts extra CLI args after the function name, needed for
+  `get_required_threshold`'s `requested_amount` argument.
+
+### #1108 — optimistic-governor `execute()` signature
+
+`execute(caller, proposal_id)` called `caller.require_auth()` but never
+read `caller` again, so any address could still call it by authenticating
+as itself — no real access control, just an extra required signer/param
+versus `finalize(proposal_id)` one step earlier in the same lifecycle.
+Removed the parameter; `execute` is now permissionless like `finalize`.
+Updated the SDK's `OptimisticGovernorClient.execute`/`executeWithSign` and
+the contract's test suite to match the new signature.
+
+### Also fixed
+
+`app/src/app/vote-escrow/page.tsx` had a pre-existing unescaped apostrophe
+that fails `next build`'s lint step (`react/no-unescaped-entities`),
+unrelated to the four issues above but blocking a green frontend build.
 
 ## Test plan
 
-- [x] `make build-wasm` — builds all 14 contract crates
-- [x] `make test-contracts` — all contract test suites pass (28 `test result: ok` blocks, 0 failures)
-- [x] `pnpm --filter @nebgov/sdk build` — SDK compiles
-- [x] `tsc --noEmit` in `app/` — no type errors
-- [x] `pnpm build` in `app/` — Next.js production build succeeds, `/treasury/strategies` compiles
-- [ ] Manual click-through of the new registration form against a deployed treasury (needs a live testnet treasury + owner wallet)
+- [x] `cargo test -p sorogov-optimistic-governor` — 17 passed
+- [x] `cargo test -p sorogov-treasury-strategies` — 13 passed (incl. new
+      `test_get_treasury_returns_configured_treasury`)
+- [x] `cargo test` across the full CI package list — all green except one
+      pre-existing, unrelated failure in `sorogov-token-votes`
+      (`split_delegation_tests::test_single_100_weight_delegate_split_collapses_to_legacy_delegate_key`),
+      confirmed present on `main` before this branch's changes
+- [x] `cargo build --target wasm32v1-none --release` across all contract
+      packages
+- [x] `bash -n scripts/verify-deployment.sh`
+- [x] `pnpm --filter @nebgov/sdk build` and `test` — 395 passed
+- [x] `pnpm tsc --noEmit` in `app/`
+- [x] `pnpm eslint .` in `app/` — no errors (pre-existing warnings only, in
+      untouched files)
+- [x] `pnpm next build` in `app/` — succeeds
+- [x] `pnpm test` in `app/` — same 6 pre-existing failing suites as `main`
+      (confirmed via stash comparison), nothing new broken
 
-## Notes for reviewers
-
-- `cargo fmt --all -- --check` and `cargo clippy --workspace --all-targets -- -D warnings` both currently fail on pre-existing drift unrelated to this change (formatting in `co-sponsorship`/`governor`/`timelock`/etc., and `assert_eq!(x, bool)` clippy lints in `treasury/src/stream_tests.rs`). Neither of those touches the files in this PR; `fmt` isn't part of `rust.yml` at all, and the clippy failures predate this branch. Flagging separately rather than folding an unrelated cleanup into this PR.
+closes #1107
+closes #1103
+closes #1104
+closes #1108

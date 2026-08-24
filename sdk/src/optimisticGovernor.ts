@@ -86,11 +86,11 @@ export class OptimisticGovernorClient {
     return { state: proposal.state };
   }
 
+  /** Permissionless, like {@link finalize}: any connected account may call it. */
   async execute(caller: Keypair, proposalId: number): Promise<string> {
     return (await this.submit(
       caller,
       "execute",
-      nativeToScVal(caller.publicKey(), { type: "address" }),
       nativeToScVal(proposalId, { type: "u64" }),
     )).hash;
   }
@@ -277,7 +277,7 @@ export class OptimisticGovernorClient {
     return { state: proposal.state };
   }
 
-  /** Wallet-signing variant of {@link execute}. */
+  /** Wallet-signing variant of {@link execute}. Permissionless — any connected account may call it. */
   async executeWithSign(
     callerPublicKey: string,
     proposalId: number,
@@ -287,7 +287,6 @@ export class OptimisticGovernorClient {
       callerPublicKey,
       signUnsignedXdr,
       "execute",
-      nativeToScVal(callerPublicKey, { type: "address" }),
       nativeToScVal(proposalId, { type: "u64" }),
     );
     return hash;

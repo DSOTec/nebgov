@@ -7,7 +7,10 @@ import type { StrategyPerformancePoint, TreasuryStrategiesClient } from "@nebgov
 import { useWallet } from "../../../lib/wallet-context";
 import { readGovernorConfig } from "../../../lib/nebgov-env";
 import { TreasuryClient } from "../../../lib/treasury-client";
-import { encodeRegisterStrategyCalldata } from "../../../lib/treasury-calldata";
+import {
+  encodeDeactivateStrategyCalldata,
+  encodeRegisterStrategyCalldata,
+} from "../../../lib/treasury-calldata";
 import {
   useTreasuryStrategies,
   buildTreasuryStrategiesClient,
@@ -31,7 +34,6 @@ export default function TreasuryStrategiesPage() {
 
   const config = useMemo(() => readGovernorConfig(), []);
   const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as StellarNetwork;
-  const treasuryAddress = process.env.NEXT_PUBLIC_TREASURY_ADDRESS || "";
   const treasuryStrategiesAddress = config?.treasuryStrategiesAddress ?? "";
 
   const treasuryClient = useMemo(() => {
@@ -45,6 +47,8 @@ export default function TreasuryStrategiesPage() {
   const [regCooldownLedgers, setRegCooldownLedgers] = useState("");
   const [registering, setRegistering] = useState(false);
   const [registerError, setRegisterError] = useState<string | null>(null);
+  const [deactivatingId, setDeactivatingId] = useState<number | null>(null);
+  const [deactivateError, setDeactivateError] = useState<string | null>(null);
 
   const canRegister = Boolean(
     isConnected && publicKey && treasuryClient && treasuryAddress && treasuryStrategiesAddress,
@@ -98,6 +102,41 @@ export default function TreasuryStrategiesPage() {
       toast.error(msg);
     } finally {
       setRegistering(false);
+    }
+  }
+
+  async function handleDeactivateStrategy(strategyId: number) {
+    if (!treasuryClient || !publicKey || !treasuryAddress || !treasuryStrategiesAddress) return;
+    if (
+      !window.confirm(
+        `Deactivate strategy #${strategyId}? It will stop receiving new deposits.`,
+      )
+    ) {
+      return;
+    }
+    setDeactivatingId(strategyId);
+    setDeactivateError(null);
+    try {
+      const data = encodeDeactivateStrategyCalldata(treasuryAddress, strategyId);
+      const txId = await treasuryClient.submit(
+        publicKey,
+        treasuryStrategiesAddress,
+        "deactivate_strategy",
+        data,
+        signTransaction,
+      );
+      toast.success(
+        txId > 0n
+          ? `Submitted treasury transaction #${txId} — pending owner approvals.`
+          : "Deactivation submitted to the treasury — pending owner approvals.",
+      );
+      refetch();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Could not submit deactivation";
+      setDeactivateError(msg);
+      toast.error(msg);
+    } finally {
+      setDeactivatingId(null);
     }
   }
 
@@ -258,6 +297,12 @@ export default function TreasuryStrategiesPage() {
         </div>
       )}
 
+      {deactivateError && (
+        <div className="mb-6 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-700">
+          {deactivateError}
+        </div>
+      )}
+
       {loading ? (
         <div className="text-center py-8 text-gray-400">Loading strategies…</div>
       ) : strategies.length === 0 ? (
@@ -293,16 +338,28 @@ export default function TreasuryStrategiesPage() {
                       Token: {s.token}
                     </p>
                   </div>
-                  {canRequestWithdrawal && (
-                    <button
-                      type="button"
-                      onClick={() => setWithdrawTarget(s)}
-                      disabled={s.currentAllocation <= 0n}
-                      className="shrink-0 text-sm rounded-lg px-4 py-2 font-medium border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
-                    >
-                      Request Withdrawal
-                    </button>
-                  )}
+                  <div className="flex shrink-0 gap-2">
+                    {canRequestWithdrawal && (
+                      <button
+                        type="button"
+                        onClick={() => setWithdrawTarget(s)}
+                        disabled={s.currentAllocation <= 0n}
+                        className="shrink-0 text-sm rounded-lg px-4 py-2 font-medium border border-indigo-200 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Request Withdrawal
+                      </button>
+                    )}
+                    {canRegister && s.active && (
+                      <button
+                        type="button"
+                        onClick={() => handleDeactivateStrategy(s.strategyId)}
+                        disabled={deactivatingId === s.strategyId}
+                        className="shrink-0 text-sm rounded-lg px-4 py-2 font-medium border border-rose-200 text-rose-600 hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {deactivatingId === s.strategyId ? "Deactivating…" : "Deactivate"}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-4">

@@ -119,7 +119,7 @@ export default function VoteEscrowPage() {
                   </>
                 ) : (
                   <p className="text-sm text-gray-600 dark:text-gray-400">
-                    You don't have an active lock. Create one to get started.
+                    You don&apos;t have an active lock. Create one to get started.
                   </p>
                 )}
               </div>

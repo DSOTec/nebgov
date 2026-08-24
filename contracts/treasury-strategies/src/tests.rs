@@ -198,3 +198,9 @@ fn test_register_strategy_rejects_invalid_max_allocation_bps() {
     let adapter_id = env.register(MockAdapter, ());
     client.register_strategy(&admin, &adapter_id, &token, &10_001, &COOLDOWN);
 }
+
+#[test]
+fn test_get_treasury_returns_configured_treasury() {
+    let (_env, client, _admin, treasury, _token, _sac_admin) = setup();
+    assert_eq!(client.get_treasury(), treasury);
+}

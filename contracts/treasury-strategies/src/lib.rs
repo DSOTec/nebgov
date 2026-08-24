@@ -369,6 +369,14 @@ impl TreasuryStrategiesContract {
             })
     }
 
+    /// Read-only lookup of the configured treasury address, mirroring
+    /// `TokenVotes::admin`/`Liquidity::governor` — lets deploy tooling
+    /// confirm the contract is both deployed and initialized without
+    /// mutating state.
+    pub fn get_treasury(env: Env) -> Address {
+        env.storage().instance().get(&DataKey::Treasury).unwrap()
+    }
+
     pub fn get_total_value(env: Env, token: Address) -> i128 {
         let ids: Vec<u64> = env
             .storage()

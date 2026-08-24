@@ -205,7 +205,7 @@ fn execute_rejected_before_finalize_has_run() {
         .ledger()
         .with_mut(|l| l.sequence_number += CHALLENGE_WINDOW + 1);
     // finalize() was never called, so state is still ChallengeWindow.
-    c.execute(&f.proposer, &id);
+    c.execute(&id);
 }
 
 #[test]
@@ -222,7 +222,7 @@ fn execute_rejected_on_objected_proposal() {
     f.env
         .ledger()
         .with_mut(|l| l.sequence_number += CHALLENGE_WINDOW + 1);
-    c.execute(&f.proposer, &id);
+    c.execute(&id);
 }
 
 #[test]
@@ -254,7 +254,7 @@ fn bond_locked_on_propose_and_refunded_on_passed_and_executed() {
     assert_eq!(tok.balance(&f.proposer), balance_before);
     assert_eq!(tok.balance(&f.client_id), 0);
 
-    c.execute(&f.proposer, &id);
+    c.execute(&id);
     let proposal = c.get_proposal(&id);
     assert_eq!(proposal.state, OptimisticProposalState::Executed);
     assert_eq!(TargetClient::new(&f.env, &f.target_id).calls(), 1);

@@ -83,6 +83,22 @@ export function encodeRegisterStrategyCalldata(
   return Uint8Array.from(xdr.ScVal.scvVec(vals).toXDR());
 }
 
+/**
+ * Calldata for `treasury-strategies::deactivate_strategy(admin, strategy_id)`,
+ * for submission through the treasury multisig's `submit`/`approve` flow —
+ * same access-control shape as `register_strategy` above.
+ */
+export function encodeDeactivateStrategyCalldata(
+  admin: string,
+  strategyId: number
+): Uint8Array {
+  const vals = [
+    nativeToScVal(admin, { type: "address" }),
+    nativeToScVal(strategyId, { type: "u64" }),
+  ];
+  return Uint8Array.from(xdr.ScVal.scvVec(vals).toXDR());
+}
+
 export function previewCalldata(
   target: string,
   functionName: string,

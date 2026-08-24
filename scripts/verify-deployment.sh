@@ -39,13 +39,17 @@ command -v stellar >/dev/null 2>&1 || { printf "${RED}[error]${NC} stellar-cli n
 NETWORK="${STELLAR_NETWORK:-testnet}"
 IDENTITY="${STELLAR_IDENTITY:-deployer}"
 
-# Call a contract getter; returns "ERROR" if the invocation fails.
+# Call a contract getter, optionally with extra `-- <fn>` args after the
+# function name (e.g. `query "$ID" get_required_threshold --requested_amount 0`).
+# Returns "ERROR" if the invocation fails.
 query() {
+  local id="$1" fn="$2"
+  shift 2
   stellar contract invoke \
-    --id "$1" \
+    --id "$id" \
     --source "$IDENTITY" \
     --network "$NETWORK" \
-    -- "$2" 2>/dev/null || echo "ERROR"
+    -- "$fn" "$@" 2>/dev/null || echo "ERROR"
 }
 
 # Assert got == expected and print a labelled result.
@@ -120,6 +124,24 @@ info "Treasury (${TREASURY_ADDRESS:-<not set>})"
 check "  treasury.threshold" \
   "$(query "${TREASURY_ADDRESS:-}" threshold)" \
   "${TREASURY_THRESHOLD:-1}"
+
+# ---- ConvictionVoting ----------------------------------------------------
+# No config/settings getter exists on this contract; get_required_threshold
+# is the only read-only entrypoint that panics with NotInitialized until
+# initialize() succeeds, so it doubles as the deployed+initialized check.
+info "ConvictionVoting (${CONVICTION_VOTING_ADDRESS:-<not set>})"
+check_initialized "  conviction_voting.get_required_threshold" \
+  "$(query "${CONVICTION_VOTING_ADDRESS:-}" get_required_threshold --requested_amount 0)"
+
+# ---- TreasuryStrategies ---------------------------------------------------
+info "TreasuryStrategies (${TREASURY_STRATEGIES_ADDRESS:-<not set>})"
+TREASURY_STRATEGIES_TREASURY="$(query "${TREASURY_STRATEGIES_ADDRESS:-}" get_treasury)"
+check_initialized "  treasury_strategies.get_treasury" "$TREASURY_STRATEGIES_TREASURY"
+if [[ "$TREASURY_STRATEGIES_TREASURY" != "ERROR" ]]; then
+  check_contains "  treasury_strategies.treasury" \
+    "$TREASURY_STRATEGIES_TREASURY" \
+    "${TREASURY_ADDRESS:-}"
+fi
 
 # ---- Liquidity ---------------------------------------------------------
 info "Liquidity (${LIQUIDITY_ADDRESS:-<not set>})"

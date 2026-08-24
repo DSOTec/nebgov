@@ -278,10 +278,12 @@ impl OptimisticGovernorContract {
         events::emit_proposal_passed(&env, proposal_id);
     }
 
-    /// Invoke the proposal's target once it has cleared its challenge
-    /// window unobjected.
-    pub fn execute(env: Env, caller: Address, proposal_id: u64) {
-        caller.require_auth();
+    /// Permissionless, like `finalize`: invoke the proposal's target once it
+    /// has cleared its challenge window unobjected. Anyone may trigger this
+    /// once a proposal is `Passed`; there is no meaningful caller identity to
+    /// gate on since the target invocation runs with the contract's own
+    /// authority, not the caller's.
+    pub fn execute(env: Env, proposal_id: u64) {
         let mut proposal = Self::must_get_proposal(&env, proposal_id);
         if proposal.state != OptimisticProposalState::Passed {
             env.panic_with_error(OptimisticGovernorError::ProposalNotPassed);
