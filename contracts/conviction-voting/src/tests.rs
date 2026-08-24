@@ -174,6 +174,26 @@ fn cancelled_proposal_rejects_stakes() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn withdraw_stake_rejects_never_staked() {
+    let f = setup(100);
+    let client = ConvictionVotingContractClient::new(&f.env, &f.contract_id);
+    let never_staked = Address::generate(&f.env);
+    client.withdraw_stake(&never_staked);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #8)")]
+fn withdraw_stake_rejects_after_withdrawal() {
+    let f = setup(100);
+    let client = ConvictionVotingContractClient::new(&f.env, &f.contract_id);
+    let id = proposal(&f, 0);
+    client.stake(&f.staker, &id, &1_000);
+    client.withdraw_stake(&f.staker);
+    client.withdraw_stake(&f.staker);
+}
+
+#[test]
 fn zero_amount_uses_minimum_threshold() {
     let f = setup(777);
     assert_eq!(
