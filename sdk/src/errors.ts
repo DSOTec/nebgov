@@ -316,6 +316,87 @@ export class VotesError extends Error {
   }
 }
 
+// ─── Vote Escrow Errors ────────────────────────────────────────────────────────
+
+/**
+ * Error codes for the vote-escrow contract + SDK transport layer.
+ *
+ * Codes 1-9 mirror the on-chain `VoteEscrowError` enum
+ * (contracts/vote-escrow/src/error.rs). SDK-level codes start at 100.
+ */
+export enum VoteEscrowErrorCode {
+  // On-chain contract errors (match contracts/vote-escrow/src/error.rs)
+  NotInitialized = 1,
+  LockNotFound = 2,
+  LockNotMatured = 3,
+  LockAlreadyWithdrawn = 4,
+  InvalidDuration = 5,
+  InvalidAmount = 6,
+  InvalidEndLedger = 7,
+  Unauthorized = 8,
+  ArithmeticOverflow = 9,
+
+  // SDK-level codes
+  SimulationFailed = 100,
+  TransactionFailed = 101,
+  TransactionTimeout = 102,
+}
+
+const VOTE_ESCROW_MESSAGES: Record<VoteEscrowErrorCode, string> = {
+  [VoteEscrowErrorCode.NotInitialized]: "Vote escrow contract is not initialized",
+  [VoteEscrowErrorCode.LockNotFound]: "No active lock found for this account",
+  [VoteEscrowErrorCode.LockNotMatured]: "Lock has not yet reached its end ledger",
+  [VoteEscrowErrorCode.LockAlreadyWithdrawn]: "Lock has already been withdrawn",
+  [VoteEscrowErrorCode.InvalidDuration]: "Lock duration is outside the allowed range",
+  [VoteEscrowErrorCode.InvalidAmount]: "Lock amount must be positive",
+  [VoteEscrowErrorCode.InvalidEndLedger]: "New end ledger must be after the current end ledger",
+  [VoteEscrowErrorCode.Unauthorized]: "Caller is not authorized to perform this action",
+  [VoteEscrowErrorCode.ArithmeticOverflow]: "Arithmetic overflow in voting power calculation",
+
+  [VoteEscrowErrorCode.SimulationFailed]: "Simulation failed",
+  [VoteEscrowErrorCode.TransactionFailed]: "Transaction failed",
+  [VoteEscrowErrorCode.TransactionTimeout]: "Transaction timed out",
+};
+
+export class VoteEscrowError extends Error {
+  readonly name = "VoteEscrowError";
+
+  constructor(
+    public readonly code: VoteEscrowErrorCode,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, VoteEscrowError.prototype);
+  }
+}
+
+export function parseVoteEscrowError(
+  raw: SorobanRpcError | string | null | undefined,
+  cause?: unknown,
+): VoteEscrowError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null) {
+    const code = contractCode as VoteEscrowErrorCode;
+    const message = VOTE_ESCROW_MESSAGES[code] ?? `Vote escrow contract error #${contractCode}`;
+    return new VoteEscrowError(code, message, cause);
+  }
+
+  if (hasErrorStatus(raw)) {
+    return new VoteEscrowError(
+      VoteEscrowErrorCode.TransactionFailed,
+      `${VOTE_ESCROW_MESSAGES[VoteEscrowErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
+      cause,
+    );
+  }
+
+  return new VoteEscrowError(
+    VoteEscrowErrorCode.SimulationFailed,
+    `${VOTE_ESCROW_MESSAGES[VoteEscrowErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
+    cause,
+  );
+}
+
 // ─── Contract Error Parsing ───────────────────────────────────────────────────
 
 /** Minimal shape of a Soroban RPC error result used by the parsers below. */

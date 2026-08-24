@@ -274,6 +274,8 @@ export interface GovernorConfig {
   votesAddress: string;
   /** Contract address of the co-sponsorship registry, if deployed */
   coSponsorshipAddress?: string;
+  /** Contract address of the vote-escrow contract, if deployed */
+  voteEscrowAddress?: string;
   /** Contract address of the independent conviction-voting module, if deployed. */
   convictionVotingAddress?: string;
   /** Contract address of the gasless-signaling result anchor, if deployed */

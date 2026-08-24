@@ -16,6 +16,8 @@ export { GovernorClient, hashDescription, uploadProposalMetadata } from "./gover
 export type { MetadataUploadOptions } from "./governor";
 export { VotesClient } from "./votes";
 export type { TopDelegatesOptions, TopDelegatesResult } from "./votes";
+export { VoteEscrowClient } from "./voteEscrow";
+export type { Lock as VoteEscrowLock, VoteEscrowStats } from "./voteEscrow";
 export { DelegationSigClient } from "./delegation-sig";
 export type { DelegationSigConfig, DelegationTxResult } from "./delegation-sig";
 export { FactoryClient } from "./factory";
