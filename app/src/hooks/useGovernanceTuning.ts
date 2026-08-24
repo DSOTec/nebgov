@@ -1,8 +1,8 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { GovernanceTuningClient, type Network, type TuningRecommendation } from "@nebgov/sdk";
-import { backendBaseUrl } from "../lib/backend";
+import { GovernanceTuningClient, type TuningRecommendation } from "@nebgov/sdk";
+import { readGovernorConfig } from "../lib/nebgov-env";
 
 interface UseGovernanceTuningResult {
   latest: TuningRecommendation | null;
@@ -33,22 +33,12 @@ export function useGovernanceTuning(): UseGovernanceTuningResult {
       setLoading(true);
       setError(null);
       try {
-        const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
-        const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
-        const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-        const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
-
-        if (!governorAddress || !timelockAddress || !votesAddress) {
+        const config = readGovernorConfig();
+        if (!config) {
           throw new Error("Missing required environment variables for GovernanceTuningClient");
         }
 
-        const client = new GovernanceTuningClient({
-          governorAddress,
-          timelockAddress,
-          votesAddress,
-          network,
-          backendUrl: backendBaseUrl(),
-        });
+        const client = new GovernanceTuningClient(config);
 
         const [latestRec, historyRecs] = await Promise.all([
           client.getLatestRecommendation(),

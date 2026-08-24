@@ -103,17 +103,18 @@ export function useOptimisticProposal(id: string | undefined) {
       const proposalRow = (await proposalRes.json()) as Record<string, unknown>;
       setProposal(parseProposal(proposalRow));
 
-      if (objectionsRes.ok) {
-        const body = (await objectionsRes.json()) as { data: Record<string, unknown>[] };
-        setObjections(
-          body.data.map((row) => ({
-            objector: String(row.objector),
-            weight: BigInt(String(row.weight)),
-            runningTotal: BigInt(String(row.running_total)),
-            ledger: Number(row.ledger),
-          })),
-        );
+      if (!objectionsRes.ok) {
+        throw new Error(`Indexer objections endpoint returned ${objectionsRes.status}`);
       }
+      const body = (await objectionsRes.json()) as { data: Record<string, unknown>[] };
+      setObjections(
+        body.data.map((row) => ({
+          objector: String(row.objector),
+          weight: BigInt(String(row.weight)),
+          runningTotal: BigInt(String(row.running_total)),
+          ledger: Number(row.ledger),
+        })),
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load proposal");
     } finally {

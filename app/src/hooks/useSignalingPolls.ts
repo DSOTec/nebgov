@@ -23,14 +23,16 @@ export function useSignalingPolls(status?: "active" | "closed") {
   const client = useSignalingClient();
   const [polls, setPolls] = useState<SignalingPoll[]>([]);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!client) return;
     setLoading(true);
+    setError(null);
     try {
       setPolls(await client.listPolls(status));
-    } catch {
-      // Backend unreachable — leave prior state in place.
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to load signaling polls");
     } finally {
       setLoading(false);
     }
@@ -42,7 +44,7 @@ export function useSignalingPolls(status?: "active" | "closed") {
     return () => clearInterval(interval);
   }, [refresh]);
 
-  return { polls, loading, refresh };
+  return { polls, loading, error, refresh };
 }
 
 /** A single poll plus its live/final results, auto-refreshing while open. */
@@ -51,10 +53,12 @@ export function useSignalingPoll(pollId: number | null) {
   const [poll, setPoll] = useState<SignalingPoll | null>(null);
   const [results, setResults] = useState<SignalingPollResults | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     if (!client || pollId === null) return;
     setLoading(true);
+    setError(null);
     try {
       const [nextPoll, nextResults] = await Promise.all([
         client.getPoll(pollId),
@@ -62,8 +66,8 @@ export function useSignalingPoll(pollId: number | null) {
       ]);
       setPoll(nextPoll);
       setResults(nextResults);
-    } catch {
-      // Backend unreachable — leave prior state in place.
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to load signaling poll");
     } finally {
       setLoading(false);
     }
@@ -77,7 +81,7 @@ export function useSignalingPoll(pollId: number | null) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [refresh, poll?.finalized]);
 
-  return { poll, results, loading, refresh };
+  return { poll, results, loading, error, refresh };
 }
 
 /** Create-poll and cast-vote mutations — both require a connected wallet. */
