@@ -190,3 +190,11 @@ fn test_get_total_value_sums_across_strategies() {
     let total = client.get_total_value(&token);
     assert_eq!(total, 160);
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #12)")]
+fn test_register_strategy_rejects_invalid_max_allocation_bps() {
+    let (env, client, admin, _treasury, token, _sac_admin) = setup();
+    let adapter_id = env.register(MockAdapter, ());
+    client.register_strategy(&admin, &adapter_id, &token, &10_001, &COOLDOWN);
+}
