@@ -83,6 +83,31 @@ export async function getLatestRecommendation(): Promise<TuningRecommendation | 
   return result.rows.length === 0 ? null : rowToRecommendation(result.rows[0]);
 }
 
+export async function touchLatestRecommendation(id: number): Promise<void> {
+  await pool.query(
+    `UPDATE governance_tuning_recommendations SET computed_at = NOW() WHERE id = $1`,
+    [id],
+  );
+}
+
+/**
+ * Retention policy for unchanged recommendation entries: deletes unchanged
+ * records older than `retentionDays` to avoid unbounded table growth on fast
+ * interval configurations.
+ */
+export async function pruneUnchangedRecommendations(retentionDays = 30): Promise<number> {
+  const result = await pool.query(
+    `DELETE FROM governance_tuning_recommendations
+     WHERE auto_proposed = FALSE
+       AND proposal_id IS NULL
+       AND current_quorum_numerator = recommended_quorum_numerator
+       AND current_proposal_threshold = recommended_proposal_threshold
+       AND computed_at < NOW() - ($1 || ' days')::INTERVAL`,
+    [retentionDays],
+  );
+  return result.rowCount ?? 0;
+}
+
 export async function listRecommendations(
   limit: number,
   offset: number,

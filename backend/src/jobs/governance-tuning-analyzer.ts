@@ -1,13 +1,28 @@
+import pool from "../db/pool";
 import { logger } from "../logger";
 import { computeRecommendation, gatherAnalyzerInputs } from "../governance-tuning/analyzer";
 import { getGovernanceTuningConfig } from "../governance-tuning/config-store";
-import { insertRecommendation } from "../governance-tuning/recommendation-store";
+import {
+  insertRecommendation,
+  getLatestRecommendation,
+  touchLatestRecommendation,
+  pruneUnchangedRecommendations,
+} from "../governance-tuning/recommendation-store";
 import { findUnresolvedAutoProposal, maybeAutoPropose } from "../governance-tuning/auto-propose";
 
+const GOVERNANCE_TUNING_LOCK_KEY = "governance_tuning_analyzer_cycle";
+
 /**
- * Governance tuning recommender (issue #998). Same footing as
- * `NotificationProcessorService`: a standalone background job started from
- * `bootstrap()`, not a one-off script.
+ * Governance tuning recommender (issue #998, #1125, #1126).
+ *
+ * Runs as a scheduled background service. Protected against race conditions
+ * across horizontally-scaled backend replicas via a distributed Postgres
+ * advisory lock (`pg_try_advisory_lock`).
+ *
+ * Implements a deduplication and retention policy: when recommendations are
+ * unchanged across consecutive cycles, it updates the timestamp on the existing
+ * latest record rather than inserting redundant rows, and prunes stale unchanged
+ * records.
  */
 export class GovernanceTuningAnalyzerService {
   private timer: NodeJS.Timeout | null = null;
@@ -49,11 +64,41 @@ export class GovernanceTuningAnalyzerService {
     if (this.running) return;
     this.running = true;
     try {
-      await this.runCycle();
+      await this.runCycleWithLock();
     } catch (err) {
       logger.error({ err }, "Governance tuning analyzer cycle failed");
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * Acquires a Postgres advisory lock before running the cycle to guard
+   * against concurrent executions from horizontally-scaled backend replicas.
+   */
+  async runCycleWithLock(): Promise<void> {
+    const client = await pool.connect();
+    try {
+      const { rows } = await client.query(
+        `SELECT pg_try_advisory_lock(hashtextextended($1, 0)) AS acquired`,
+        [GOVERNANCE_TUNING_LOCK_KEY],
+      );
+      if (!rows[0]?.acquired) {
+        logger.info(
+          "Governance tuning: another replica is currently executing the tuning cycle — skipping",
+        );
+        return;
+      }
+
+      try {
+        await this.runCycle();
+      } finally {
+        await client.query(`SELECT pg_advisory_unlock(hashtextextended($1, 0))`, [
+          GOVERNANCE_TUNING_LOCK_KEY,
+        ]);
+      }
+    } finally {
+      client.release();
     }
   }
 
@@ -86,6 +131,29 @@ export class GovernanceTuningAnalyzerService {
       }
     }
 
+    // De-duplication: when consecutive cycles produce unchanged recommendations,
+    // update the timestamp on the existing latest record to avoid unbounded table bloat.
+    const latest = await getLatestRecommendation();
+    const isConsecutiveUnchanged =
+      unchanged &&
+      latest !== null &&
+      latest.recommendedQuorumNumerator === result.recommendedQuorumNumerator &&
+      latest.recommendedProposalThreshold === result.recommendedProposalThreshold &&
+      !latest.autoProposed;
+
+    if (isConsecutiveUnchanged) {
+      await touchLatestRecommendation(latest.id);
+      logger.info(
+        { id: latest.id, unchanged: true, autoProposed: false },
+        "Governance tuning: recommendation unchanged — updated last checked timestamp on latest row",
+      );
+      // Prune old unchanged rows periodically
+      await pruneUnchangedRecommendations().catch((err) => {
+        logger.warn({ err }, "Failed to prune old unchanged recommendations");
+      });
+      return;
+    }
+
     const stored = await insertRecommendation({
       currentQuorumNumerator: inputs.currentQuorumNumerator,
       recommendedQuorumNumerator: result.recommendedQuorumNumerator,
@@ -94,6 +162,11 @@ export class GovernanceTuningAnalyzerService {
       rationale: result.rationale,
       autoProposed,
       proposalId,
+    });
+
+    // Prune old unchanged rows on new insertion
+    await pruneUnchangedRecommendations().catch((err) => {
+      logger.warn({ err }, "Failed to prune old unchanged recommendations");
     });
 
     logger.info(

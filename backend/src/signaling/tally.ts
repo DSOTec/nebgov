@@ -26,9 +26,15 @@ function networkPassphrase(): string {
   return NETWORK_PASSPHRASES[key] ?? Networks.TESTNET;
 }
 
-function rpcServer(): rpc.Server {
+export function rpcServer(): rpc.Server {
   const url = process.env.STELLAR_RPC_URL ?? "https://soroban-testnet.stellar.org";
   return new rpc.Server(url, { allowHttp: false });
+}
+
+/** Fetches the latest committed ledger sequence height from Stellar RPC. */
+export async function getLatestLedgerSequence(): Promise<number> {
+  const latest = await rpcServer().getLatestLedger();
+  return latest.sequence;
 }
 
 function votesContract(): Contract {

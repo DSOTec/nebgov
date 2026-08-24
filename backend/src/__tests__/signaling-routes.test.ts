@@ -11,16 +11,18 @@ jest.mock("../signaling/tally", () => ({
   getCurrentVotingPower: jest.fn(),
   getProposalThreshold: jest.fn(),
   computeWeightedTally: jest.fn(),
+  getLatestLedgerSequence: jest.fn(),
 }));
 
 import app from "../index";
 import pool from "../db/pool";
 import { canonicalSignalPayload, sep53Digest } from "../signaling/signature";
-import { getCurrentVotingPower, getProposalThreshold, computeWeightedTally } from "../signaling/tally";
+import { getCurrentVotingPower, getProposalThreshold, computeWeightedTally, getLatestLedgerSequence } from "../signaling/tally";
 
 const mockGetCurrentVotingPower = getCurrentVotingPower as jest.Mock;
 const mockGetProposalThreshold = getProposalThreshold as jest.Mock;
 const mockComputeWeightedTally = computeWeightedTally as jest.Mock;
+const mockGetLatestLedgerSequence = getLatestLedgerSequence as jest.Mock;
 
 // SEP-53-signs the canonical payload, matching what a real wallet's
 // signMessage does internally — see signaling/signature.ts's sep53Digest.
@@ -56,6 +58,7 @@ describe("Signaling Endpoints", () => {
   }> = {}) {
     mockGetCurrentVotingPower.mockResolvedValue(1000n);
     mockGetProposalThreshold.mockResolvedValue(500n);
+    mockGetLatestLedgerSequence.mockResolvedValue(1000);
 
     const creator = Keypair.random();
     const res = await request(app)
@@ -78,6 +81,7 @@ describe("Signaling Endpoints", () => {
   it("POST /signaling/polls rejects a creator below the proposal threshold", async () => {
     mockGetCurrentVotingPower.mockResolvedValue(100n);
     mockGetProposalThreshold.mockResolvedValue(500n);
+    mockGetLatestLedgerSequence.mockResolvedValue(1000);
     const creator = Keypair.random();
 
     await request(app)
@@ -92,6 +96,28 @@ describe("Signaling Endpoints", () => {
         endTime: new Date(Date.now() + 3_600_000).toISOString(),
       })
       .expect(403);
+  });
+
+  it("POST /signaling/polls rejects a snapshotLedger in the future", async () => {
+    mockGetCurrentVotingPower.mockResolvedValue(1000n);
+    mockGetProposalThreshold.mockResolvedValue(500n);
+    mockGetLatestLedgerSequence.mockResolvedValue(500);
+    const creator = Keypair.random();
+
+    const res = await request(app)
+      .post("/signaling/polls")
+      .send({
+        creatorAddress: creator.publicKey(),
+        title: "Future snapshot poll",
+        description: "Should fail with 400",
+        choices: ["Yes", "No"],
+        snapshotLedger: 999999,
+        startTime: new Date().toISOString(),
+        endTime: new Date(Date.now() + 3_600_000).toISOString(),
+      })
+      .expect(400);
+
+    expect(res.body.error).toMatch(/cannot be in the future/);
   });
 
   it("POST /signaling/polls creates a poll when the creator meets the threshold", async () => {

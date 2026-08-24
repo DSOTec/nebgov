@@ -6,7 +6,7 @@ import { validate } from "../middleware/validate";
 import { logger } from "../logger";
 import { cached, invalidate } from "../cache";
 import { verifySignalVote } from "../signaling/signature";
-import { computeWeightedTally, getCurrentVotingPower, getProposalThreshold } from "../signaling/tally";
+import { computeWeightedTally, getCurrentVotingPower, getProposalThreshold, getLatestLedgerSequence } from "../signaling/tally";
 
 const router = Router();
 
@@ -96,13 +96,20 @@ router.post("/polls", signalingWriteLimiter, validate({ body: createPollSchema }
   const body = req.body as z.infer<typeof createPollSchema>;
 
   try {
-    const [power, threshold] = await Promise.all([
+    const [power, threshold, currentLedger] = await Promise.all([
       getCurrentVotingPower(body.creatorAddress),
       getProposalThreshold(),
+      getLatestLedgerSequence(),
     ]);
     if (power < threshold) {
       return res.status(403).json({
         error: `Creator voting power (${power}) is below the proposal threshold (${threshold})`,
+      });
+    }
+
+    if (body.snapshotLedger > currentLedger) {
+      return res.status(400).json({
+        error: `snapshotLedger (${body.snapshotLedger}) cannot be in the future (current ledger: ${currentLedger})`,
       });
     }
 
