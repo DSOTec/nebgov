@@ -22,6 +22,14 @@ export function buildTreasuryStrategiesClient(): TreasuryStrategiesClient | null
   });
 }
 
+/** Cache of `maxAllocationBps`/`withdrawalCooldownLedgers` by strategyId. These
+ * are set once at `register_strategy` and never change, so a single on-chain
+ * simulate call per strategy for the lifetime of the page is sufficient. */
+const staticFieldsCache = new Map<
+  string,
+  Pick<StrategyRow, "maxAllocationBps" | "withdrawalCooldownLedgers">
+>();
+
 interface UseTreasuryStrategiesResult {
   strategies: StrategyRow[];
   loading: boolean;
@@ -56,12 +64,15 @@ export function useTreasuryStrategies(token?: string): UseTreasuryStrategiesResu
         const indexed = await client.listStrategies({ token, limit: 100 });
         const merged = await Promise.all(
           indexed.map(async (row) => {
+            const cached = staticFieldsCache.get(row.strategyId);
+            if (cached) return { ...row, ...cached };
             const onChain = await client.getStrategy(row.strategyId);
-            return {
-              ...row,
+            const staticFields = {
               maxAllocationBps: onChain.maxAllocationBps,
               withdrawalCooldownLedgers: onChain.withdrawalCooldownLedgers,
             };
+            staticFieldsCache.set(row.strategyId, staticFields);
+            return { ...row, ...staticFields };
           }),
         );
         if (!cancelled) setStrategies(merged);

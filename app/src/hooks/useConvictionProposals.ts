@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { readIndexerUrl } from "../lib/nebgov-env";
 
 export interface ConvictionProposalView {
   proposalId: string;
@@ -30,7 +31,7 @@ export function useConvictionProposals(status = "active") {
   const [proposals, setProposals] = useState<ConvictionProposalView[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const indexerUrl = process.env.NEXT_PUBLIC_INDEXER_URL;
+  const indexerUrl = readIndexerUrl();
 
   const refresh = useCallback(async () => {
     if (!indexerUrl) {

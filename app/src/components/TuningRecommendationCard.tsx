@@ -49,6 +49,21 @@ export function TuningRecommendationCard({
       const governor = new GovernorClient(config);
       const source = publicKey ?? config.governorAddress;
       const currentSettings = await governor.getSettings(source);
+
+      // The recommendation's delta was computed against a prior on-chain
+      // snapshot (via the indexer's /config-history). If settings drifted
+      // since then, blending the recommended delta onto today's baseline
+      // would misrepresent what the recommendation's rationale was based on.
+      if (
+        currentSettings.quorumNumerator !== recommendation.currentQuorumNumerator ||
+        currentSettings.proposalThreshold !== recommendation.currentProposalThreshold
+      ) {
+        throw new Error(
+          `Governor settings have changed on-chain since this recommendation was computed ` +
+            `(${new Date(recommendation.computedAt).toLocaleString()}). Refresh recommendations before proposing.`,
+        );
+      }
+
       const nextSettings = {
         ...currentSettings,
         quorumNumerator: recommendation.recommendedQuorumNumerator,

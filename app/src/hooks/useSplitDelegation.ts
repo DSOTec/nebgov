@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { VotesClient, type SplitDelegation, type Network } from "@nebgov/sdk";
+import { VotesClient, type SplitDelegation } from "@nebgov/sdk";
+import { readGovernorConfig } from "../lib/nebgov-env";
 import { useWallet } from "../lib/wallet-context";
 
 interface UseSplitDelegationResult {
@@ -21,23 +22,11 @@ interface UseSplitDelegationResult {
 }
 
 function getVotesClientFromEnv(): VotesClient {
-  const governorAddress = process.env.NEXT_PUBLIC_GOVERNOR_ADDRESS;
-  const timelockAddress = process.env.NEXT_PUBLIC_TIMELOCK_ADDRESS;
-  const votesAddress = process.env.NEXT_PUBLIC_VOTES_ADDRESS;
-  const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
-  const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
-
-  if (!governorAddress || !timelockAddress || !votesAddress) {
+  const config = readGovernorConfig();
+  if (!config) {
     throw new Error("Missing NEXT_PUBLIC_* contract addresses in .env.local");
   }
-
-  return new VotesClient({
-    governorAddress,
-    timelockAddress,
-    votesAddress,
-    network,
-    ...(rpcUrl && { rpcUrl }),
-  });
+  return new VotesClient(config);
 }
 
 /**
