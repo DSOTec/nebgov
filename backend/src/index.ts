@@ -12,11 +12,13 @@ import relayerRouter from "./routes/relayer";
 import signalingRouter from "./routes/signaling";
 import governanceTuningRouter from "./routes/governance-tuning";
 import proposalSimulationRouter from "./routes/proposal-simulation";
+import votingRewardsRouter from "./routes/voting-rewards";
 import { securityMonitor } from "./services/security-monitor";
 import { notificationProcessor } from "./jobs/notification-processor";
 import { deliveryRetry } from "./jobs/delivery-retry";
 import { signalAnchorService } from "./jobs/signal-anchor";
 import { governanceTuningAnalyzer } from "./jobs/governance-tuning-analyzer";
+import { votingRewardsEpochService } from "./jobs/voting-rewards-epoch";
 import { runBackendMigrations } from "./db/migrationRunner";
 import pino from "pino";
 import pinoHttp from "pino-http";
@@ -117,6 +119,7 @@ app.use("/relayer", relayerRouter);
 app.use("/signaling", signalingRouter);
 app.use("/governance-tuning", governanceTuningRouter);
 app.use("/proposal-simulation", proposalSimulationRouter);
+app.use("/voting-rewards", votingRewardsRouter);
 
 // Error handling
 app.use(
@@ -150,6 +153,9 @@ async function bootstrap(): Promise<void> {
 
     // Start the governance tuning recommender (issue #998)
     governanceTuningAnalyzer.start();
+
+    // Start the voting participation rewards epoch service (issue #1011)
+    votingRewardsEpochService.start();
   });
 }
 

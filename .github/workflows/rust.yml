@@ -50,7 +50,8 @@ jobs:
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds \
             -p sorogov-treasury-strategies \
-            -p sorogov-optimistic-governor
+            -p sorogov-optimistic-governor \
+            -p sorogov-voting-rewards
 
       - name: Run tests
         run: |
@@ -66,7 +67,8 @@ jobs:
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds \
             -p sorogov-treasury-strategies \
-            -p sorogov-optimistic-governor
+            -p sorogov-optimistic-governor \
+            -p sorogov-voting-rewards
 
       - name: Install cargo-llvm-cov
         uses: taiki-e/install-action@cargo-llvm-cov
@@ -123,7 +125,8 @@ jobs:
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds \
             -p sorogov-treasury-strategies \
-            -p sorogov-optimistic-governor
+            -p sorogov-optimistic-governor \
+            -p sorogov-voting-rewards
 
       - name: Run clippy
         run: |
@@ -140,6 +143,7 @@ jobs:
             -p sorogov-proposal-bonds \
             -p sorogov-treasury-strategies \
             -p sorogov-optimistic-governor \
+            -p sorogov-voting-rewards \
             --all-targets \
             -- -D warnings
 
@@ -183,7 +187,8 @@ jobs:
             -p sorogov-signal-anchor \
             -p sorogov-proposal-bonds \
             -p sorogov-treasury-strategies \
-            -p sorogov-optimistic-governor
+            -p sorogov-optimistic-governor \
+            -p sorogov-voting-rewards
 
       - name: Check contract WASM sizes
         run: |

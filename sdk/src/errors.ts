@@ -930,3 +930,101 @@ export function parseTreasuryStrategiesError(
     cause,
   );
 }
+
+// ─── Voting Rewards Errors ───────────────────────────────────────────────────
+
+/**
+ * Error codes for the VotingRewards contract + SDK transport layer.
+ *
+ * Codes 1–99 mirror the on-chain VotingRewardsError enum values
+ * (contracts/voting-rewards/src/error.rs).
+ */
+export enum VotingRewardsErrorCode {
+  AlreadyInitialized = 1,
+  NotInitialized = 2,
+  NotAuthorized = 3,
+  InvalidEpochDuration = 4,
+  EpochNotFound = 5,
+  EpochNotEnded = 6,
+  EpochAlreadyFinalized = 7,
+  EpochNotFinalized = 8,
+  InsufficientPool = 9,
+  InvalidAmount = 10,
+  AlreadyClaimed = 11,
+  InvalidProof = 12,
+  EpochOverclaimed = 13,
+
+  // SDK-level codes
+  SimulationFailed = 100,
+  TransactionFailed = 101,
+  TransactionTimeout = 102,
+  MissingReturnValue = 103,
+}
+
+const VOTING_REWARDS_MESSAGES: Record<VotingRewardsErrorCode, string> = {
+  [VotingRewardsErrorCode.AlreadyInitialized]: "Contract is already initialized",
+  [VotingRewardsErrorCode.NotInitialized]: "Contract has not been initialized yet",
+  [VotingRewardsErrorCode.NotAuthorized]: "Caller is not authorized to perform this action",
+  [VotingRewardsErrorCode.InvalidEpochDuration]: "Epoch duration must be greater than zero",
+  [VotingRewardsErrorCode.EpochNotFound]: "Epoch not found",
+  [VotingRewardsErrorCode.EpochNotEnded]: "The epoch's end ledger has not been reached yet",
+  [VotingRewardsErrorCode.EpochAlreadyFinalized]:
+    "This epoch's Merkle root has already been published",
+  [VotingRewardsErrorCode.EpochNotFinalized]:
+    "This epoch's Merkle root has not been published yet",
+  [VotingRewardsErrorCode.InsufficientPool]:
+    "The rewards pool does not hold enough unallocated balance for this amount",
+  [VotingRewardsErrorCode.InvalidAmount]: "Amount must be greater than zero",
+  [VotingRewardsErrorCode.AlreadyClaimed]: "This address has already claimed for this epoch",
+  [VotingRewardsErrorCode.InvalidProof]:
+    "The Merkle proof does not verify against this epoch's published root",
+  [VotingRewardsErrorCode.EpochOverclaimed]:
+    "This claim would exceed the epoch's total allocated rewards",
+  [VotingRewardsErrorCode.SimulationFailed]: "Simulation failed",
+  [VotingRewardsErrorCode.TransactionFailed]: "Transaction failed",
+  [VotingRewardsErrorCode.TransactionTimeout]: "Transaction timed out",
+  [VotingRewardsErrorCode.MissingReturnValue]: "No return value from contract",
+};
+
+export class VotingRewardsError extends Error {
+  readonly name = "VotingRewardsError";
+
+  constructor(
+    public readonly code: VotingRewardsErrorCode,
+    message: string,
+    public readonly cause?: unknown,
+  ) {
+    super(message);
+    Object.setPrototypeOf(this, VotingRewardsError.prototype);
+  }
+}
+
+/**
+ * Parse a raw Soroban RPC error into a typed {@link VotingRewardsError}.
+ */
+export function parseVotingRewardsError(
+  raw: SorobanRpcError | string | null | undefined,
+  cause?: unknown,
+): VotingRewardsError {
+  const contractCode = extractContractErrorCode(raw);
+  if (contractCode !== null) {
+    const code = contractCode as VotingRewardsErrorCode;
+    const message =
+      VOTING_REWARDS_MESSAGES[code] ?? `Voting-rewards contract error #${contractCode}`;
+    return new VotingRewardsError(code, message, cause);
+  }
+
+  if (hasErrorStatus(raw)) {
+    return new VotingRewardsError(
+      VotingRewardsErrorCode.TransactionFailed,
+      `${VOTING_REWARDS_MESSAGES[VotingRewardsErrorCode.TransactionFailed]}: ${errorText(raw) || "unknown"}`,
+      cause,
+    );
+  }
+
+  return new VotingRewardsError(
+    VotingRewardsErrorCode.SimulationFailed,
+    `${VOTING_REWARDS_MESSAGES[VotingRewardsErrorCode.SimulationFailed]}: ${errorText(raw) || "unknown"}`,
+    cause,
+  );
+}

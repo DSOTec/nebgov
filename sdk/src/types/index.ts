@@ -284,6 +284,8 @@ export interface GovernorConfig {
   treasuryStrategiesAddress?: string;
   /** Contract address of the optimistic-governance track, if deployed */
   optimisticGovernorAddress?: string;
+  /** Contract address of the voting-participation rewards program, if deployed */
+  votingRewardsAddress?: string;
   /** Stellar network to connect to */
   network: Network;
   /** RPC URL override (optional — defaults to public horizon) */
@@ -1149,4 +1151,35 @@ export interface SimulationHistoryEntry {
   simulatedAtLedger: number;
   results: SimulationResult[];
   anyActionWouldRevert: boolean;
+}
+
+// ─── Voting Participation Rewards (issue #1011) ────────────────────────────
+
+/** One reward epoch of the voting-participation rewards program. */
+export interface VotingRewardsEpoch {
+  id: bigint;
+  /** First ledger of the epoch (inclusive). */
+  startLedger: number;
+  /** Ledger the epoch closes at (exclusive — the next epoch starts here). */
+  endLedger: number;
+  /**
+   * Hex-encoded Merkle root of the epoch's `(address, amount)` set, or
+   * `null` until governance publishes it.
+   */
+  merkleRoot: string | null;
+  /** Total allocated to this epoch, in the reward token's smallest unit. */
+  totalRewardAmount: bigint;
+  /** How much of {@link totalRewardAmount} has been claimed so far. */
+  claimedAmount: bigint;
+  /** Whether the root has been published — claims only open once it is. */
+  finalized: boolean;
+}
+
+/** A reward an address has earned in one epoch, with the proof needed to claim it. */
+export interface ClaimableReward {
+  epochId: bigint;
+  amount: bigint;
+  /** Hex-encoded sibling path, ready to hand straight to `claim`. */
+  merkleProof: string[];
+  claimed: boolean;
 }

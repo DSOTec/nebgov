@@ -13,6 +13,7 @@ members = [
     "contracts/proposal-bonds",
     "contracts/treasury-strategies",
     "contracts/optimistic-governor",
+    "contracts/voting-rewards",
 ]
 exclude = ["fuzz", "tools/sim"]
 resolver = "2"

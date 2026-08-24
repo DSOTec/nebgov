@@ -12,6 +12,7 @@ export function readGovernorConfig(): GovernorConfig | null {
   const proposalBondsAddress = process.env.NEXT_PUBLIC_PROPOSAL_BONDS_ADDRESS;
   const treasuryStrategiesAddress = process.env.NEXT_PUBLIC_TREASURY_STRATEGIES_ADDRESS;
   const optimisticGovernorAddress = process.env.NEXT_PUBLIC_OPTIMISTIC_GOVERNOR_ADDRESS;
+  const votingRewardsAddress = process.env.NEXT_PUBLIC_VOTING_REWARDS_ADDRESS;
   const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as Network;
   const rpcUrl = process.env.NEXT_PUBLIC_RPC_URL;
 
@@ -30,6 +31,7 @@ export function readGovernorConfig(): GovernorConfig | null {
     ...(proposalBondsAddress ? { proposalBondsAddress } : {}),
     ...(treasuryStrategiesAddress ? { treasuryStrategiesAddress } : {}),
     ...(optimisticGovernorAddress ? { optimisticGovernorAddress } : {}),
+    ...(votingRewardsAddress ? { votingRewardsAddress } : {}),
   };
 }
 

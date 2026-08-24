@@ -1597,6 +1597,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "sorogov-optimistic-governor"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
 name = "sorogov-proposal-bonds"
 version = "0.1.0"
 dependencies = [
@@ -1641,6 +1648,13 @@ dependencies = [
 
 [[package]]
 name = "sorogov-treasury-strategies"
+version = "0.1.0"
+dependencies = [
+ "soroban-sdk",
+]
+
+[[package]]
+name = "sorogov-voting-rewards"
 version = "0.1.0"
 dependencies = [
  "soroban-sdk",

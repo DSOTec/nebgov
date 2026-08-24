@@ -50,6 +50,7 @@ import { ProposalDetailSkeleton } from "../../../components/ui/ProposalDetailSke
 import { CountdownTimer } from "../../../components/CountdownTimer";
 import { ProposalBondCard } from "../../../components/ProposalBondCard";
 import { ProposalImpactPreview } from "../../../components/ProposalImpactPreview";
+import { VotingRewardsPrompt } from "../../../components/VotingRewardsPrompt";
 import { useProposalSimulation } from "../../../hooks/useProposalSimulation";
 
 interface Props {
@@ -904,6 +905,9 @@ export default function ProposalDetailClient({ params }: Props) {
               endLedger={proposal.endLedger}
             />
           </div>
+
+          {/* Issue #1011 — only renders when this wallet has unclaimed rewards. */}
+          <VotingRewardsPrompt address={publicKey ?? null} />
 
           {!isConnected ? (
             <div className="bg-indigo-50 dark:bg-slate-900/80 border border-indigo-200 dark:border-indigo-800 rounded-2xl p-5 mb-4">

@@ -34,6 +34,8 @@ export type { CoSponsorshipConfig } from "./coSponsorship";
 export { SignalingClient, canonicalSignalPayload, sep53Digest } from "./signaling";
 export { ProposalBondsClient } from "./proposalBonds";
 export type { ProposalBondsConfig } from "./proposalBonds";
+export { VotingRewardsClient } from "./votingRewards";
+export type { VotingRewardsConfig } from "./votingRewards";
 export { TreasuryStrategiesClient } from "./treasuryStrategies";
 export type { TreasuryStrategiesConfig } from "./treasuryStrategies";
 export {
@@ -53,6 +55,8 @@ export {
   ProposalBondsErrorCode,
   TreasuryStrategiesError,
   TreasuryStrategiesErrorCode,
+  VotingRewardsError,
+  VotingRewardsErrorCode,
   parseGovernorError,
   parseTimelockError,
   parseVotesError,
@@ -61,6 +65,7 @@ export {
   parseSignalingError,
   parseProposalBondsError,
   parseTreasuryStrategiesError,
+  parseVotingRewardsError,
   extractContractErrorCode,
 } from "./errors";
 export type { SorobanRpcError } from "./errors";
