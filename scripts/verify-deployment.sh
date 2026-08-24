@@ -58,6 +58,28 @@ check() {
   fi
 }
 
+# Assert that a getter response is neither "ERROR" (deploy/invoke failure)
+# nor empty, proving the contract is both deployed and initialized (the
+# getters used here panic with NotInitialized until initialize() succeeds).
+check_initialized() {
+  local label="$1" got="$2"
+  if [[ -n "$got" && "$got" != "ERROR" ]]; then
+    pass "$label: deployed and initialized"
+  else
+    fail "$label: contract not deployed or not initialized"
+  fi
+}
+
+# Assert that `haystack` contains `needle` and print a labelled result.
+check_contains() {
+  local label="$1" haystack="$2" needle="$3"
+  if [[ -n "$needle" && "$haystack" == *"$needle"* ]]; then
+    pass "$label: contains $needle"
+  else
+    fail "$label: expected '$haystack' to contain '$needle'"
+  fi
+}
+
 DEPLOYER_ADDR="${DEPLOYER_ADDR:-$(stellar keys address "${IDENTITY}" 2>/dev/null || echo '')}"
 
 info "Verifying NebGov deployment against $ENV_FILE"
@@ -104,6 +126,26 @@ info "Liquidity (${LIQUIDITY_ADDRESS:-<not set>})"
 check "  liquidity.governor" \
   "$(query "${LIQUIDITY_ADDRESS:-}" governor)" \
   "\"${DEPLOYER_ADDR}\""
+
+# ---- OptimisticGovernor -------------------------------------------------
+info "OptimisticGovernor (${OPTIMISTIC_GOVERNOR_ADDRESS:-<not set>})"
+OPTIMISTIC_GOVERNOR_CONFIG="$(query "${OPTIMISTIC_GOVERNOR_ADDRESS:-}" get_config)"
+check_initialized "  optimistic_governor.get_config" "$OPTIMISTIC_GOVERNOR_CONFIG"
+if [[ "$OPTIMISTIC_GOVERNOR_CONFIG" != "ERROR" ]]; then
+  check_contains "  optimistic_governor.votes_token" \
+    "$OPTIMISTIC_GOVERNOR_CONFIG" \
+    "${TOKEN_VOTES_ADDRESS:-}"
+fi
+
+# ---- ProposalBonds -------------------------------------------------------
+info "ProposalBonds (${PROPOSAL_BONDS_ADDRESS:-<not set>})"
+PROPOSAL_BONDS_SETTINGS="$(query "${PROPOSAL_BONDS_ADDRESS:-}" get_settings)"
+check_initialized "  proposal_bonds.get_settings" "$PROPOSAL_BONDS_SETTINGS"
+if [[ "$PROPOSAL_BONDS_SETTINGS" != "ERROR" ]]; then
+  check_contains "  proposal_bonds.governor" \
+    "$PROPOSAL_BONDS_SETTINGS" \
+    "${GOVERNOR_ADDRESS:-}"
+fi
 
 printf '\n'
 if [[ "$FAILURES" -gt 0 ]]; then
