@@ -59,6 +59,30 @@ export function encodeGovernorCalldataBytes(rows: CalldataArgRow[]): Uint8Array 
   return Uint8Array.from(xdr.ScVal.scvVec(vals).toXDR());
 }
 
+/**
+ * Calldata for `treasury-strategies::register_strategy(admin, adapter, token,
+ * max_allocation_bps, withdrawal_cooldown_ledgers)`, for submission through
+ * the treasury multisig's `submit`/`approve` flow (the contract's `admin` is
+ * the treasury contract address itself, not a signable wallet — see
+ * `TreasuryStrategiesClient`'s docstring).
+ */
+export function encodeRegisterStrategyCalldata(
+  admin: string,
+  adapter: string,
+  token: string,
+  maxAllocationBps: number,
+  withdrawalCooldownLedgers: number
+): Uint8Array {
+  const vals = [
+    nativeToScVal(admin, { type: "address" }),
+    nativeToScVal(adapter, { type: "address" }),
+    nativeToScVal(token, { type: "address" }),
+    nativeToScVal(maxAllocationBps, { type: "u32" }),
+    nativeToScVal(withdrawalCooldownLedgers, { type: "u32" }),
+  ];
+  return Uint8Array.from(xdr.ScVal.scvVec(vals).toXDR());
+}
+
 export function previewCalldata(
   target: string,
   functionName: string,

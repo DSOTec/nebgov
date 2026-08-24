@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import toast from "react-hot-toast";
 import type { StrategyPerformancePoint, TreasuryStrategiesClient } from "@nebgov/sdk";
 import { useWallet } from "../../../lib/wallet-context";
+import { readGovernorConfig } from "../../../lib/nebgov-env";
+import { TreasuryClient } from "../../../lib/treasury-client";
+import { encodeRegisterStrategyCalldata } from "../../../lib/treasury-calldata";
 import {
   useTreasuryStrategies,
   buildTreasuryStrategiesClient,
@@ -12,8 +16,10 @@ import {
 import { StrategyPerformanceChart } from "../../../components/StrategyPerformanceChart";
 import { WithdrawalRequestModal } from "../../../components/WithdrawalRequestModal";
 
+type StellarNetwork = "mainnet" | "testnet" | "futurenet";
+
 export default function TreasuryStrategiesPage() {
-  const { publicKey, signTransaction } = useWallet();
+  const { isConnected, publicKey, signTransaction } = useWallet();
   const { strategies, loading, error, refetch } = useTreasuryStrategies();
   const [client] = useState<TreasuryStrategiesClient | null>(() =>
     buildTreasuryStrategiesClient(),
@@ -22,6 +28,78 @@ export default function TreasuryStrategiesPage() {
   const [withdrawTarget, setWithdrawTarget] = useState<StrategyRow | null>(null);
   const treasuryAddress = process.env.NEXT_PUBLIC_TREASURY_ADDRESS ?? "";
   const canRequestWithdrawal = Boolean(publicKey && publicKey === treasuryAddress);
+
+  const config = useMemo(() => readGovernorConfig(), []);
+  const network = (process.env.NEXT_PUBLIC_NETWORK || "testnet") as StellarNetwork;
+  const treasuryAddress = process.env.NEXT_PUBLIC_TREASURY_ADDRESS || "";
+  const treasuryStrategiesAddress = config?.treasuryStrategiesAddress ?? "";
+
+  const treasuryClient = useMemo(() => {
+    if (!treasuryAddress) return null;
+    return new TreasuryClient({ network, treasuryAddress });
+  }, [network, treasuryAddress]);
+
+  const [regAdapter, setRegAdapter] = useState("");
+  const [regToken, setRegToken] = useState("");
+  const [regMaxAllocationBps, setRegMaxAllocationBps] = useState("");
+  const [regCooldownLedgers, setRegCooldownLedgers] = useState("");
+  const [registering, setRegistering] = useState(false);
+  const [registerError, setRegisterError] = useState<string | null>(null);
+
+  const canRegister = Boolean(
+    isConnected && publicKey && treasuryClient && treasuryAddress && treasuryStrategiesAddress,
+  );
+
+  async function handleRegisterStrategy(e: React.FormEvent) {
+    e.preventDefault();
+    if (!treasuryClient || !publicKey || !treasuryAddress || !treasuryStrategiesAddress) return;
+    setRegistering(true);
+    setRegisterError(null);
+    try {
+      const maxAllocationBps = Number(regMaxAllocationBps);
+      const withdrawalCooldownLedgers = Number(regCooldownLedgers);
+      if (!regAdapter.trim() || !regToken.trim()) {
+        throw new Error("Adapter and token addresses are required.");
+      }
+      if (!Number.isInteger(maxAllocationBps) || maxAllocationBps < 0 || maxAllocationBps > 10_000) {
+        throw new Error("Max allocation must be a whole number of bps between 0 and 10000.");
+      }
+      if (!Number.isInteger(withdrawalCooldownLedgers) || withdrawalCooldownLedgers < 0) {
+        throw new Error("Withdrawal cooldown must be a non-negative whole number of ledgers.");
+      }
+
+      const data = encodeRegisterStrategyCalldata(
+        treasuryAddress,
+        regAdapter.trim(),
+        regToken.trim(),
+        maxAllocationBps,
+        withdrawalCooldownLedgers,
+      );
+      const txId = await treasuryClient.submit(
+        publicKey,
+        treasuryStrategiesAddress,
+        "register_strategy",
+        data,
+        signTransaction,
+      );
+      setRegAdapter("");
+      setRegToken("");
+      setRegMaxAllocationBps("");
+      setRegCooldownLedgers("");
+      toast.success(
+        txId > 0n
+          ? `Submitted treasury transaction #${txId} — pending owner approvals.`
+          : "Registration submitted to the treasury — pending owner approvals.",
+      );
+      refetch();
+    } catch (e: unknown) {
+      const msg = e instanceof Error ? e.message : "Could not submit registration";
+      setRegisterError(msg);
+      toast.error(msg);
+    } finally {
+      setRegistering(false);
+    }
+  }
 
   useEffect(() => {
     if (!client || strategies.length === 0) return;
@@ -66,6 +144,104 @@ export default function TreasuryStrategiesPage() {
             Governance-whitelisted yield strategies for idle treasury funds.
           </p>
         </div>
+      </div>
+
+      <div className="mb-6 bg-white border border-gray-200 rounded-xl p-5">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-gray-500 mb-1">
+          Register new strategy
+        </h2>
+        <p className="text-xs text-gray-500 mb-4">
+          Admin-only. Submits a treasury multisig transaction that calls{" "}
+          <span className="font-mono">register_strategy</span> — it executes once treasury
+          owners approve it.
+        </p>
+
+        {!isConnected && (
+          <p className="rounded-lg border border-sky-200 bg-sky-50 p-3 text-sm text-sky-900 mb-4">
+            Connect a wallet to register a strategy.
+          </p>
+        )}
+
+        {registerError && (
+          <p className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 mb-4">
+            {registerError}
+          </p>
+        )}
+
+        {!treasuryAddress || !treasuryStrategiesAddress ? (
+          <p className="text-sm text-gray-500">
+            Missing <span className="font-mono">NEXT_PUBLIC_TREASURY_ADDRESS</span> or{" "}
+            <span className="font-mono">NEXT_PUBLIC_TREASURY_STRATEGIES_ADDRESS</span> in{" "}
+            <span className="font-mono">app/.env.local</span>.
+          </p>
+        ) : (
+          <form onSubmit={handleRegisterStrategy} className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <label className="block text-sm">
+                <span className="mb-1 block font-medium text-gray-700">Adapter address</span>
+                <input
+                  type="text"
+                  value={regAdapter}
+                  disabled={!isConnected}
+                  onChange={(e) => setRegAdapter(e.target.value)}
+                  placeholder="C…"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm disabled:bg-gray-50 disabled:text-gray-400"
+                  required
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-medium text-gray-700">Token address</span>
+                <input
+                  type="text"
+                  value={regToken}
+                  disabled={!isConnected}
+                  onChange={(e) => setRegToken(e.target.value)}
+                  placeholder="C…"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm disabled:bg-gray-50 disabled:text-gray-400"
+                  required
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-medium text-gray-700">
+                  Max allocation (bps, 0–10000)
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={regMaxAllocationBps}
+                  disabled={!isConnected}
+                  onChange={(e) => setRegMaxAllocationBps(e.target.value)}
+                  placeholder="2000"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm tabular-nums disabled:bg-gray-50 disabled:text-gray-400"
+                  required
+                />
+              </label>
+              <label className="block text-sm">
+                <span className="mb-1 block font-medium text-gray-700">
+                  Withdrawal cooldown (ledgers)
+                </span>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={regCooldownLedgers}
+                  disabled={!isConnected}
+                  onChange={(e) => setRegCooldownLedgers(e.target.value)}
+                  placeholder="17280"
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 font-mono text-sm tabular-nums disabled:bg-gray-50 disabled:text-gray-400"
+                  required
+                />
+              </label>
+            </div>
+
+            <button
+              type="submit"
+              disabled={!canRegister || registering}
+              className="w-full sm:w-auto rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {registering ? "Submitting…" : "Submit registration"}
+            </button>
+          </form>
+        )}
       </div>
 
       {!client && (

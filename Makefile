@@ -1,23 +1,20 @@
 .PHONY: test-contracts build-wasm deploy-testnet verify-testnet fmt lint
 
-# Keep in sync with the package list in .github/workflows/rust.yml.
-CONTRACTS := \
-	sorogov-governor \
-	sorogov-timelock \
-	sorogov-token-votes \
-	sorogov-governor-factory \
-	sorogov-treasury \
-	sorogov-liquidity \
-	sorogov-token-votes-wrapper \
-	sorogov-co-sponsorship \
-	sorogov-conviction-voting \
-	sorogov-signal-anchor \
-	sorogov-proposal-bonds \
-	sorogov-treasury-strategies \
-	sorogov-optimistic-governor \
-	sorogov-voting-rewards
-
-CONTRACT_PACKAGES := $(foreach c,$(CONTRACTS),-p $(c))
+CONTRACT_PACKAGES := \
+	-p sorogov-governor \
+	-p sorogov-timelock \
+	-p sorogov-token-votes \
+	-p sorogov-governor-factory \
+	-p sorogov-treasury \
+	-p sorogov-liquidity \
+	-p sorogov-co-sponsorship \
+	-p sorogov-conviction-voting \
+	-p sorogov-token-votes-wrapper \
+	-p sorogov-signal-anchor \
+	-p sorogov-proposal-bonds \
+	-p sorogov-treasury-strategies \
+	-p sorogov-optimistic-governor \
+	-p sorogov-voting-rewards
 
 test-contracts: build-wasm
 	cargo test $(CONTRACT_PACKAGES) -- --nocapture
