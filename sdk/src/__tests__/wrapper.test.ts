@@ -187,7 +187,7 @@ describe("WrapperClient", () => {
         }),
       };
 
-      client["server"] = mockServer as any;
+      Object.defineProperty(client, "server", { value: mockServer });
 
       const votes = await client.getVotes(validGAddr);
       expect(votes).toBeDefined();
@@ -203,7 +203,7 @@ describe("WrapperClient", () => {
         }),
       };
 
-      client["server"] = mockServer as any;
+      Object.defineProperty(client, "server", { value: mockServer });
 
       const votes = await client.getVotes(validGAddr);
       expect(votes).toBe(0n);
@@ -217,7 +217,7 @@ describe("WrapperClient", () => {
         simulateTransaction: jest.fn().mockResolvedValue({}),
       };
 
-      client["server"] = mockServer as any;
+      Object.defineProperty(client, "server", { value: mockServer });
 
       await expect(client.getVotes(validGAddr)).rejects.toThrow(
         "Simulation failed"

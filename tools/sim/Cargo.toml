@@ -16,7 +16,7 @@ sorogov-token-votes = { path = "../../contracts/token-votes" }
 sorogov-treasury = { path = "../../contracts/treasury" }
 sorogov-co-sponsorship = { path = "../../contracts/co-sponsorship" }
 sorogov-conviction-voting = { path = "../../contracts/conviction-voting" }
-sorogov-optimistic-governor = { path = "../../contracts/optimistic-governor" }
+sorogov-proposal-bonds = { path = "../../contracts/proposal-bonds" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.8"
