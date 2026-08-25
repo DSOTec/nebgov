@@ -192,6 +192,30 @@ pub enum SimStep {
     ConvictionCheckpoint {
         proposal_id: u64,
     },
+    OptimisticPropose {
+        actor: String,
+        target: String,
+        fn_name: String,
+        calldata: Option<String>,
+    },
+    OptimisticObject {
+        actor: String,
+        proposal_id: u64,
+    },
+    OptimisticFinalize {
+        proposal_id: u64,
+    },
+    OptimisticExecute {
+        proposal_id: u64,
+    },
+    OptimisticCancel {
+        actor: String,
+        proposal_id: u64,
+    },
+    OptimisticExpectState {
+        proposal_id: u64,
+        expected_state: SimOptimisticProposalState,
+    },
 }
 
 impl SimStep {
@@ -227,6 +251,12 @@ impl SimStep {
             SimStep::ConvictionStake { .. } => "ConvictionStake",
             SimStep::ConvictionWithdrawStake { .. } => "ConvictionWithdrawStake",
             SimStep::ConvictionCheckpoint { .. } => "ConvictionCheckpoint",
+            SimStep::OptimisticPropose { .. } => "OptimisticPropose",
+            SimStep::OptimisticObject { .. } => "OptimisticObject",
+            SimStep::OptimisticFinalize { .. } => "OptimisticFinalize",
+            SimStep::OptimisticExecute { .. } => "OptimisticExecute",
+            SimStep::OptimisticCancel { .. } => "OptimisticCancel",
+            SimStep::OptimisticExpectState { .. } => "OptimisticExpectState",
         }
     }
 }
@@ -248,6 +278,16 @@ pub enum SimProposalState {
     Executed,
     Cancelled,
     Expired,
+}
+
+/// Mirrors `contracts/optimistic-governor::OptimisticProposalState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SimOptimisticProposalState {
+    ChallengeWindow,
+    Objected,
+    Passed,
+    Executed,
+    Cancelled,
 }
 
 impl Scenario {
