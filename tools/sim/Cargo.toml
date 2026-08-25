@@ -15,6 +15,7 @@ sorogov-timelock = { path = "../../contracts/timelock" }
 sorogov-token-votes = { path = "../../contracts/token-votes" }
 sorogov-treasury = { path = "../../contracts/treasury" }
 sorogov-co-sponsorship = { path = "../../contracts/co-sponsorship" }
+sorogov-conviction-voting = { path = "../../contracts/conviction-voting" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rand = "0.8"

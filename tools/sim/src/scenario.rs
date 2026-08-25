@@ -174,6 +174,24 @@ pub enum SimStep {
     ValidateDag {
         schedule_step_indices: Vec<usize>,
     },
+    ConvictionCreateProposal {
+        actor: String,
+        target: String,
+        fn_name: String,
+        calldata: Option<String>,
+        requested_amount: i128,
+    },
+    ConvictionStake {
+        actor: String,
+        proposal_id: u64,
+        amount: i128,
+    },
+    ConvictionWithdrawStake {
+        actor: String,
+    },
+    ConvictionCheckpoint {
+        proposal_id: u64,
+    },
 }
 
 impl SimStep {
@@ -205,6 +223,10 @@ impl SimStep {
             SimStep::ScheduleBatch { .. } => "ScheduleBatch",
             SimStep::ExecuteBatch { .. } => "ExecuteBatch",
             SimStep::ValidateDag { .. } => "ValidateDag",
+            SimStep::ConvictionCreateProposal { .. } => "ConvictionCreateProposal",
+            SimStep::ConvictionStake { .. } => "ConvictionStake",
+            SimStep::ConvictionWithdrawStake { .. } => "ConvictionWithdrawStake",
+            SimStep::ConvictionCheckpoint { .. } => "ConvictionCheckpoint",
         }
     }
 }

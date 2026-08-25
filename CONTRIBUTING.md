@@ -217,9 +217,11 @@ Issues tagged `good first issue` are recommended for first-time contributors.
 
 ## Branch Naming
 
-- `feat/issue-<number>-<description>` for features
-- `fix/issue-<number>-<description>` for bug fixes
-- `docs/issue-<number>-<description>` for documentation
+- `feat/<description>` for features
+- `fix/<description>` for bug fixes
+- `docs/<description>` for documentation
+
+Example: `feat/governor-parameter-tuning`, `fix/quorum-calculation-edge-case`, `docs/contract-architecture`
 
 ## Commit Messages
 

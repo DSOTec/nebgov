@@ -21,6 +21,7 @@ use soroban_sdk::testutils::{Address as _, Ledger as _};
 use soroban_sdk::{token, Address, Bytes, Env, String as SorobanString, Symbol, Vec as SorobanVec};
 
 use sorogov_co_sponsorship::{CoSponsorshipContract, CoSponsorshipContractClient};
+use sorogov_conviction_voting::{ConvictionVotingContract, ConvictionVotingContractClient};
 use sorogov_governor::{
     GovernorContract, GovernorContractClient, GovernorSettings, ProposalState, VoteSupport,
     VoteType,
@@ -64,6 +65,8 @@ pub struct SimulationRunner {
     treasury: TreasuryContractClient<'static>,
     #[allow(dead_code)]
     co_sponsorship: CoSponsorshipContractClient<'static>,
+    #[allow(dead_code)]
+    conviction_voting: ConvictionVotingContractClient<'static>,
     token: Address,
     target: Address,
     treasury_addr: Address,
@@ -153,6 +156,17 @@ impl SimulationRunner {
         governor_settings.co_sponsorship_registry = Some(co_sponsorship_id);
         governor.update_config(&governor_settings);
 
+        let conviction_voting_id = env.register(ConvictionVotingContract, ());
+        let conviction_voting = ConvictionVotingContractClient::new(&env, &conviction_voting_id);
+        conviction_voting.initialize(
+            &admin,
+            &token_votes_id,
+            &5000u32,  // decay_bps: 50%
+            &5000u32,  // max_ratio_bps: 50%
+            &10_000_000i128, // min_threshold_conviction
+            &100u32,   // weight_bps: 1%
+        );
+
         let target = env.register(SimTargetContract, ());
 
         let sac = token::StellarAssetClient::new(&env, &token);
@@ -179,6 +193,7 @@ impl SimulationRunner {
             token_votes,
             treasury,
             co_sponsorship,
+            conviction_voting,
             token,
             target,
             treasury_addr: treasury_id,
@@ -600,6 +615,44 @@ impl SimulationRunner {
                         result.cycle_path
                     );
                 }
+            }
+            SimStep::ConvictionCreateProposal {
+                actor,
+                target,
+                fn_name,
+                calldata,
+                requested_amount,
+            } => {
+                let proposer = self.get_actor(actor).clone();
+                let target_addr = self.resolve_target(target);
+                let fn_symbol = Symbol::new(&self.env, fn_name);
+                let calldata_bytes = if let Some(cd) = calldata {
+                    Bytes::from_slice(&self.env, cd.as_bytes())
+                } else {
+                    Bytes::new(&self.env)
+                };
+                self.conviction_voting.create_proposal(
+                    &proposer,
+                    &target_addr,
+                    &fn_symbol,
+                    &calldata_bytes,
+                    requested_amount,
+                );
+            }
+            SimStep::ConvictionStake {
+                actor,
+                proposal_id,
+                amount,
+            } => {
+                let staker = self.get_actor(actor).clone();
+                self.conviction_voting.stake(&staker, proposal_id, amount);
+            }
+            SimStep::ConvictionWithdrawStake { actor } => {
+                let staker = self.get_actor(actor).clone();
+                self.conviction_voting.withdraw_stake(&staker);
+            }
+            SimStep::ConvictionCheckpoint { proposal_id } => {
+                self.conviction_voting.checkpoint_conviction(proposal_id);
             }
         }
     }
