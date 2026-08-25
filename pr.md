@@ -1,89 +1,37 @@
-# fix(treasury,deployment,optimistic-governor): add deactivate UI, verify-deployment coverage, drop unused execute() param
+# Fix four cross-cutting issues: docs, deployment verification, migration numbering, CEI ordering
 
 ## Summary
 
-- Added an admin-only "Deactivate" action to each strategy card in
-  `app/src/app/treasury/strategies/page.tsx`, submitting a treasury
-  multisig transaction that calls `treasury-strategies::deactivate_strategy`
-  — the same submit/approve flow the existing "Register new strategy" form
-  uses. Fixes #1107.
-- Added post-deploy validation for `contracts/conviction-voting` and
-  `contracts/treasury-strategies` to `scripts/verify-deployment.sh`, so a
-  broken or missing deployment of either contract now fails verification
-  instead of passing silently. Fixes #1103, #1104.
-- Dropped the unused `caller` parameter from
-  `optimistic-governor::execute()` so its signature is permissionless like
-  `finalize()`, one step earlier in the same lifecycle. Fixes #1108.
+This PR addresses four unrelated issues filed against the repo:
 
-## Details
+- **#1110** — `contracts/conviction-voting`'s `stake()`/`withdraw_stake()` doc comments didn't clarify that no tokens are ever transferred or locked.
+- **#1105** — `scripts/verify-deployment.sh` had no validation step for `contracts/signal-anchor`, so a broken or missing deployment of that contract would pass silently.
+- **#1111** — `packages/indexer/migrations/` had migration number `002` claimed by *three* files (not just the two named in the issue), so the numeric prefix no longer reflected a deliberate, unambiguous order.
+- **#1109** — `deposit()` in `contracts/treasury-strategies/src/lib.rs` updated `Allocation`/`TokenBalance` bookkeeping *after* the external token transfer and `adapter_deposit` call, violating checks-effects-interactions.
 
-### #1107 — Deactivate strategy UI
+## Changes
 
-`treasury-strategies::deactivate_strategy(admin, strategy_id)` is
-admin-gated the same way `register_strategy` is — the contract's `admin` is
-the treasury multisig, not a signable wallet — so the new "Deactivate"
-button reuses `TreasuryClient.submit(...)` with a new
-`encodeDeactivateStrategyCalldata` helper (`app/src/lib/treasury-calldata.ts`)
-instead of calling the contract directly. The button only renders for
-active strategies, is gated behind the same `canRegister` admin-availability
-check as the registration form, and confirms before submitting since it's a
-state-changing multisig action.
+### #1110 — conviction-voting doc comments
+- Added doc comments to `stake()` and `withdraw_stake()` (`contracts/conviction-voting/src/lib.rs`) explicitly stating this is a **non-custodial** bookkeeping pointer (`StakeByStaker`) checked against the staker's live `get_votes()` balance — not a token escrow like `contracts/proposal-bonds` or `contracts/optimistic-governor`'s proposer bonds.
 
-While in this file, also fixed a duplicate `const treasuryAddress`
-declaration (two conflicting definitions had landed from parallel PRs) that
-would fail to compile.
+### #1105 — signal-anchor deployment verification
+- Added a read-only `admin()` getter to `contracts/signal-anchor/src/lib.rs` that panics with `NotInitialized` until `initialize()` has been called, mirroring the existing pattern used for `ConvictionVoting` in the verification script (a getter that doubles as a deployed+initialized check since this contract has no other config/settings getter).
+- Wired a new `SignalAnchor` section into `scripts/verify-deployment.sh` using `check_initialized` against `admin()`.
+- Added unit tests (`contracts/signal-anchor/src/tests.rs`) covering `admin()` returning the configured admin, and panicking before `initialize()`.
 
-### #1103 / #1104 — verify-deployment.sh coverage gaps
+### #1111 — indexer migration renumbering
+- Found that migration number `002` was actually claimed by **three** files, not two: `002_add_proposal_cancellations.sql`, `002_config_update_history_columns.sql`, and `002_reputation_table.sql`.
+- `002_reputation_table.sql` must run before `005_add_reputation.sql`, which conditionally migrates its schema (non-`IF NOT EXISTS` `CREATE TABLE`, so order matters on a fresh DB) — so it was left in place at `002`.
+- The other two files are fully self-contained (no other migration references their tables/columns), so they were renumbered to the next free, unused sequence numbers at the end of the existing range:
+  - `002_config_update_history_columns.sql` → `019_add_config_update_history_columns.sql`
+  - `002_add_proposal_cancellations.sql` → `020_add_proposal_cancellations.sql`
+- Updated the stale directory listing in `packages/indexer/README.md` to match.
+- Note: `012_add_proposal_bonds.sql` / `012_add_vote_escrow.sql` have the same kind of collision but weren't part of this issue's scope — filing as a follow-up rather than fixing here.
 
-- `conviction-voting` has no dedicated `get_config`/`get_settings` getter;
-  `get_required_threshold` is the only read-only entrypoint that panics
-  with `NotInitialized` until `initialize()` succeeds, so it's called with
-  `requested_amount=0` to double as the deployed+initialized check.
-- `treasury-strategies` had no read-only entrypoint at all that depended on
-  initialization state. Added a minimal `get_treasury()` getter (mirroring
-  `TokenVotes::admin()` / `Liquidity::governor()`) and wired the script to
-  both confirm it's deployed+initialized and that it's wired to the same
-  `TREASURY_ADDRESS` used elsewhere in the env file.
-- `query()` now accepts extra CLI args after the function name, needed for
-  `get_required_threshold`'s `requested_amount` argument.
-
-### #1108 — optimistic-governor `execute()` signature
-
-`execute(caller, proposal_id)` called `caller.require_auth()` but never
-read `caller` again, so any address could still call it by authenticating
-as itself — no real access control, just an extra required signer/param
-versus `finalize(proposal_id)` one step earlier in the same lifecycle.
-Removed the parameter; `execute` is now permissionless like `finalize`.
-Updated the SDK's `OptimisticGovernorClient.execute`/`executeWithSign` and
-the contract's test suite to match the new signature.
-
-### Also fixed
-
-`app/src/app/vote-escrow/page.tsx` had a pre-existing unescaped apostrophe
-that fails `next build`'s lint step (`react/no-unescaped-entities`),
-unrelated to the four issues above but blocking a green frontend build.
+### #1109 — treasury-strategies checks-effects-interactions
+- Reordered `deposit()` in `contracts/treasury-strategies/src/lib.rs` so `Allocation`/`TokenBalance` storage is updated *before* the token transfer to the strategy adapter and the `adapter_deposit` call, rather than after. A reentrant read (e.g. `get_total_value`) during the adapter call now observes final totals instead of a stale pre-deposit snapshot.
 
 ## Test plan
-
-- [x] `cargo test -p sorogov-optimistic-governor` — 17 passed
-- [x] `cargo test -p sorogov-treasury-strategies` — 13 passed (incl. new
-      `test_get_treasury_returns_configured_treasury`)
-- [x] `cargo test` across the full CI package list — all green except one
-      pre-existing, unrelated failure in `sorogov-token-votes`
-      (`split_delegation_tests::test_single_100_weight_delegate_split_collapses_to_legacy_delegate_key`),
-      confirmed present on `main` before this branch's changes
-- [x] `cargo build --target wasm32v1-none --release` across all contract
-      packages
-- [x] `bash -n scripts/verify-deployment.sh`
-- [x] `pnpm --filter @nebgov/sdk build` and `test` — 395 passed
-- [x] `pnpm tsc --noEmit` in `app/`
-- [x] `pnpm eslint .` in `app/` — no errors (pre-existing warnings only, in
-      untouched files)
-- [x] `pnpm next build` in `app/` — succeeds
-- [x] `pnpm test` in `app/` — same 6 pre-existing failing suites as `main`
-      (confirmed via stash comparison), nothing new broken
-
-closes #1107
-closes #1103
-closes #1104
-closes #1108
+- [x] `cargo test -p sorogov-conviction-voting -p sorogov-signal-anchor -p sorogov-treasury-strategies` — all pass (30 tests), including new `signal-anchor` tests for `admin()`.
+- [x] `bash -n scripts/verify-deployment.sh` — syntax check passes.
+- [x] Verified no other file in the repo references the old migration filenames or table/column names in a way that assumes migration ordering the renumbering would break.

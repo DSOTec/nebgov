@@ -1106,8 +1106,10 @@ packages/indexer/
 │   └── openapi.ts        # OpenAPI spec generation
 ├── migrations/
 │   ├── 001_initial_schema.sql
-│   ├── 002_add_proposal_cancellations.sql
-│   └── 002_config_update_history_columns.sql
+│   ├── 002_reputation_table.sql
+│   ├── ...
+│   ├── 019_add_config_update_history_columns.sql
+│   └── 020_add_proposal_cancellations.sql
 ├── Dockerfile
 ├── docker-compose.yml
 ├── package.json

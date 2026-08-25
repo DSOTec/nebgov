@@ -45,6 +45,21 @@ fn get_anchor_returns_none_for_unanchored_poll() {
 }
 
 #[test]
+fn admin_returns_configured_admin() {
+    let (_env, client, admin, _contract_id) = setup();
+    assert_eq!(client.admin(), admin);
+}
+
+#[test]
+#[should_panic]
+fn admin_panics_before_initialize() {
+    let env = Env::default();
+    let contract_id = env.register(SignalAnchorContract, ());
+    let client = SignalAnchorContractClient::new(&env, &contract_id);
+    client.admin();
+}
+
+#[test]
 #[should_panic]
 fn anchor_result_panics_for_non_admin_anchorer() {
     let (env, client, _admin, _contract_id) = setup();

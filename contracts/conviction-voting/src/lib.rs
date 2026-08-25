@@ -149,6 +149,14 @@ impl ConvictionVotingContract {
     }
 
     /// Commit voting power, moving any existing stake to this proposal.
+    ///
+    /// This is non-custodial: no tokens are transferred or locked. `stake()`
+    /// only records a `StakeByStaker` pointer to `proposal_id`, which is
+    /// validated against the staker's live `get_votes()` balance on every
+    /// conviction update. The staker's tokens remain fully liquid and
+    /// transferable throughout — unlike e.g. `contracts/proposal-bonds` or
+    /// `contracts/optimistic-governor`, where a bond/proposer stake is an
+    /// actual escrowed token transfer.
     pub fn stake(env: Env, staker: Address, proposal_id: u64, amount: i128) {
         staker.require_auth();
         if amount <= 0 {
@@ -208,6 +216,11 @@ impl ConvictionVotingContract {
     }
 
     /// Withdraw the caller's active stake.
+    ///
+    /// Non-custodial: this only clears the `StakeByStaker` bookkeeping
+    /// pointer and finalizes conviction accrual for the proposal being
+    /// unstaked from. No token transfer occurs — there is nothing to
+    /// return, since `stake()` never moved any tokens in the first place.
     pub fn withdraw_stake(env: Env, staker: Address) {
         staker.require_auth();
         let proposal_id: u64 = env

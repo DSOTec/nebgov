@@ -84,6 +84,16 @@ impl SignalAnchorContract {
         events::emit_result_anchored(&env, poll_id, &result_hash, anchored_ledger, &anchorer);
     }
 
+    /// Get the configured admin address. Panics with `NotInitialized` until
+    /// `initialize()` has been called, so deployment verification can use it
+    /// to confirm the contract is both deployed and initialized.
+    pub fn admin(env: Env) -> Address {
+        env.storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| env.panic_with_error(SignalAnchorError::NotInitialized))
+    }
+
     pub fn get_anchor(env: Env, poll_id: u64) -> Option<AnchorRecord> {
         let key = DataKey::Anchor(poll_id);
         let record = env.storage().persistent().get(&key);

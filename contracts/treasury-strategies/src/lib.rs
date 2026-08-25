@@ -212,13 +212,10 @@ impl TreasuryStrategiesContract {
             env.panic_with_error(TreasuryStrategiesError::AllocationCapExceeded);
         }
 
-        token_client.transfer(&env.current_contract_address(), &strategy.adapter, &amount);
-        StrategyAdapterClient::new(&env, &strategy.adapter).adapter_deposit(
-            &env.current_contract_address(),
-            &token,
-            &amount,
-        );
-
+        // Effects before interactions: Allocation/TokenBalance are updated
+        // here, before the adapter transfer/call below, so a reentrant read
+        // (e.g. get_total_value) during adapter_deposit sees final totals
+        // rather than a stale pre-deposit snapshot.
         allocation.amount = new_alloc_amount;
         allocation.deposited_ledger = env.ledger().sequence();
         let allocation_key = DataKey::Allocation(strategy_id);
@@ -231,6 +228,13 @@ impl TreasuryStrategiesContract {
         env.storage()
             .persistent()
             .extend_ttl(&balance_key, TTL_LEDGERS, TTL_LEDGERS);
+
+        token_client.transfer(&env.current_contract_address(), &strategy.adapter, &amount);
+        StrategyAdapterClient::new(&env, &strategy.adapter).adapter_deposit(
+            &env.current_contract_address(),
+            &token,
+            &amount,
+        );
 
         emit_deposited(&env, strategy_id, amount);
     }

@@ -159,6 +159,14 @@ if [[ "$OPTIMISTIC_GOVERNOR_CONFIG" != "ERROR" ]]; then
     "${TOKEN_VOTES_ADDRESS:-}"
 fi
 
+# ---- SignalAnchor -------------------------------------------------------
+# No config/settings getter exists on this contract; admin() is the only
+# read-only entrypoint that panics with NotInitialized until initialize()
+# succeeds, so it doubles as the deployed+initialized check.
+info "SignalAnchor (${SIGNAL_ANCHOR_ADDRESS:-<not set>})"
+check_initialized "  signal_anchor.admin" \
+  "$(query "${SIGNAL_ANCHOR_ADDRESS:-}" admin)"
+
 # ---- ProposalBonds -------------------------------------------------------
 info "ProposalBonds (${PROPOSAL_BONDS_ADDRESS:-<not set>})"
 PROPOSAL_BONDS_SETTINGS="$(query "${PROPOSAL_BONDS_ADDRESS:-}" get_settings)"
