@@ -18,7 +18,11 @@ use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::Instant;
 
 use soroban_sdk::testutils::{Address as _, Ledger as _};
-use soroban_sdk::{token, Address, Bytes, Env, String as SorobanString, Symbol, Vec as SorobanVec};
+use soroban_sdk::xdr::ToXdr;
+use soroban_sdk::{
+    token, Address, Bytes, BytesN, Env, IntoVal, String as SorobanString, Symbol, Val,
+    Vec as SorobanVec,
+};
 
 use sorogov_co_sponsorship::{CoSponsorshipContract, CoSponsorshipContractClient};
 use sorogov_conviction_voting::{ConvictionVotingContract, ConvictionVotingContractClient};
@@ -26,14 +30,15 @@ use sorogov_governor::{
     GovernorContract, GovernorContractClient, GovernorSettings, ProposalState, VoteSupport,
     VoteType,
 };
+use sorogov_proposal_bonds::{BondState, ProposalBondsContract, ProposalBondsContractClient};
 use sorogov_timelock::{TimelockContract, TimelockContractClient};
 use sorogov_token_votes::{TokenVotesContract, TokenVotesContractClient};
 use sorogov_treasury::{TreasuryContract, TreasuryContractClient};
 
 use crate::report::{SimulationReport, StepResult};
 use crate::scenario::{
-    ActorRole, Scenario, SimGovernorSettings, SimProposalState, SimStep, SimVoteSupport,
-    SimVoteType,
+    ActorRole, Scenario, SimBondState, SimGovernorSettings, SimProposalState, SimStep,
+    SimVoteSupport, SimVoteType,
 };
 
 /// A no-op target contract used to resolve `SimStep::Propose` targets that
@@ -67,9 +72,11 @@ pub struct SimulationRunner {
     co_sponsorship: CoSponsorshipContractClient<'static>,
     #[allow(dead_code)]
     conviction_voting: ConvictionVotingContractClient<'static>,
+    proposal_bonds: ProposalBondsContractClient<'static>,
     token: Address,
     target: Address,
     treasury_addr: Address,
+    proposal_bonds_addr: Address,
     actors: HashMap<String, Address>,
     report: SimulationReport,
     batch_op_ids: Vec<Option<soroban_sdk::Bytes>>,
@@ -78,7 +85,10 @@ pub struct SimulationRunner {
 impl SimulationRunner {
     pub fn new(scenario: &Scenario) -> Self {
         let env = Env::default();
-        env.mock_all_auths();
+        // Governance execution can authorize a nested governor → timelock →
+        // target call. Match the repository's cross-contract integration
+        // tests by allowing mocked authorization below the root invocation.
+        env.mock_all_auths_allowing_non_root_auth();
         env.ledger().set_sequence_number(1);
 
         // Pick the on-chain admin/pauser: prefer an actor explicitly cast as
@@ -106,7 +116,9 @@ impl SimulationRunner {
             .map(|a| actors[&a.name].clone())
             .unwrap_or_else(|| admin.clone());
 
-        let token = env.register_stellar_asset_contract_v2(admin.clone()).address();
+        let token = env
+            .register_stellar_asset_contract_v2(admin.clone())
+            .address();
 
         let token_votes_id = env.register(TokenVotesContract, ());
         let token_votes = TokenVotesContractClient::new(&env, &token_votes_id);
@@ -161,11 +173,15 @@ impl SimulationRunner {
         conviction_voting.initialize(
             &admin,
             &token_votes_id,
-            &5000u32,  // decay_bps: 50%
-            &5000u32,  // max_ratio_bps: 50%
+            &5000u32,        // decay_bps: 50%
+            &5000u32,        // max_ratio_bps: 50%
             &10_000_000i128, // min_threshold_conviction
-            &100u32,   // weight_bps: 1%
+            &100u32,         // weight_bps: 1%
         );
+
+        let proposal_bonds_id = env.register(ProposalBondsContract, ());
+        let proposal_bonds = ProposalBondsContractClient::new(&env, &proposal_bonds_id);
+        proposal_bonds.initialize(&admin, &token, &100i128, &governor_id, &2u32, &10_000u32);
 
         let target = env.register(SimTargetContract, ());
 
@@ -194,9 +210,11 @@ impl SimulationRunner {
             treasury,
             co_sponsorship,
             conviction_voting,
+            proposal_bonds,
             token,
             target,
             treasury_addr: treasury_id,
+            proposal_bonds_addr: proposal_bonds_id,
             actors,
             report,
             batch_op_ids: Vec::new(),
@@ -237,8 +255,13 @@ impl SimulationRunner {
         match name {
             "treasury" => self.treasury_addr.clone(),
             "governor" => self.governor.address.clone(),
+            "proposal-bonds" => self.proposal_bonds_addr.clone(),
             "target" => self.target.clone(),
-            other => self.actors.get(other).cloned().unwrap_or_else(|| self.target.clone()),
+            other => self
+                .actors
+                .get(other)
+                .cloned()
+                .unwrap_or_else(|| self.target.clone()),
         }
     }
 
@@ -338,7 +361,7 @@ impl SimulationRunner {
                     calldatas.push_back(Bytes::new(&self.env));
                 }
                 let desc = SorobanString::from_str(&self.env, description);
-                let desc_hash = self.env.crypto().sha256(&Bytes::new(&self.env)).into();
+                let desc_hash = description_hash(&self.env, description);
                 let metadata_uri = SorobanString::from_str(&self.env, "");
                 self.governor.propose(
                     &proposer,
@@ -356,7 +379,8 @@ impl SimulationRunner {
                 support,
             } => {
                 let voter = self.get_actor(actor).clone();
-                self.governor.cast_vote(&voter, proposal_id, &sim_vote_support(*support));
+                self.governor
+                    .cast_vote(&voter, proposal_id, &sim_vote_support(*support));
                 self.report.total_votes_cast += 1;
             }
             SimStep::Queue { proposal_id, .. } => {
@@ -377,13 +401,15 @@ impl SimulationRunner {
             }
             SimStep::MintTokens { actor, amount } => {
                 let addr = self.get_actor(actor).clone();
-                token::StellarAssetClient::new(&self.env, &self.token).mint(&addr, amount);
+                token::StellarAssetClient::new(&self.env, &self.token)
+                    .mint(&addr, &(*amount as i128));
                 let balance = token::TokenClient::new(&self.env, &self.token).balance(&addr);
                 self.token_votes.checkpoint(&addr, &balance);
             }
             SimStep::BurnTokens { actor, amount } => {
                 let addr = self.get_actor(actor).clone();
-                token::StellarAssetClient::new(&self.env, &self.token).clawback(&addr, amount);
+                token::StellarAssetClient::new(&self.env, &self.token)
+                    .clawback(&addr, &(*amount as i128));
                 let balance = token::TokenClient::new(&self.env, &self.token).balance(&addr);
                 self.token_votes.checkpoint(&addr, &balance);
             }
@@ -434,7 +460,8 @@ impl SimulationRunner {
                 min_bps,
             } => {
                 let proposal = self.governor.get_proposal(proposal_id);
-                let total_cast = proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
+                let total_cast =
+                    proposal.votes_for + proposal.votes_against + proposal.votes_abstain;
                 let supply = self
                     .token_votes
                     .get_past_total_supply(&proposal.start_ledger);
@@ -636,7 +663,7 @@ impl SimulationRunner {
                     &target_addr,
                     &fn_symbol,
                     &calldata_bytes,
-                    requested_amount,
+                    &(*requested_amount as i128),
                 );
             }
             SimStep::ConvictionStake {
@@ -645,7 +672,8 @@ impl SimulationRunner {
                 amount,
             } => {
                 let staker = self.get_actor(actor).clone();
-                self.conviction_voting.stake(&staker, proposal_id, amount);
+                self.conviction_voting
+                    .stake(&staker, proposal_id, &(*amount as i128));
             }
             SimStep::ConvictionWithdrawStake { actor } => {
                 let staker = self.get_actor(actor).clone();
@@ -653,6 +681,72 @@ impl SimulationRunner {
             }
             SimStep::ConvictionCheckpoint { proposal_id } => {
                 self.conviction_voting.checkpoint_conviction(proposal_id);
+            }
+            SimStep::LockProposalBond { actor, description } => {
+                let proposer = self.get_actor(actor).clone();
+                let hash = description_hash(&self.env, description);
+                self.proposal_bonds.lock_bond(&proposer, &hash);
+            }
+            SimStep::RefundProposalBond {
+                actor,
+                description,
+                proposal_id,
+            } => {
+                let caller = self.get_actor(actor).clone();
+                let hash = description_hash(&self.env, description);
+                self.proposal_bonds.refund_bond(&caller, &hash, proposal_id);
+            }
+            SimStep::ProposeBondSlash {
+                actor,
+                bonded_description,
+                recipient,
+                description,
+            } => {
+                let proposer = self.get_actor(actor).clone();
+                let recipient = self.get_actor(recipient).clone();
+                let bonded_hash = description_hash(&self.env, bonded_description);
+                let mut args: SorobanVec<Val> = SorobanVec::new(&self.env);
+                args.push_back(self.governor.address.clone().into_val(&self.env));
+                args.push_back(bonded_hash.into_val(&self.env));
+                args.push_back(recipient.into_val(&self.env));
+
+                let targets = SorobanVec::from_array(&self.env, [self.proposal_bonds_addr.clone()]);
+                let fn_names = SorobanVec::from_array(&self.env, [Symbol::new(&self.env, "slash")]);
+                let calldatas = SorobanVec::from_array(&self.env, [args.to_xdr(&self.env)]);
+                let description_hash = description_hash(&self.env, description);
+                let description = SorobanString::from_str(&self.env, description);
+                let metadata_uri = SorobanString::from_str(&self.env, "");
+                self.governor.propose(
+                    &proposer,
+                    &description,
+                    &description_hash,
+                    &metadata_uri,
+                    &targets,
+                    &fn_names,
+                    &calldatas,
+                );
+            }
+            SimStep::ExpectBondState {
+                description,
+                expected_state,
+            } => {
+                let hash = description_hash(&self.env, description);
+                let actual = self
+                    .proposal_bonds
+                    .get_bond(&hash)
+                    .unwrap_or_else(|| panic!("no bond for description '{}'", description))
+                    .state;
+                let expected = match expected_state {
+                    SimBondState::Locked => BondState::Locked,
+                    SimBondState::Refunded => BondState::Refunded,
+                    SimBondState::Slashed => BondState::Slashed,
+                };
+                if actual != expected {
+                    panic!(
+                        "expected bond for '{}' to be {:?}, was {:?}",
+                        description, expected, actual
+                    );
+                }
             }
         }
     }
@@ -728,6 +822,12 @@ fn panic_message(e: std::boxed::Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
+fn description_hash(env: &Env, description: &str) -> BytesN<32> {
+    env.crypto()
+        .sha256(&Bytes::from_slice(env, description.as_bytes()))
+        .into()
+}
+
 fn sim_vote_type(t: SimVoteType) -> VoteType {
     match t {
         SimVoteType::Simple => VoteType::Simple,
@@ -754,6 +854,16 @@ fn from_proposal_state(s: ProposalState) -> SimProposalState {
         ProposalState::Executed => SimProposalState::Executed,
         ProposalState::Cancelled => SimProposalState::Cancelled,
         ProposalState::Expired => SimProposalState::Expired,
+    }
+}
+
+fn from_optimistic_state(s: OptimisticProposalState) -> SimOptimisticProposalState {
+    match s {
+        OptimisticProposalState::ChallengeWindow => SimOptimisticProposalState::ChallengeWindow,
+        OptimisticProposalState::Objected => SimOptimisticProposalState::Objected,
+        OptimisticProposalState::Passed => SimOptimisticProposalState::Passed,
+        OptimisticProposalState::Executed => SimOptimisticProposalState::Executed,
+        OptimisticProposalState::Cancelled => SimOptimisticProposalState::Cancelled,
     }
 }
 
@@ -794,6 +904,10 @@ fn estimated_storage_touches(step: &SimStep) -> (u32, u32) {
         SimStep::Vote { .. } => (2, 2),
         SimStep::Queue { .. } | SimStep::Execute { .. } | SimStep::Cancel { .. } => (2, 2),
         SimStep::UpdateConfig { .. } => (1, 14),
+        SimStep::LockProposalBond { .. }
+        | SimStep::RefundProposalBond { .. }
+        | SimStep::ExpectBondState { .. } => (2, 2),
+        SimStep::ProposeBondSlash { .. } => (3, 6),
         _ => (0, 0),
     }
 }

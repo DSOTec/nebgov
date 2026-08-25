@@ -18,8 +18,9 @@ NebGov is the canonical governance framework for the Stellar ecosystem — a mod
 | Proposal lifecycle     | Create, vote, queue, and execute on-chain proposals |
 | Timelock execution     | Mandatory delay between passing and execution       |
 | Token-weighted voting  | Snapshot voting power from any SEP-41 token         |
-| Delegation             | Delegate voting power to any address                |
+| Delegation             | Delegate voting power to any address, in full or split by percentage ([docs](./docs/split-delegation.md)) |
 | Multi-sig treasury     | DAO-controlled treasury with configurable threshold |
+| Treasury yield strategies | Governance-controlled allocation of idle treasury funds to whitelisted yield adapters ([docs](./docs/treasury-strategies.md)) |
 | Permissionless factory | Deploy your own governance instance in one call     |
 
 ---

@@ -5,7 +5,7 @@
 //! freshly-deployed governor/timelock/token-votes/treasury stack. See
 //! `tools/sim/src/scenarios/*.json` for examples.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Scenario {
@@ -76,7 +76,9 @@ pub enum ActorRole {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum SimStep {
-    AdvanceLedger { ledgers: u32 },
+    AdvanceLedger {
+        ledgers: u32,
+    },
     Propose {
         actor: String,
         targets: Vec<String>,
@@ -106,10 +108,12 @@ pub enum SimStep {
     },
     MintTokens {
         actor: String,
+        #[serde(with = "i128_compat")]
         amount: i128,
     },
     BurnTokens {
         actor: String,
+        #[serde(with = "i128_compat")]
         amount: i128,
     },
     UpdateConfig {
@@ -179,11 +183,13 @@ pub enum SimStep {
         target: String,
         fn_name: String,
         calldata: Option<String>,
+        #[serde(with = "i128_compat")]
         requested_amount: i128,
     },
     ConvictionStake {
         actor: String,
         proposal_id: u64,
+        #[serde(with = "i128_compat")]
         amount: i128,
     },
     ConvictionWithdrawStake {
@@ -191,6 +197,25 @@ pub enum SimStep {
     },
     ConvictionCheckpoint {
         proposal_id: u64,
+    },
+    LockProposalBond {
+        actor: String,
+        description: String,
+    },
+    RefundProposalBond {
+        actor: String,
+        description: String,
+        proposal_id: u64,
+    },
+    ProposeBondSlash {
+        actor: String,
+        bonded_description: String,
+        recipient: String,
+        description: String,
+    },
+    ExpectBondState {
+        description: String,
+        expected_state: SimBondState,
     },
 }
 
@@ -227,6 +252,10 @@ impl SimStep {
             SimStep::ConvictionStake { .. } => "ConvictionStake",
             SimStep::ConvictionWithdrawStake { .. } => "ConvictionWithdrawStake",
             SimStep::ConvictionCheckpoint { .. } => "ConvictionCheckpoint",
+            SimStep::LockProposalBond { .. } => "LockProposalBond",
+            SimStep::RefundProposalBond { .. } => "RefundProposalBond",
+            SimStep::ProposeBondSlash { .. } => "ProposeBondSlash",
+            SimStep::ExpectBondState { .. } => "ExpectBondState",
         }
     }
 }
@@ -248,6 +277,62 @@ pub enum SimProposalState {
     Executed,
     Cancelled,
     Expired,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SimBondState {
+    Locked,
+    Refunded,
+    Slashed,
+}
+
+/// `serde`'s content deserializer for internally-tagged enums does not
+/// forward `deserialize_i128`. Accept the JSON integer widths it does
+/// support (and decimal strings for the full i128 range), then widen here.
+mod i128_compat {
+    use super::*;
+    use serde::de::{Error, Visitor};
+    use std::fmt;
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<i128, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct I128Visitor;
+
+        impl<'de> Visitor<'de> for I128Visitor {
+            type Value = i128;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an integer or a base-10 i128 string")
+            }
+
+            fn visit_i64<E: Error>(self, value: i64) -> Result<Self::Value, E> {
+                Ok(i128::from(value))
+            }
+
+            fn visit_u64<E: Error>(self, value: u64) -> Result<Self::Value, E> {
+                Ok(i128::from(value))
+            }
+
+            fn visit_str<E: Error>(self, value: &str) -> Result<Self::Value, E> {
+                value.parse().map_err(E::custom)
+            }
+        }
+
+        deserializer.deserialize_any(I128Visitor)
+    }
+
+    pub fn serialize<S>(value: &i128, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        if let Ok(value) = i64::try_from(*value) {
+            serializer.serialize_i64(value)
+        } else {
+            serializer.serialize_str(&value.to_string())
+        }
+    }
 }
 
 impl Scenario {
@@ -302,15 +387,15 @@ impl Scenario {
                 | SimStep::PauseContract { actor }
                 | SimStep::UnpauseContract { actor }
                 | SimStep::ScheduleBatch { actor, .. }
-                | SimStep::ExecuteBatch { actor, .. } => Some(actor.as_str()),
+                | SimStep::ExecuteBatch { actor, .. }
+                | SimStep::LockProposalBond { actor, .. }
+                | SimStep::RefundProposalBond { actor, .. }
+                | SimStep::ProposeBondSlash { actor, .. } => Some(actor.as_str()),
                 _ => None,
             };
             if let Some(name) = actor_ref {
                 if !actor_names.contains(name) {
-                    return Err(format!(
-                        "step {} references unknown actor '{}'",
-                        i, name
-                    ));
+                    return Err(format!("step {} references unknown actor '{}'", i, name));
                 }
             }
             if let SimStep::Delegate { delegatee, .. } = step {
@@ -321,8 +406,18 @@ impl Scenario {
                     ));
                 }
             }
+            if let SimStep::ProposeBondSlash { recipient, .. } = step {
+                if !actor_names.contains(recipient.as_str()) {
+                    return Err(format!(
+                        "step {} references unknown bond slash recipient '{}'",
+                        i, recipient
+                    ));
+                }
+            }
             match step {
-                SimStep::Propose { .. } | SimStep::FinalizeDraft { .. } => {
+                SimStep::Propose { .. }
+                | SimStep::FinalizeDraft { .. }
+                | SimStep::ProposeBondSlash { .. } => {
                     // Proposal ids are assigned sequentially starting at 1 by
                     // the contract; the scenario doesn't declare them, so we
                     // just track how many have been created so far.
@@ -334,7 +429,8 @@ impl Scenario {
                 | SimStep::Cancel { proposal_id, .. }
                 | SimStep::ExpectState { proposal_id, .. }
                 | SimStep::AssertParticipation { proposal_id, .. }
-                | SimStep::AssertQuorumReached { proposal_id } => {
+                | SimStep::AssertQuorumReached { proposal_id }
+                | SimStep::RefundProposalBond { proposal_id, .. } => {
                     if !known_proposals.contains(proposal_id) {
                         return Err(format!(
                             "step {} references proposal #{} before it is created",
@@ -350,7 +446,10 @@ impl Scenario {
                         ));
                     }
                 }
-                SimStep::ExecuteBatch { schedule_step_index, .. } => {
+                SimStep::ExecuteBatch {
+                    schedule_step_index,
+                    ..
+                } => {
                     if *schedule_step_index >= self.steps.len() {
                         return Err(format!(
                             "step {} references out-of-range schedule_step_index {}",
@@ -358,7 +457,9 @@ impl Scenario {
                         ));
                     }
                 }
-                SimStep::ValidateDag { schedule_step_indices } => {
+                SimStep::ValidateDag {
+                    schedule_step_indices,
+                } => {
                     for idx in schedule_step_indices {
                         if *idx >= self.steps.len() {
                             return Err(format!(

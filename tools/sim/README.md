@@ -244,6 +244,30 @@ When a step is expected to fail, mark it with an `ExpectError` that references i
 ```
 Records proposal counts by state in the report.
 
+**Proposal Bonds**
+```json
+{ "type": "LockProposalBond", "actor": "alice", "description": "Proposal A" }
+{ "type": "RefundProposalBond", "actor": "bob", "description": "Proposal A", "proposal_id": 1 }
+{ "type": "ExpectBondState", "description": "Proposal A", "expected_state": "Refunded" }
+```
+
+`LockProposalBond` and `RefundProposalBond` correlate a bond with its governor
+proposal by hashing the same description. To exercise the governance-only slash
+path, create a follow-up proposal with `ProposeBondSlash`:
+
+```json
+{
+  "type": "ProposeBondSlash",
+  "actor": "bob",
+  "bonded_description": "Proposal A",
+  "recipient": "treasury",
+  "description": "Slash Proposal A's bond"
+}
+```
+
+After that proposal passes, queue and execute it normally, then assert
+`"expected_state": "Slashed"` with `ExpectBondState`.
+
 ## Simulation Report
 
 Each run produces a JSON report with per-step results and aggregate metrics:

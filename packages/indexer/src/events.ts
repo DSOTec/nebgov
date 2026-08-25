@@ -1760,7 +1760,7 @@ function toGovernorSettings(value: unknown): GovernorSettings | null {
 
 // --- Liquidity event stubs (pre-existing references) ---
 
-async function handleLiquidityAdded(
+async function legacyHandleLiquidityAdded(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
 ): Promise<void> {
@@ -1770,7 +1770,7 @@ async function handleLiquidityAdded(
   broadcast({ type: "liquidity_added", data: { account, amount, ledger: event.ledger } });
 }
 
-async function handleLiquidityRemoved(
+async function legacyHandleLiquidityRemoved(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
 ): Promise<void> {
@@ -1780,7 +1780,7 @@ async function handleLiquidityRemoved(
   broadcast({ type: "liquidity_removed", data: { account, amount, ledger: event.ledger } });
 }
 
-async function handleSwap(
+async function legacyHandleSwap(
   event: SorobanRpc.Api.EventResponse,
   topics: unknown[],
 ): Promise<void> {
@@ -1788,14 +1788,14 @@ async function handleSwap(
   broadcast({ type: "swap", data: { trader, ledger: event.ledger } });
 }
 
-async function handlePoolFeeUpdated(
+async function legacyHandlePoolFeeUpdated(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
   broadcast({ type: "pool_fee_updated", data: { ledger: event.ledger } });
 }
 
-export async function maybeTakeGovernanceSnapshot(_ledger: number): Promise<void> {
+async function legacyMaybeTakeGovernanceSnapshot(_ledger: number): Promise<void> {
   // Placeholder — governance snapshot logic not yet implemented.
 }
 
@@ -1817,7 +1817,7 @@ async function logTimelockEvent(
   // are handled by each dedicated handler.
 }
 
-async function handleTimelockOperationScheduled(
+async function legacyHandleTimelockOperationScheduled(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1840,7 +1840,7 @@ async function handleTimelockOperationScheduled(
   });
 }
 
-async function handleTimelockOperationExecuted(
+async function legacyHandleTimelockOperationExecuted(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1859,7 +1859,7 @@ async function handleTimelockOperationExecuted(
   });
 }
 
-async function handleTimelockOperationCancelled(
+async function legacyHandleTimelockOperationCancelled(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1878,7 +1878,7 @@ async function handleTimelockOperationCancelled(
   });
 }
 
-async function handleTimelockBatchOperationScheduled(
+async function legacyHandleTimelockBatchOperationScheduled(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1904,7 +1904,7 @@ async function handleTimelockBatchOperationScheduled(
   });
 }
 
-async function handleTimelockBatchOperationExecuted(
+async function legacyHandleTimelockBatchOperationExecuted(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1923,7 +1923,7 @@ async function handleTimelockBatchOperationExecuted(
   });
 }
 
-async function handleTimelockBatchOperationCancelled(
+async function legacyHandleTimelockBatchOperationCancelled(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1942,7 +1942,7 @@ async function handleTimelockBatchOperationCancelled(
   });
 }
 
-async function handleTimelockMinDelayUpdated(
+async function legacyHandleTimelockMinDelayUpdated(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1957,7 +1957,7 @@ async function handleTimelockMinDelayUpdated(
   });
 }
 
-async function handleTimelockDependencyDagValidated(
+async function legacyHandleTimelockDependencyDagValidated(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1978,7 +1978,7 @@ async function handleTimelockDependencyDagValidated(
   });
 }
 
-async function handleTimelockCycleDetected(
+async function legacyHandleTimelockCycleDetected(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -1998,7 +1998,7 @@ async function handleTimelockCycleDetected(
   });
 }
 
-async function handleTimelockPartialBatchStarted(
+async function legacyHandleTimelockPartialBatchStarted(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -2019,7 +2019,7 @@ async function handleTimelockPartialBatchStarted(
   });
 }
 
-async function handleTimelockPartialOpSucceeded(
+async function legacyHandleTimelockPartialOpSucceeded(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -2044,7 +2044,7 @@ async function handleTimelockPartialOpSucceeded(
   });
 }
 
-async function handleTimelockPartialOpFailed(
+async function legacyHandleTimelockPartialOpFailed(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -2065,7 +2065,7 @@ async function handleTimelockPartialOpFailed(
   });
 }
 
-async function handleTimelockBatchRecoveryEntered(
+async function legacyHandleTimelockBatchRecoveryEntered(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -2088,7 +2088,7 @@ async function handleTimelockBatchRecoveryEntered(
   });
 }
 
-async function handleTimelockFailedOpRetried(
+async function legacyHandleTimelockFailedOpRetried(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -2107,7 +2107,7 @@ async function handleTimelockFailedOpRetried(
   });
 }
 
-async function handleTimelockFailedOpSkipped(
+async function legacyHandleTimelockFailedOpSkipped(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {
@@ -2122,7 +2122,7 @@ async function handleTimelockFailedOpSkipped(
   });
 }
 
-async function handleTimelockBatchFullyComplete(
+async function legacyHandleTimelockBatchFullyComplete(
   event: SorobanRpc.Api.EventResponse,
   _topics: unknown[],
 ): Promise<void> {

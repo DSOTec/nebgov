@@ -31,6 +31,8 @@ export type WsEventType =
   | "delegated_by_sig"
   | "permits_invalidated"
   | "relayer_whitelist_updated"
+  | "split_delegated"
+  | "split_undelegated"
   | "timelock_operation_scheduled"
   | "timelock_operation_executed"
   | "timelock_operation_cancelled"
@@ -68,7 +70,13 @@ export type WsEventType =
   | "optimistic_proposal_objected"
   | "optimistic_proposal_passed"
   | "optimistic_proposal_executed"
-  | "optimistic_proposal_cancelled";
+  | "optimistic_proposal_cancelled"
+  | "result_anchored"
+  | "strategy_registered"
+  | "strategy_deactivated"
+  | "strategy_deposited"
+  | "strategy_withdrawal_requested"
+  | "strategy_withdrawal_claimed";
 
 export interface WsEvent {
   type: WsEventType;

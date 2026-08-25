@@ -96,9 +96,10 @@ reason = "Suppressed: [reason] — [date] — [author]"
 | ---------------------------- | --------------------------------------- |
 | `contracts/governor`         | Core governance contract (Rust/Soroban) |
 | `contracts/timelock`         | Delayed execution controller            |
-| `contracts/token-votes`      | Voting power with checkpointing         |
+| `contracts/token-votes`      | Voting power with checkpointing, including split delegation ([docs](./docs/split-delegation.md)) |
 | `contracts/governor-factory` | Permissionless governor deployer        |
 | `contracts/treasury`         | Multi-sig treasury                      |
+| `contracts/treasury-strategies` | Governance-controlled yield strategy allocation ([docs](./docs/treasury-strategies.md)) |
 | `sdk/`                       | TypeScript SDK (`@nebgov/sdk`)          |
 | `app/`                       | Next.js governance dashboard            |
 | `docs/`                      | Architecture docs and ADRs              |
