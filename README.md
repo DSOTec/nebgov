@@ -26,15 +26,42 @@ NebGov is the canonical governance framework for the Stellar ecosystem — a mod
 
 ## Packages
 
-| Package                      | Description                                     |
-| ---------------------------- | ----------------------------------------------- |
-| `contracts/governor`         | Core governance contract (Rust/Soroban)         |
-| `contracts/timelock`         | Delayed execution controller (Rust/Soroban)     |
-| `contracts/token-votes`      | Voting power with checkpointing (Rust/Soroban)  |
-| `contracts/governor-factory` | Permissionless governor deployer (Rust/Soroban) |
-| `contracts/treasury`         | Multi-sig treasury (Rust/Soroban)               |
-| `sdk/`                       | TypeScript SDK (`@nebgov/sdk`)                  |
-| `app/`                       | Next.js governance dashboard                    |
+### Smart contracts (Rust/Soroban)
+
+| Package                         | Description                                                      |
+| ------------------------------- | ---------------------------------------------------------------- |
+| `contracts/governor`            | Core governance contract — proposal lifecycle, voting, execution |
+| `contracts/timelock`            | Delayed execution controller                                     |
+| `contracts/token-votes`         | Voting power with checkpointing and delegation                   |
+| `contracts/governor-factory`    | Permissionless governor deployer                                 |
+| `contracts/treasury`            | Multi-sig treasury with budget streams                           |
+| `contracts/token-votes-wrapper` | SEP-41 token wrapper that adds governance voting                 |
+| `contracts/co-sponsorship`      | Pool voting power to meet the proposal threshold                 |
+| `contracts/liquidity`           | Protocol-owned liquidity pools (constant-product AMM)            |
+| `contracts/proposal-bonds`      | Refundable proposer bonds with governance-triggered slashing     |
+| `contracts/optimistic-governor` | Object-to-block optimistic proposal track                        |
+| `contracts/conviction-voting`   | Self-executing conviction voting                                 |
+| `contracts/treasury-strategies` | Governance-controlled yield allocation for idle treasury funds   |
+| `contracts/signal-anchor`       | On-chain anchoring of off-chain signaling poll results           |
+| `contracts/vote-escrow`         | Time-locked voting power boost (vote-escrow model)               |
+| `contracts/voting-rewards`      | Epoch-based, Merkle-claimed voting participation rewards         |
+
+### TypeScript packages
+
+| Package             | Description                                                |
+| ------------------- | ---------------------------------------------------------- |
+| `sdk/`              | TypeScript SDK (`@nebgov/sdk`)                             |
+| `app/`              | Next.js governance dashboard                               |
+| `backend/`          | Off-chain REST API (notifications, relayer, signaling)     |
+| `packages/indexer/` | Off-chain governance event indexer (`@nebgov/indexer`)     |
+| `packages/cli/`     | Terminal-based governance workflows (`@nebgov/cli`)        |
+
+### Tooling
+
+| Package             | Description                                                            |
+| ------------------- | ---------------------------------------------------------------------- |
+| `tools/sim/`        | Rust governance simulation harness (`nebgov-sim`)                      |
+| `tools/simulation/` | Lifecycle simulation against a mock Soroban RPC (`@nebgov/simulation`) |
 
 ---
 
