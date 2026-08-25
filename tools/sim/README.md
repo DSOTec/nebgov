@@ -244,6 +244,21 @@ When a step is expected to fail, mark it with an `ExpectError` that references i
 ```
 Records proposal counts by state in the report.
 
+**Optimistic Governance** (propose / object / finalize / execute / cancel against the separately-deployed `optimistic-governor` contract; proposal ids are tracked independently from the governor's `Propose` steps above)
+```json
+{ "type": "OptimisticPropose", "actor": "proposer_name", "target": "target", "fn_name": "noop", "calldata": null },
+{ "type": "OptimisticObject", "actor": "objector_name", "proposal_id": 1 },
+{ "type": "OptimisticFinalize", "proposal_id": 1 },
+{ "type": "OptimisticExecute", "proposal_id": 1 },
+{ "type": "OptimisticCancel", "actor": "proposer_name", "proposal_id": 1 },
+{
+  "type": "OptimisticExpectState",
+  "proposal_id": 1,
+  "expected_state": "ChallengeWindow"  // or "Objected", "Passed", "Executed", "Cancelled"
+}
+```
+`OptimisticFinalize` is permissionless (no `actor`) and transitions an unobjected proposal from `ChallengeWindow` to `Passed` once its challenge window has elapsed; `OptimisticExecute` is likewise permissionless and invokes the proposal's target once it is `Passed`. `OptimisticObject` accumulates objection weight and freezes the proposal into `Objected` the moment the configured threshold is crossed — see `tools/sim/src/scenarios/optimistic_governance.json` for both the unobjected-finalize and objected-freeze paths.
+
 ## Simulation Report
 
 Each run produces a JSON report with per-step results and aggregate metrics:

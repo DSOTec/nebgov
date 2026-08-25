@@ -26,14 +26,17 @@ use sorogov_governor::{
     GovernorContract, GovernorContractClient, GovernorSettings, ProposalState, VoteSupport,
     VoteType,
 };
+use sorogov_optimistic_governor::{
+    OptimisticGovernorContract, OptimisticGovernorContractClient, OptimisticProposalState,
+};
 use sorogov_timelock::{TimelockContract, TimelockContractClient};
 use sorogov_token_votes::{TokenVotesContract, TokenVotesContractClient};
 use sorogov_treasury::{TreasuryContract, TreasuryContractClient};
 
 use crate::report::{SimulationReport, StepResult};
 use crate::scenario::{
-    ActorRole, Scenario, SimGovernorSettings, SimProposalState, SimStep, SimVoteSupport,
-    SimVoteType,
+    ActorRole, Scenario, SimGovernorSettings, SimOptimisticProposalState, SimProposalState,
+    SimStep, SimVoteSupport, SimVoteType,
 };
 
 /// A no-op target contract used to resolve `SimStep::Propose` targets that
@@ -67,6 +70,8 @@ pub struct SimulationRunner {
     co_sponsorship: CoSponsorshipContractClient<'static>,
     #[allow(dead_code)]
     conviction_voting: ConvictionVotingContractClient<'static>,
+    #[allow(dead_code)]
+    optimistic_governor: OptimisticGovernorContractClient<'static>,
     token: Address,
     target: Address,
     treasury_addr: Address,
@@ -167,6 +172,17 @@ impl SimulationRunner {
             &100u32,   // weight_bps: 1%
         );
 
+        let optimistic_governor_id = env.register(OptimisticGovernorContract, ());
+        let optimistic_governor = OptimisticGovernorContractClient::new(&env, &optimistic_governor_id);
+        optimistic_governor.initialize(
+            &admin,
+            &token_votes_id,
+            &10u32,     // challenge_window_ledgers
+            &3_000u32,  // objection_threshold_bps: 30%
+            &0i128,     // proposer_bond_amount: disabled
+            &token,     // proposer_bond_token: unused while the bond is disabled
+        );
+
         let target = env.register(SimTargetContract, ());
 
         let sac = token::StellarAssetClient::new(&env, &token);
@@ -194,6 +210,7 @@ impl SimulationRunner {
             treasury,
             co_sponsorship,
             conviction_voting,
+            optimistic_governor,
             token,
             target,
             treasury_addr: treasury_id,
@@ -377,13 +394,15 @@ impl SimulationRunner {
             }
             SimStep::MintTokens { actor, amount } => {
                 let addr = self.get_actor(actor).clone();
-                token::StellarAssetClient::new(&self.env, &self.token).mint(&addr, amount);
+                token::StellarAssetClient::new(&self.env, &self.token)
+                    .mint(&addr, &(*amount as i128));
                 let balance = token::TokenClient::new(&self.env, &self.token).balance(&addr);
                 self.token_votes.checkpoint(&addr, &balance);
             }
             SimStep::BurnTokens { actor, amount } => {
                 let addr = self.get_actor(actor).clone();
-                token::StellarAssetClient::new(&self.env, &self.token).clawback(&addr, amount);
+                token::StellarAssetClient::new(&self.env, &self.token)
+                    .clawback(&addr, &(*amount as i128));
                 let balance = token::TokenClient::new(&self.env, &self.token).balance(&addr);
                 self.token_votes.checkpoint(&addr, &balance);
             }
@@ -636,7 +655,7 @@ impl SimulationRunner {
                     &target_addr,
                     &fn_symbol,
                     &calldata_bytes,
-                    requested_amount,
+                    &(*requested_amount as i128),
                 );
             }
             SimStep::ConvictionStake {
@@ -645,7 +664,8 @@ impl SimulationRunner {
                 amount,
             } => {
                 let staker = self.get_actor(actor).clone();
-                self.conviction_voting.stake(&staker, proposal_id, amount);
+                self.conviction_voting
+                    .stake(&staker, proposal_id, &(*amount as i128));
             }
             SimStep::ConvictionWithdrawStake { actor } => {
                 let staker = self.get_actor(actor).clone();
@@ -653,6 +673,55 @@ impl SimulationRunner {
             }
             SimStep::ConvictionCheckpoint { proposal_id } => {
                 self.conviction_voting.checkpoint_conviction(proposal_id);
+            }
+            SimStep::OptimisticPropose {
+                actor,
+                target,
+                fn_name,
+                calldata,
+            } => {
+                let proposer = self.get_actor(actor).clone();
+                let target_addr = self.resolve_target(target);
+                let fn_symbol = Symbol::new(&self.env, fn_name);
+                let calldata_bytes = if let Some(cd) = calldata {
+                    Bytes::from_slice(&self.env, cd.as_bytes())
+                } else {
+                    Bytes::new(&self.env)
+                };
+                let desc_hash = self.env.crypto().sha256(&Bytes::new(&self.env)).into();
+                self.optimistic_governor.propose(
+                    &proposer,
+                    &target_addr,
+                    &fn_symbol,
+                    &calldata_bytes,
+                    &desc_hash,
+                );
+            }
+            SimStep::OptimisticObject { actor, proposal_id } => {
+                let objector = self.get_actor(actor).clone();
+                self.optimistic_governor.object(&objector, proposal_id);
+            }
+            SimStep::OptimisticFinalize { proposal_id } => {
+                self.optimistic_governor.finalize(proposal_id);
+            }
+            SimStep::OptimisticExecute { proposal_id } => {
+                self.optimistic_governor.execute(proposal_id);
+            }
+            SimStep::OptimisticCancel { actor, proposal_id } => {
+                let caller = self.get_actor(actor).clone();
+                self.optimistic_governor.cancel(&caller, proposal_id);
+            }
+            SimStep::OptimisticExpectState {
+                proposal_id,
+                expected_state,
+            } => {
+                let actual = from_optimistic_state(self.optimistic_governor.get_proposal(proposal_id).state);
+                if actual != *expected_state {
+                    panic!(
+                        "expected optimistic proposal #{} to be {:?}, was {:?}",
+                        proposal_id, expected_state, actual
+                    );
+                }
             }
         }
     }
@@ -754,6 +823,16 @@ fn from_proposal_state(s: ProposalState) -> SimProposalState {
         ProposalState::Executed => SimProposalState::Executed,
         ProposalState::Cancelled => SimProposalState::Cancelled,
         ProposalState::Expired => SimProposalState::Expired,
+    }
+}
+
+fn from_optimistic_state(s: OptimisticProposalState) -> SimOptimisticProposalState {
+    match s {
+        OptimisticProposalState::ChallengeWindow => SimOptimisticProposalState::ChallengeWindow,
+        OptimisticProposalState::Objected => SimOptimisticProposalState::Objected,
+        OptimisticProposalState::Passed => SimOptimisticProposalState::Passed,
+        OptimisticProposalState::Executed => SimOptimisticProposalState::Executed,
+        OptimisticProposalState::Cancelled => SimOptimisticProposalState::Cancelled,
     }
 }
 
