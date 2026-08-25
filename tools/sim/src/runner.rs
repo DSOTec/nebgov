@@ -394,13 +394,15 @@ impl SimulationRunner {
             }
             SimStep::MintTokens { actor, amount } => {
                 let addr = self.get_actor(actor).clone();
-                token::StellarAssetClient::new(&self.env, &self.token).mint(&addr, amount);
+                token::StellarAssetClient::new(&self.env, &self.token)
+                    .mint(&addr, &(*amount as i128));
                 let balance = token::TokenClient::new(&self.env, &self.token).balance(&addr);
                 self.token_votes.checkpoint(&addr, &balance);
             }
             SimStep::BurnTokens { actor, amount } => {
                 let addr = self.get_actor(actor).clone();
-                token::StellarAssetClient::new(&self.env, &self.token).clawback(&addr, amount);
+                token::StellarAssetClient::new(&self.env, &self.token)
+                    .clawback(&addr, &(*amount as i128));
                 let balance = token::TokenClient::new(&self.env, &self.token).balance(&addr);
                 self.token_votes.checkpoint(&addr, &balance);
             }
@@ -653,7 +655,7 @@ impl SimulationRunner {
                     &target_addr,
                     &fn_symbol,
                     &calldata_bytes,
-                    requested_amount,
+                    &(*requested_amount as i128),
                 );
             }
             SimStep::ConvictionStake {
@@ -662,7 +664,8 @@ impl SimulationRunner {
                 amount,
             } => {
                 let staker = self.get_actor(actor).clone();
-                self.conviction_voting.stake(&staker, proposal_id, amount);
+                self.conviction_voting
+                    .stake(&staker, proposal_id, &(*amount as i128));
             }
             SimStep::ConvictionWithdrawStake { actor } => {
                 let staker = self.get_actor(actor).clone();

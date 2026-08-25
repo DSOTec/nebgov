@@ -106,11 +106,19 @@ pub enum SimStep {
     },
     MintTokens {
         actor: String,
-        amount: i128,
+        // i64, not i128: this field lives inside a `#[serde(tag = "type")]`
+        // internally-tagged enum, and serde buffers such variants through
+        // `serde::private::de::Content` before re-deserializing into the
+        // target type — a buffer that has no i128/u128 representation, so
+        // any i128 field here fails to parse with "i128 is not supported"
+        // regardless of the actual value (see serde-rs/serde#1183). Scenario
+        // token amounts comfortably fit i64; widened to i128 at the call
+        // site where the real i128 contract argument is needed.
+        amount: i64,
     },
     BurnTokens {
         actor: String,
-        amount: i128,
+        amount: i64,
     },
     UpdateConfig {
         actor: String,
@@ -179,12 +187,13 @@ pub enum SimStep {
         target: String,
         fn_name: String,
         calldata: Option<String>,
-        requested_amount: i128,
+        // i64, not i128 — see the comment on `MintTokens::amount` above.
+        requested_amount: i64,
     },
     ConvictionStake {
         actor: String,
         proposal_id: u64,
-        amount: i128,
+        amount: i64,
     },
     ConvictionWithdrawStake {
         actor: String,
